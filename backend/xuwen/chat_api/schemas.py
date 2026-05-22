@@ -12,6 +12,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from xuwen.memory.policy import MemorySource
+
 Role = Literal["system", "user", "assistant"]
 
 
@@ -168,7 +170,7 @@ class MemorySearchHit(BaseModel):
     timestamp_ms: int
     session_id: str = ""
     sender_name: str = ""
-    source: Literal["history", "live"] = "history"
+    source: MemorySource = "history"
     warmth: float = 0.0
 
 

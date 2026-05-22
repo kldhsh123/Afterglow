@@ -67,7 +67,7 @@ export interface MemorySource {
   timestamp_ms: number
   session_id?: string
   sender_name?: string
-  source?: 'history' | 'live'
+  source?: 'human_original' | 'user_new' | 'ai_generated' | 'history' | 'live'
   warmth?: number
 }
 
