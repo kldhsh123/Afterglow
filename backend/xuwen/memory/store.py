@@ -398,6 +398,61 @@ class MemoryStore:
     ) -> list[dict[str, Any]]:
         return self._vector_search(TABLE_RELATIONSHIP_MEMORIES, vector, top_k, None)
 
+    async def search_live(
+        self,
+        vector: list[float],
+        top_k: int,
+        *,
+        extra_filter: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """live_messages 表的向量召回。
+
+        默认通过 extra_filter 排除跨会话的 ai_generated（让 AI 自我历史不污染语义检索）。
+        retriever 会根据 settings.ai_generated_long_term_enabled 决定具体 filter。
+        """
+        return self._vector_search(TABLE_LIVE_MESSAGES, vector, top_k, extra_filter)
+
+    async def cleanup_ai_generated(
+        self,
+        *,
+        older_than_days: int = 0,
+        conversation_id: str | None = None,
+        dry_run: bool = False,
+    ) -> int:
+        """软删除 live_messages 中 source=ai_generated 的行。
+
+        - older_than_days=0 时清理全部 ai_generated（不限时间）
+        - 指定 conversation_id 时只清这个会话
+        - dry_run=True 时只返回会被清理的行数，不写库
+        """
+        tbl = self._table(TABLE_LIVE_MESSAGES)
+        where = "source = 'ai_generated' AND deleted = false"
+        if conversation_id:
+            cid = _quote_lance(conversation_id)
+            where = f"{where} AND conversation_id = {cid}"
+        if older_than_days > 0:
+            cutoff = now_ms() - older_than_days * 86_400_000
+            where = f"{where} AND created_at_ms < {cutoff}"
+        try:
+            arrow_tbl = tbl.search().where(where).limit(10_000).to_arrow()
+            rows = cast(list[dict[str, Any]], arrow_tbl.to_pylist())
+        except Exception as e:
+            logger.warning("cleanup_ai_generated 查询失败：%s", type(e).__name__)
+            return 0
+        count = len(rows)
+        if dry_run or count == 0:
+            return count
+        ids = [str(r.get("id")) for r in rows if r.get("id")]
+        if not ids:
+            return 0
+        try:
+            id_list = ", ".join(_quote_lance(i) for i in ids)
+            tbl.update(where=f"id IN ({id_list})", values={"deleted": True})
+        except Exception as e:
+            logger.warning("cleanup_ai_generated 软删除失败：%s", type(e).__name__)
+            return 0
+        return count
+
     async def recent_live(
         self,
         conversation_id: str,

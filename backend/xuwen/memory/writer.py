@@ -200,9 +200,9 @@ class WritebackQueue:
             self.stats.pending_turns = sum(len(b.turns) for b in self._pending.values())
 
         try:
-            await self._persist_batch(conversation_id, turns)
+            written = await self._persist_batch(conversation_id, turns)
             self.stats.flushed_batches += 1
-            self.stats.written += len(turns)
+            self.stats.written += written
         except Exception as e:
             self.stats.failed += len(turns)
             logger.warning(
@@ -216,18 +216,33 @@ class WritebackQueue:
         self,
         conversation_id: str,
         turns: list[WritebackTurn],
-    ) -> None:
-        """批量向量化（如开启）+ 写库。"""
+    ) -> int:
+        """批量向量化（如开启）+ 写库。
+
+        分层策略：
+        - 用户输入：source=user_new，trust=0.65（用户近况事实，不参与风格蒸馏）
+        - AI 回复：source=ai_generated，trust=0.15（仅用于连续性检索）
+        - 主动话题等无真实 user_text 的场景：只写 ai_generated 行
+        """
         dim = self.settings.embedding_dim
         zero_vec = [0.0] * dim
 
-        # 收集所有文本，一次性向量化
-        texts: list[str] = []
+        # 收集要写入的 (turn, text, role, source, trust, attachments)
+        items: list[tuple[WritebackTurn, str, str, str, float, list[str]]] = []
         for t in turns:
-            texts.append(t.user_text)
-            texts.append(t.assistant_text)
+            user_text = t.user_text.strip()
+            if user_text and user_text not in _PROACTIVE_USER_MARKERS:
+                items.append((t, user_text, "user", "user_new", 0.65, list(t.user_image_shas)))
+            assistant_text = t.assistant_text.strip()
+            if assistant_text:
+                items.append((t, assistant_text, "assistant", "ai_generated", 0.15, []))
 
-        vectors: list[list[float]] = [zero_vec] * len(texts)
+        if not items:
+            return 0
+
+        # 一次性向量化所有要写入的文本
+        texts = [item[1] for item in items]
+        vectors: list[list[float]] = [zero_vec] * len(items)
         if self.settings.writeback_vectorize and self.embedder is not None and texts:
             try:
                 vectors = await self.embedder.embed_texts(texts)
@@ -236,43 +251,37 @@ class WritebackQueue:
                     "回写批量 embedding 失败，使用零向量兜底：%s",
                     type(e).__name__,
                 )
-                vectors = [zero_vec] * len(texts)
+                vectors = [zero_vec] * len(items)
 
-        # 组装 rows
         ts_base = now_ms()
         rows: list[dict[str, object]] = []
-        for i, t in enumerate(turns):
-            uvec = vectors[i * 2]
-            avec = vectors[i * 2 + 1]
+        for i, (_t, text, role, source, trust, attachments) in enumerate(items):
+            prefix = "u" if role == "user" else "a"
             rows.append(
                 {
-                    "id": f"live-u-{uuid.uuid4().hex[:16]}",
-                    "vector": uvec,
-                    "text": t.user_text,
-                    "role": "user",
+                    "id": f"live-{prefix}-{uuid.uuid4().hex[:16]}",
+                    "vector": vectors[i],
+                    "text": text,
+                    "role": role,
                     "conversation_id": conversation_id,
                     "confirmed": True,
                     "deleted": False,
-                    "created_at_ms": ts_base + i * 2,
-                    "source": "live",
-                    "trust_level": 0.35,
-                    "attachments": list(t.user_image_shas),
-                }
-            )
-            rows.append(
-                {
-                    "id": f"live-a-{uuid.uuid4().hex[:16]}",
-                    "vector": avec,
-                    "text": t.assistant_text,
-                    "role": "assistant",
-                    "conversation_id": conversation_id,
-                    "confirmed": True,
-                    "deleted": False,
-                    "created_at_ms": ts_base + i * 2 + 1,
-                    "source": "live",
-                    "trust_level": 0.35,
-                    "attachments": [],
+                    "created_at_ms": ts_base + i,
+                    "source": source,
+                    "trust_level": trust,
+                    "attachments": attachments,
                 }
             )
 
         await self.store.append_live_messages(rows)
+        return len(rows)
+
+
+# 主动话题等场景下 user_text 可能为占位符（如"AI 主动开启话题"）；
+# 这些不是用户真说的话，不应写入 user_new。
+_PROACTIVE_USER_MARKERS: frozenset[str] = frozenset(
+    {
+        "AI 主动开启话题",
+        "（AI 主动开启话题）",
+    }
+)

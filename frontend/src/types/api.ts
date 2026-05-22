@@ -14,6 +14,18 @@ export interface ImagePart {
 }
 export type ContentPart = TextPart | ImagePart
 
+export interface UpdateInfo {
+  check_enabled: boolean
+  current_version: string
+  latest_version: string | null
+  is_outdated: boolean
+  released_at: string | null
+  release_url: string | null
+  release_notes_preview: string | null
+  last_checked_at_ms: number | null
+  last_error: string | null
+}
+
 export interface AppInfo {
   app_name: string
   app_slogan: string
@@ -26,6 +38,7 @@ export interface AppInfo {
   chat_model: string
   version: string
   has_persona_card: boolean
+  update: UpdateInfo | null
 }
 
 export interface ChatMessage {

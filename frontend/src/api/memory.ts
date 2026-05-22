@@ -1,8 +1,13 @@
 import { jsonRequest } from '@/api/client'
-import type { AppInfo, MemorySearchResponse, MemoryStats } from '@/types/api'
+import type { AppInfo, MemorySearchResponse, MemoryStats, UpdateInfo } from '@/types/api'
 
 export function fetchInfo(): Promise<AppInfo> {
   return jsonRequest<AppInfo>('/info')
+}
+
+/** 手动触发后端立即检查一次版本更新，返回最新 UpdateInfo。后端有 5 秒节流。 */
+export function triggerUpdateCheck(): Promise<UpdateInfo> {
+  return jsonRequest<UpdateInfo>('/info/check-update', { method: 'POST' })
 }
 
 export function fetchMemoryStats(): Promise<MemoryStats> {

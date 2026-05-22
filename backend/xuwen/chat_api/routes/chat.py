@@ -1,17 +1,4 @@
-"""/v1/chat/completions：OpenAI 兼容的对话端点。
-
-工作流程：
-    1. 读取请求中最后一条 user message（可能含图片）
-    2. 把图片落盘（image_store），记录 SHA 列表用于回写
-    3. 处理 multimodal：
-        - 若 chat_model_supports_vision：原样转发图片给主 LLM
-        - 否则：调 VisionClient 把图片转描述，注入到 text
-    4. 用 HybridRetriever 召回相关历史（基于纯文本部分）
-    5. 可选联网搜索 / URL 网页读取，注入外部上下文
-    6. 用 Jinja2 模板渲染 system prompt
-    7. 调用 LLMClient（流 / 非流）
-    8. 完整 assistant 文本 + 用户图片 SHA → enqueue 到 writeback queue
-"""
+"""/v1/chat/completions：OpenAI 兼容的对话端点。"""
 
 from __future__ import annotations
 
@@ -26,6 +13,14 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from xuwen.chat_api.chat_pipeline import (
+    available_sticker_names,
+    build_policy_hint,
+    build_sticker_retry_hint,
+    extract_and_apply_life_marker,
+    fallback_for_rejected_sticker,
+    looks_like_sticker_only_intent,
+)
 from xuwen.chat_api.companion_prompt import (
     build_persona_card_with_companion_context,
     empty_retrieval_result,
@@ -41,6 +36,7 @@ from xuwen.chat_api.schemas import (
     Choice,
     ImagePart,
     ImageUrlPayload,
+    PolicyHint,
     TextPart,
     Usage,
 )
@@ -51,6 +47,11 @@ from xuwen.chat_api.state import AppState, get_state
 from xuwen.chat_api.vision_client import VisionClient
 from xuwen.chat_api.web_fetch import render_url_context, resolve_fetch_urls
 from xuwen.chat_api.web_search import render_web_context, should_search_web
+from xuwen.companion.response_policy import (
+    decide_response_policy,
+    refine_decision_with_llm,
+)
+from xuwen.config import Settings
 from xuwen.core.errors import RetrievalError, XuwenError
 from xuwen.core.models import RetrievalQuery
 from xuwen.memory.writer import WritebackTurn
@@ -68,13 +69,11 @@ async def chat_completions(
     state: AppState = Depends(get_state),
 ) -> StreamingResponse | ChatCompletionResponse:
     trace_id = str(getattr(request.state, "request_id", "") or "")
-    # 找最后一条 user message 作为当前问题
     user_messages = [m for m in req.messages if m.role == "user"]
     if not user_messages:
         raise HTTPException(status_code=400, detail="messages 中至少要有一条 role=user")
     last_user = user_messages[-1]
 
-    # 1) 处理图片：落盘 + 收集 SHA + 根据配置决定是否调 VLM
     image_shas: list[str] = []
     vlm_descriptions: list[str] = []
     images_in_last = last_user.image_urls()
@@ -85,45 +84,36 @@ async def chat_completions(
                 status_code=400,
                 detail="未启用视觉理解。请在后端 .env 设置 VISION_ENABLED=true。",
             )
-
-        # 落盘原图
         for url in images_in_last:
             try:
                 ref = save_data_url(url, state.settings)
             except ImageError as e:
                 raise HTTPException(status_code=400, detail=e.message) from e
             image_shas.append(ref.sha)
-
-        # 若主模型不支持视觉，调 VLM 把图片转描述
         if not state.settings.chat_model_supports_vision:
-            if not state.settings.vision_api_url or not state.settings.vision_api_key.get_secret_value():
+            if (
+                not state.settings.vision_api_url
+                or not state.settings.vision_api_key.get_secret_value()
+            ):
                 raise HTTPException(
                     status_code=400,
-                    detail="主模型不支持视觉，且 VISION_API_URL / VISION_API_KEY 未配置。"
-                    "请在 .env 配置 VLM 或改用支持视觉的主模型。",
+                    detail="主模型不支持视觉，且 VISION_API_URL / VISION_API_KEY 未配置。",
                 )
             async with VisionClient(state.settings) as vc:
                 vlm_descriptions = await vc.describe_images(images_in_last)
 
-    # 2) 准备发送给 LLM 的 messages（不含我们自己生成的 system，那由 prompt builder 加）
-    # 历史消息：剔除最后一条 user，保留其它 user/assistant；统一展平为纯文本，
-    # 因为历史里出现的多模态 LLM 也未必能消化二次。
     recent: list[PromptMessage] = [
         PromptMessage(role=m.role, content=m.text_only())
         for m in req.messages[:-1]
         if m.role in {"user", "assistant"}
     ]
-
-    # 3) 构造当前 user 文本（用于检索 + prompt）
     current_user_text = last_user.text_only().strip()
     if vlm_descriptions:
-        # 把 VLM 描述附加到用户消息里，下游模型才能"看到"
         desc_block = "\n".join(
             f"[图片{i + 1}描述：{d}]" for i, d in enumerate(vlm_descriptions)
         )
         current_user_text = (current_user_text + "\n" + desc_block).strip()
 
-    # 4) 检索（基于文本 query）+ 记录延迟
     retrieval_query = current_user_text if current_user_text else "（用户发了一张图片）"
     _retrieval_start = time.perf_counter()
     try:
@@ -147,9 +137,9 @@ async def chat_completions(
         )
         retrieved = empty_retrieval_result()
 
-    model_name = req.model or state.settings.chat_model
+    # 模型名固定使用后端配置的 CHAT_MODEL；req.model 接受但忽略
+    model_name = state.settings.chat_model
 
-    # 5) 注入新关系记忆和 AI 当天生活状态。这层优先级高于历史 RAG。
     relationship_block = await state.relationship_memory.render_context(retrieval_query)
     life = await state.life.decide_for_turn(
         llm=state.life_llm,
@@ -162,11 +152,89 @@ async def chat_completions(
         trace_id=trace_id,
         metrics=state.metrics,
     )
+    response_decision = decide_response_policy(
+        current_user_text=current_user_text,
+        has_images=bool(images_in_last),
+        retrieved=retrieved,
+        life=life,
+        relationship_context=relationship_block,
+        recent=recent,
+    )
+    state.metrics.record(
+        "response.policy",
+        0.0,
+        detail=f"trace={trace_id},{response_decision.metric_detail()}",
+    )
+    if state.settings.response_policy_model_enabled:
+        response_decision = await refine_decision_with_llm(
+            base=response_decision,
+            llm=state.response_policy_llm,
+            model=state.settings.resolved_response_policy_model,
+            settings=state.settings,
+            current_user_text=current_user_text,
+            recent=recent,
+            life=life,
+            relationship_context=relationship_block,
+            has_images=bool(images_in_last),
+            trace_id=trace_id,
+            metrics=state.metrics,
+        )
+        state.metrics.record(
+            "response.policy.refined",
+            0.0,
+            detail=f"trace={trace_id},{response_decision.metric_detail()}",
+        )
+    policy_hint = build_policy_hint(response_decision)
+
+    # silence 短路
+    if not response_decision.should_reply:
+        if req.conversation_id and (current_user_text or image_shas):
+            await state.writeback.enqueue_turn(
+                WritebackTurn(
+                    conversation_id=req.conversation_id,
+                    user_text=current_user_text,
+                    assistant_text="",
+                    user_image_shas=image_shas,
+                )
+            )
+        state.metrics.record(
+            "chat.silenced",
+            0.0,
+            detail=f"trace={trace_id},{response_decision.metric_detail()}",
+        )
+        if req.stream:
+            return StreamingResponse(
+                _stream_silenced(
+                    settings=state.settings,
+                    model_name=model_name,
+                    trace_id=trace_id,
+                    policy=policy_hint,
+                ),
+                media_type="text/event-stream",
+            )
+        return ChatCompletionResponse(
+            model=model_name,
+            choices=[
+                Choice(
+                    index=0,
+                    message=APIChatMessage(
+                        role="assistant",
+                        content=state.settings.silence_response_sentinel,
+                    ),
+                    finish_reason=state.settings.silence_finish_reason,
+                )
+            ],
+            usage=Usage(),
+            trace_id=trace_id,
+            policy=policy_hint,
+        )
+
     persona_card = build_persona_card_with_companion_context(
         settings=state.settings,
         life=life,
         relationship_context=relationship_block,
         style_query=current_user_text,
+        response_policy_context=response_decision.render_prompt_block(),
     )
     web_context = ""
     web_should_search = should_search_web(current_user_text)
@@ -206,7 +274,6 @@ async def chat_completions(
     if not urls:
         _record_web_fetch_skipped(state, trace_id=trace_id, urls=urls)
 
-    # 6) 构造 prompt messages
     messages = build_chat_messages(
         settings=state.settings,
         persona_card=persona_card,
@@ -217,7 +284,6 @@ async def chat_completions(
         url_context=url_context,
     )
 
-    # 6.1) 若主模型支持视觉，重写最后一条 user 为 multimodal 形式
     if (
         images_in_last
         and state.settings.chat_model_supports_vision
@@ -235,7 +301,6 @@ async def chat_completions(
                 )
             messages[-1] = {"role": "user", "content": multimodal_content}  # type: ignore[dict-item]
 
-    # 7) 生成参数
     params = GenerationParams(
         temperature=req.temperature,
         top_p=req.top_p,
@@ -244,8 +309,10 @@ async def chat_completions(
         frequency_penalty=req.frequency_penalty,
     )
 
-    # 8) 流式 or 非流
-    if req.stream:
+    # 真流式：仅当 RESPONSE_STREAMING_ENABLED=true 时启用。
+    # 否则即使客户端传 stream=true 也走非流式路径，最后再包装成 SSE 单 chunk 发出
+    # （Afterglow 模拟"真人发消息"，不应该逐字蹦）。
+    if req.stream and state.settings.response_streaming_enabled:
         return StreamingResponse(
             _stream_response(
                 state=state,
@@ -255,25 +322,90 @@ async def chat_completions(
                 conversation_id=req.conversation_id,
                 user_text=current_user_text,
                 image_shas=image_shas,
-                initial_delay_seconds=life.reply_delay_seconds,
+                initial_delay_seconds=max(
+                    life.reply_delay_seconds,
+                    response_decision.reply_delay_seconds,
+                ),
                 trace_id=trace_id,
+                policy=policy_hint,
             ),
             media_type="text/event-stream",
         )
 
-    await _sleep_for_life_delay(life.reply_delay_seconds, state)
+    await _sleep_for_life_delay(
+        max(life.reply_delay_seconds, response_decision.reply_delay_seconds),
+        state,
+    )
     _llm_start = time.perf_counter()
     try:
-        assistant_text = sanitize_assistant_text(
-            await state.llm.complete_chat(
-                messages,
-                params,
-                model=model_name,
-                trace_id=trace_id,
-                stage="chat.complete",
-                metrics=state.metrics,
-            )
+        raw_assistant_text = await state.llm.complete_chat(
+            messages,
+            params,
+            model=model_name,
+            trace_id=trace_id,
+            stage="chat.complete",
+            metrics=state.metrics,
         )
+        # 先解析 + 应用 life-update 标记块（顺手剥离），再走通用 sanitize
+        stripped = extract_and_apply_life_marker(
+            raw_assistant_text,
+            state.life,
+            enabled=state.settings.life_marker_update_enabled,
+        )
+        valid_names = available_sticker_names(state.settings)
+        assistant_text = sanitize_assistant_text(
+            stripped,
+            valid_sticker_names=valid_names,
+        )
+        # 模型整段只发了不存在的 sticker → sanitize 后空。
+        # 先尝试让主模型重新生成一次（带明确提示），失败再退回 reply_mode-aware 短句。
+        if assistant_text in {"嗯", ""} and looks_like_sticker_only_intent(stripped):
+            retried = False
+            if state.settings.sticker_reject_retry:
+                hint = build_sticker_retry_hint(stripped, valid_names)
+                retry_messages = list(messages) + [
+                    {"role": "system", "content": hint},
+                ]
+                try:
+                    retry_raw = await state.llm.complete_chat(
+                        retry_messages,
+                        params,
+                        model=model_name,
+                        trace_id=trace_id,
+                        stage="chat.complete.sticker_retry",
+                        metrics=state.metrics,
+                    )
+                    retry_stripped = extract_and_apply_life_marker(
+                        retry_raw,
+                        state.life,
+                        enabled=state.settings.life_marker_update_enabled,
+                    )
+                    retry_text = sanitize_assistant_text(
+                        retry_stripped,
+                        valid_sticker_names=valid_names,
+                    )
+                    if retry_text and retry_text != "嗯" and not looks_like_sticker_only_intent(
+                        retry_stripped
+                    ):
+                        assistant_text = retry_text
+                        retried = True
+                        state.metrics.record(
+                            "chat.sticker.retry_ok",
+                            0.0,
+                            detail=f"trace={trace_id},mode={response_decision.reply_mode}",
+                        )
+                except Exception:
+                    logger.warning("sticker retry 失败，回退到短句兜底", exc_info=True)
+            if not retried:
+                assistant_text = (
+                    fallback_for_rejected_sticker(response_decision.reply_mode)
+                    or assistant_text
+                )
+                state.metrics.record(
+                    "chat.sticker.rejected",
+                    0.0,
+                    detail=f"trace={trace_id},mode={response_decision.reply_mode}",
+                )
         state.metrics.record(
             "llm.complete",
             (time.perf_counter() - _llm_start) * 1000,
@@ -286,7 +418,7 @@ async def chat_completions(
             error=e.code,
         )
         raise
-    # 异步回写
+
     if req.conversation_id:
         await state.writeback.enqueue_turn(
             WritebackTurn(
@@ -301,6 +433,19 @@ async def chat_completions(
             user_text=current_user_text,
             assistant_text=assistant_text,
         )
+    # 假流式：客户端传 stream=true 但后端配置不启用真流式 → 把完整内容包装成
+    # 单个 content chunk + 收尾，按 OpenAI SSE 协议返回，客户端无感。
+    if req.stream:
+        return StreamingResponse(
+            _pseudo_stream_chunks(
+                model_name=model_name,
+                trace_id=trace_id,
+                assistant_text=assistant_text,
+                policy=policy_hint,
+            ),
+            media_type="text/event-stream",
+        )
+
     return ChatCompletionResponse(
         model=model_name,
         choices=[
@@ -312,7 +457,41 @@ async def chat_completions(
         ],
         usage=Usage(),
         trace_id=trace_id,
+        policy=policy_hint,
     )
+
+
+async def _pseudo_stream_chunks(
+    *,
+    model_name: str,
+    trace_id: str,
+    assistant_text: str,
+    policy: PolicyHint,
+) -> AsyncIterator[bytes]:
+    """OpenAI SSE 协议包装：把已经生成好的完整 assistant_text 作为单个 content chunk
+    发出，再发 finish + [DONE]。等同非流式行为，但符合 stream=true 客户端协议预期。"""
+    completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
+    created = int(time.time())
+
+    def _chunk(delta: dict[str, Any], finish: str | None = None) -> dict[str, Any]:
+        return {
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model_name,
+            "trace_id": trace_id,
+            "choices": [
+                {"index": 0, "delta": delta, "finish_reason": finish},
+            ],
+        }
+
+    yield _format_sse(_chunk({"role": "assistant"}))
+    if assistant_text:
+        yield _format_sse(_chunk({"content": assistant_text}))
+    final = _chunk({}, finish="stop")
+    final["policy"] = policy.model_dump()
+    yield _format_sse(final)
+    yield b"data: [DONE]\n\n"
 
 
 async def _stream_response(
@@ -326,15 +505,23 @@ async def _stream_response(
     image_shas: list[str],
     initial_delay_seconds: int,
     trace_id: str,
+    policy: PolicyHint,
 ) -> AsyncIterator[bytes]:
-    """以 OpenAI SSE 格式生成 chunk。"""
+    """OpenAI SSE 格式生成 chunk；收尾块带 policy 字段。"""
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
     created = int(time.time())
     buffer: list[str] = []
-    output_filter = AssistantOutputFilter()
+    output_filter = AssistantOutputFilter(
+        valid_sticker_names=available_sticker_names(state.settings),
+    )
 
-    def _chunk_dict(delta: dict[str, Any], finish: str | None = None) -> dict[str, Any]:
-        return {
+    def _chunk_dict(
+        delta: dict[str, Any],
+        finish: str | None = None,
+        *,
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
             "id": completion_id,
             "object": "chat.completion.chunk",
             "created": created,
@@ -348,8 +535,10 @@ async def _stream_response(
                 }
             ],
         }
+        if extra:
+            payload.update(extra)
+        return payload
 
-    # 首块带 role
     yield _format_sse(_chunk_dict({"role": "assistant"}))
     await _sleep_for_life_delay(initial_delay_seconds, state)
 
@@ -395,10 +584,31 @@ async def _stream_response(
         yield b"data: [DONE]\n\n"
         return
 
-    yield _format_sse(_chunk_dict({}, finish="stop"))
+    # 流式补救：模型整条只发了不存在的 sticker → 所有 chunk 都被剥离 →
+    # 用户什么也没看到。这里在 finish chunk 之前补发一段 fallback delta。
+    raw_full = output_filter.raw_text()
+    if not "".join(buffer).strip() and looks_like_sticker_only_intent(raw_full):
+        fallback = fallback_for_rejected_sticker(policy.reply_mode)
+        if fallback:
+            buffer.append(fallback)
+            yield _format_sse(_chunk_dict({"content": fallback}))
+            state.metrics.record(
+                "chat.sticker.rejected",
+                0.0,
+                detail=f"trace={trace_id},mode={policy.reply_mode},stream",
+            )
+
+    yield _format_sse(_chunk_dict({}, finish="stop", extra={"policy": policy.model_dump()}))
     yield b"data: [DONE]\n\n"
 
-    # 流结束后回写完整 assistant 文本（+ 用户图片 SHA）
+    # 流结束后用累积的完整 raw 文本跑 life-update 标记块解析（apply 即可，
+    # 不影响已发出 chunk —— 标记块已在 sanitize 流程里被剥离）。
+    extract_and_apply_life_marker(
+        raw_full,
+        state.life,
+        enabled=state.settings.life_marker_update_enabled,
+    )
+
     assistant_text = "".join(buffer)
     if conversation_id and assistant_text:
         await state.writeback.enqueue_turn(
@@ -414,6 +624,43 @@ async def _stream_response(
             user_text=user_text,
             assistant_text=assistant_text,
         )
+
+
+async def _stream_silenced(
+    *,
+    settings: Settings,
+    model_name: str,
+    trace_id: str,
+    policy: PolicyHint,
+) -> AsyncIterator[bytes]:
+    """决策层选择不回复时按 OpenAI SSE 协议返回最小响应。"""
+    completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
+    created = int(time.time())
+
+    def _chunk(delta: dict[str, Any], finish: str | None = None) -> dict[str, Any]:
+        return {
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model_name,
+            "trace_id": trace_id,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": delta,
+                    "finish_reason": finish,
+                }
+            ],
+        }
+
+    yield _format_sse(_chunk({"role": "assistant"}))
+    sentinel = settings.silence_response_sentinel
+    if sentinel:
+        yield _format_sse(_chunk({"content": sentinel}))
+    final = _chunk({}, finish=settings.silence_finish_reason)
+    final["policy"] = policy.model_dump()
+    yield _format_sse(final)
+    yield b"data: [DONE]\n\n"
 
 
 def _format_sse(payload: dict[str, Any]) -> bytes:
@@ -474,5 +721,4 @@ async def _sleep_for_life_delay(seconds: int, state: AppState) -> None:
         await asyncio.sleep(bounded)
 
 
-# 为了避免 mypy 报 unused-imports 而保留导入
 _unused: tuple[type, ...] = (ChatMessage, ImagePart, ImageUrlPayload, TextPart)

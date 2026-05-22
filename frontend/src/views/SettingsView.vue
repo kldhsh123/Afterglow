@@ -9,21 +9,26 @@ import {
   fetchMemoryStats,
   pauseWriteback,
   resumeWriteback,
+  triggerUpdateCheck,
 } from '@/api/memory'
-import type { AppInfo } from '@/types/api'
-import { ChevronLeft, Sticker as StickerIcon } from 'lucide-vue-next'
+import type { AppInfo, UpdateInfo } from '@/types/api'
+import { ChevronLeft, RefreshCw, Sticker as StickerIcon } from 'lucide-vue-next'
 import DiagnosticsPanel from '@/components/common/DiagnosticsPanel.vue'
 
 const settings = useSettingsStore()
 const memory = useMemoryStore()
 const router = useRouter()
 const info = ref<AppInfo | null>(null)
+const updateInfo = ref<UpdateInfo | null>(null)
+const checkingUpdate = ref(false)
+const updateCheckHint = ref<string | null>(null)
 const backendError = ref<string | null>(null)
 const busy = ref(false)
 
 onMounted(async () => {
   try {
     info.value = await fetchInfo()
+    updateInfo.value = info.value.update
   } catch (e) {
     backendError.value = `无法连接后端：${(e as Error).message}`
   }
@@ -33,6 +38,39 @@ onMounted(async () => {
     /* ignore */
   }
 })
+
+async function checkForUpdate() {
+  if (checkingUpdate.value) return
+  checkingUpdate.value = true
+  updateCheckHint.value = null
+  try {
+    const next = await triggerUpdateCheck()
+    updateInfo.value = next
+    if (next.last_error) {
+      updateCheckHint.value = `检查失败：${next.last_error}`
+    } else if (next.is_outdated && next.latest_version) {
+      updateCheckHint.value = `发现新版本 ${next.latest_version}`
+    } else if (next.latest_version) {
+      updateCheckHint.value = '已是最新版'
+    } else {
+      updateCheckHint.value = '检查完成'
+    }
+    // 3 秒后清掉一次性提示，留下面板里的静态字段
+    setTimeout(() => {
+      updateCheckHint.value = null
+    }, 3000)
+  } catch (e) {
+    updateCheckHint.value = `检查出错：${(e as Error).message}`
+  } finally {
+    checkingUpdate.value = false
+  }
+}
+
+function formatTimestamp(ms: number | null): string {
+  if (!ms) return '尚未检查'
+  const d = new Date(ms)
+  return d.toLocaleString()
+}
 
 async function togglePause() {
   busy.value = true
@@ -100,6 +138,87 @@ function back() {
           <div>人格模板：{{ info.persona_template }} · {{ info.relationship_type }}</div>
           <div>persona 卡片：{{ info.has_persona_card ? '已生成' : '尚未生成（运行 analyze_persona.py）' }}</div>
         </div>
+      </section>
+
+      <!-- 版本与更新 -->
+      <section class="space-y-3 rounded-2xl p-4 bg-paper-soft dark:bg-night-bg-soft
+                      shadow-letter border border-ink/5 dark:border-night-text/10">
+        <div class="flex items-center justify-between">
+          <h2 class="text-base font-medium">版本与更新</h2>
+          <button
+            class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs
+                   text-ink-soft dark:text-night-text-soft
+                   bg-paper/80 dark:bg-night-bg/80
+                   border border-ink/10 dark:border-night-text/10
+                   hover:text-ink dark:hover:text-night-text disabled:opacity-50"
+            :disabled="checkingUpdate"
+            @click="checkForUpdate"
+          >
+            <RefreshCw :size="12" :class="checkingUpdate ? 'animate-spin' : ''" />
+            <span>{{ checkingUpdate ? '检查中…' : '立即检查' }}</span>
+          </button>
+        </div>
+
+        <div class="text-xs text-ink-soft dark:text-night-text-soft space-y-1">
+          <div>
+            当前版本：<span class="font-mono text-ink dark:text-night-text">v{{ updateInfo?.current_version ?? info?.version ?? '?' }}</span>
+          </div>
+          <div v-if="updateInfo?.latest_version">
+            最新发布：
+            <span
+              class="font-mono"
+              :class="updateInfo.is_outdated
+                ? 'text-accent dark:text-night-accent font-medium'
+                : 'text-ink dark:text-night-text'"
+            >v{{ updateInfo.latest_version }}</span>
+            <span v-if="!updateInfo.is_outdated" class="ml-2 text-success">已是最新版 ✓</span>
+            <span v-else class="ml-2 text-accent dark:text-night-accent">有新版本可用</span>
+          </div>
+          <div v-if="updateInfo?.last_checked_at_ms">
+            最后检查：{{ formatTimestamp(updateInfo.last_checked_at_ms) }}
+          </div>
+          <div v-if="updateInfo?.check_enabled === false" class="text-warning">
+            自动检查已关闭（UPDATE_CHECK_ENABLED=false）；手动检查仍可用
+          </div>
+          <div v-if="updateInfo?.last_error" class="text-warning">
+            上次检查失败：{{ updateInfo.last_error }}
+          </div>
+        </div>
+
+        <div
+          v-if="updateInfo?.is_outdated && updateInfo.release_notes_preview"
+          class="text-xs text-ink-soft dark:text-night-text-soft p-2 rounded-lg
+                 bg-paper/60 dark:bg-night-bg/60 border border-ink/5 dark:border-night-text/10"
+        >
+          <div class="font-medium text-ink dark:text-night-text mb-1">变更预览</div>
+          <p class="line-clamp-4">{{ updateInfo.release_notes_preview }}</p>
+        </div>
+
+        <div v-if="updateInfo?.release_url" class="flex gap-3 text-xs">
+          <a
+            :href="updateInfo.release_url"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="text-accent dark:text-night-accent hover:underline"
+          >查看完整变更日志 →</a>
+        </div>
+
+        <Transition
+          enter-active-class="transition-opacity duration-200"
+          enter-from-class="opacity-0"
+          leave-active-class="transition-opacity duration-200"
+          leave-to-class="opacity-0"
+        >
+          <p
+            v-if="updateCheckHint"
+            class="text-xs"
+            :class="updateCheckHint.includes('失败') || updateCheckHint.includes('出错')
+              ? 'text-warning'
+              : 'text-ink-soft dark:text-night-text-soft'"
+          >
+            {{ updateCheckHint }}
+          </p>
+        </Transition>
       </section>
 
       <!-- 身份与人格 -->

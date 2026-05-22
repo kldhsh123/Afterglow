@@ -105,8 +105,16 @@ class HybridRetriever:
                 vector,
                 top_k_window * _RETRIEVAL_OVERFETCH,
             ),
-            friend_name=self.settings.friend_name or "TA",
+            friend_names=self.settings.all_friend_names or ["TA"],
             limit=top_k_window,
+        )
+        # live 层语义召回：跨会话排除 ai_generated（除非 long_term_enabled）
+        live_top_k = self.settings.live_top_k
+        live_filter = _compute_live_filter(query, self.settings)
+        live_semantic_rows = await self.store.search_live(
+            vector,
+            live_top_k * _RETRIEVAL_OVERFETCH,
+            extra_filter=live_filter,
         )
         live_rows: list[dict[str, Any]] = []
         if query.conversation_id:
@@ -114,6 +122,13 @@ class HybridRetriever:
                 await self.store.recent_live(query.conversation_id, limit=20),
                 limit=20,
             )
+        # 把语义召回的 live 行合并到 live_rows（保证 fused 也能命中 live）
+        live_semantic = _filter_live_rows(live_semantic_rows, limit=live_top_k)
+        seen_ids = {r.get("id") for r in live_rows}
+        for r in live_semantic:
+            if r.get("id") not in seen_ids:
+                live_rows.append(r)
+                seen_ids.add(r.get("id"))
 
         # 3) 归一化为 ScoredChunk（RRF 前先各自 rank）
         response_pairs = [
@@ -195,13 +210,16 @@ def _filter_response_pair_rows(
 def _filter_window_rows(
     rows: list[dict[str, Any]],
     *,
-    friend_name: str,
+    friend_names: list[str],
     limit: int,
 ) -> list[dict[str, Any]]:
-    """过滤没有目标对象有效发言的窗口，避免把用户自己的问句当证据。"""
+    """过滤没有目标对象有效发言的窗口，避免把用户自己的问句当证据。
+
+    friend_names 包含 friend_name 和所有别名（真名/网名/昵称等），任一匹配即视为友方发言。
+    """
     out: list[dict[str, Any]] = []
     for row in rows:
-        if not _window_has_friend_signal(str(row.get("text") or ""), friend_name):
+        if not _window_has_friend_signal(str(row.get("text") or ""), friend_names):
             continue
         out.append(row)
         if len(out) >= limit:
@@ -214,7 +232,13 @@ def _filter_live_rows(
     *,
     limit: int,
 ) -> list[dict[str, Any]]:
-    """过滤 live 层低信号消息，避免污染调试溯源和融合结果。"""
+    """过滤 live 层低信号 + 旧库污染。
+
+    - 占位符（"（AI 主动开启话题）"等）丢弃
+    - 低信号文本（纯 sticker / 表情等）丢弃
+    - 旧库残留 source=live + role=assistant 丢弃
+      （新写入规则下，source=live 只可能是旧库残留；新 AI 回复用 source=ai_generated）
+    """
     out: list[dict[str, Any]] = []
     for row in rows:
         text = str(row.get("text") or "").strip()
@@ -222,23 +246,49 @@ def _filter_live_rows(
             continue
         if _is_low_signal_text(text):
             continue
+        source = str(row.get("source") or "")
+        role = str(row.get("role") or "")
+        if source == "live" and role == "assistant":
+            # 旧库污染：早期把 AI 回复也写成 source=live。新检索侧主动跳过，避免再被召回。
+            continue
         out.append(row)
         if len(out) >= limit:
             break
     return out
 
 
-def _window_has_friend_signal(text: str, friend_name: str) -> bool:
+def _compute_live_filter(
+    query: RetrievalQuery,
+    settings: Settings,
+) -> str | None:
+    """生成 search_live 的 extra_filter。
+
+    - ai_generated_long_term_enabled=True：完全不限制（允许 AI 历史跨会话长期累积）
+    - 否则：跨会话排除 ai_generated；如果有 conversation_id，同会话允许
+    """
+    if settings.ai_generated_long_term_enabled:
+        return None
+    base = "source != 'ai_generated'"
+    if query.conversation_id:
+        cid_quoted = query.conversation_id.replace("'", "''")
+        return f"{base} OR conversation_id = '{cid_quoted}'"
+    return base
+
+
+def _window_has_friend_signal(text: str, friend_names: list[str]) -> bool:
     # 兼容旧测试/旧数据：没有 speaker 前缀的窗口只能按低信号文本过滤。
     if ":" not in text and "：" not in text:
         return not _is_low_signal_text(text)
 
-    prefix = f"{friend_name}:"
+    prefixes = [f"{name}:" for name in friend_names if name]
+    if not prefixes:
+        return False
     for line in text.splitlines():
         line = line.strip()
-        if not line.startswith(prefix):
+        matched_prefix = next((p for p in prefixes if line.startswith(p)), None)
+        if matched_prefix is None:
             continue
-        content = line[len(prefix):].strip()
+        content = line[len(matched_prefix):].strip()
         if not _is_low_signal_text(content):
             return True
     return False
@@ -303,7 +353,7 @@ def _row_to_scored(row: dict[str, Any], *, rank: int, kind: str) -> ScoredChunk:
         ),
         session_id=str(row.get("session_id") or ""),
         sender_name=str(row.get("sender_name") or ""),
-        source=row.get("source") if row.get("source") in ("history", "live") else "history",  # type: ignore[arg-type]
+        source=str(row.get("source") or "history"),  # type: ignore[arg-type]
         warmth=float(row.get("warmth") or 0.0),
         metadata=metadata,
     )
@@ -349,8 +399,10 @@ def _fuse(
         _add(c)
     for c in dialogue_windows:
         _add(c)
-    # recent_live 是会话短期上下文，不是语义召回结果。保留在 RetrievalResult.recent_live，
-    # 但不参与 fused，避免调试溯源把无关的最近聊天当作“灵感来源”。
+    # live 语义召回也参与 fused，让"刚才聊到哪了"能被主 prompt 拿到。
+    # 但权重受 source_weight 控制，ai_generated 默认 0.25 远低于真人原始。
+    for c in recent_live:
+        _add(c)
 
     fused: list[ScoredChunk] = []
     for entry in aggregated.values():
@@ -358,7 +410,9 @@ def _fuse(
         rrf = entry["rrf"]
 
         # source weight
-        if chunk.source == "live":
+        if chunk.source == "ai_generated":
+            src_w = settings.ai_generated_source_weight
+        elif chunk.source in {"live", "user_new"}:
             src_w = settings.live_source_weight
         else:
             src_w = settings.history_source_weight

@@ -116,7 +116,7 @@ class FriendMessageChunk:
     dialogue_snippet: str       # 前文 + 当前发言（用于 embedding）
     context_before: str         # 前 N 条上下文（仅元数据）
     context_after: str          # 后 M 条上下文（仅元数据）
-    source: Literal["history", "live"] = "history"
+    source: Literal["history", "live", "human_original", "user_new", "ai_generated"] = "history"
     trust_level: float = 1.0    # 0~1，越高越信任
     warmth: float = 0.0         # 暖度评分，影响检索 boost
     tags: list[str] = field(default_factory=list)
@@ -136,7 +136,7 @@ class DialogueWindowChunk:
     end_time_ms: int
     message_count: int
     has_media: bool
-    source: Literal["history", "live"] = "history"
+    source: Literal["history", "live", "human_original", "user_new", "ai_generated"] = "history"
     trust_level: float = 1.0
     tags: list[str] = field(default_factory=list)
 
@@ -159,7 +159,7 @@ class ResponsePairChunk:
     end_seq: int
     start_time_ms: int
     end_time_ms: int
-    source: Literal["history", "live"] = "history"
+    source: Literal["history", "live", "human_original", "user_new", "ai_generated"] = "history"
     trust_level: float = 1.0
     warmth: float = 0.0
     tags: list[str] = field(default_factory=list)
@@ -212,7 +212,7 @@ class ScoredChunk:
     session_id: str = ""
     sender_name: str = ""
     sender_role: SenderRole = "other"
-    source: Literal["history", "live"] = "history"
+    source: Literal["history", "live", "human_original", "user_new", "ai_generated"] = "history"
     warmth: float = 0.0
     metadata: dict[str, Any] = field(default_factory=dict)
 

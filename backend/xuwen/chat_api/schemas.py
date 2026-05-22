@@ -101,9 +101,28 @@ class Usage(BaseModel):
     total_tokens: int = 0
 
 
+class PolicyHint(BaseModel):
+    """非 OpenAI 标准字段：本轮互动决策摘要。
+
+    放在 response 顶层让调用方（IM bot / 前端 / 自动化脚本）能识别：
+    - AI 这一轮是否主动选择不回复（`should_reply=false` + `finish_reason="silenced"`）
+    - 回复时是什么模式（撒娇 / 认真 / 转移 / 接梗 …）
+
+    OpenAI 官方 SDK 不会读取这个字段，但也不会因为它存在而报错。
+    """
+
+    should_reply: bool
+    reply_mode: str
+    user_state: str
+    risk_level: str
+    reason: str = Field(default="", description="人类可读的简短原因")
+
+
 class Choice(BaseModel):
     index: int = 0
     message: ChatMessage
+    # 在 "stop" / "length" / "content_filter" 之外新增 "silenced"：
+    # 表示决策层判断本轮不应回复，主模型未被调用，content 为 sentinel。
     finish_reason: str = "stop"
 
 
@@ -115,6 +134,8 @@ class ChatCompletionResponse(BaseModel):
     choices: list[Choice]
     usage: Usage = Field(default_factory=Usage)
     trace_id: str = ""
+    # 非 OpenAI 字段，描述本轮决策；调用方可以忽略
+    policy: PolicyHint | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +181,24 @@ class MemorySearchResponse(BaseModel):
     trace_id: str = ""
 
 
+class UpdateInfoPayload(BaseModel):
+    """版本更新检查结果，附在 /info 响应的 update 字段。
+
+    - check_enabled=false 时其它字段大多为 null（用户在 .env 关了检查）
+    - last_error 非空表示最近一次检查失败（网络 / API 限流等），前端可降级显示
+    """
+
+    check_enabled: bool
+    current_version: str
+    latest_version: str | None = None
+    is_outdated: bool = False
+    released_at: str | None = None
+    release_url: str | None = None
+    release_notes_preview: str | None = None
+    last_checked_at_ms: int | None = None
+    last_error: str | None = None
+
+
 class AppInfoResponse(BaseModel):
     """`/info` 端点返回应用元数据，供前端读 APP_NAME / slogan。"""
 
@@ -174,6 +213,7 @@ class AppInfoResponse(BaseModel):
     chat_model: str
     version: str
     has_persona_card: bool
+    update: UpdateInfoPayload | None = None
 
 
 class HealthResponse(BaseModel):
@@ -199,6 +239,100 @@ class ErrorPayload(BaseModel):
 
 class ErrorResponse(BaseModel):
     error: ErrorPayload
+
+
+# ---------------------------------------------------------------------------
+# OpenAI Responses API（中等子集）
+# ---------------------------------------------------------------------------
+
+
+class ResponsesInputTextContent(BaseModel):
+    type: Literal["input_text"] = "input_text"
+    text: str
+
+
+class ResponsesInputImageContent(BaseModel):
+    type: Literal["input_image"] = "input_image"
+    image_url: str
+    detail: str | None = None
+
+
+ResponsesInputContent = ResponsesInputTextContent | ResponsesInputImageContent
+
+
+class ResponsesInputMessage(BaseModel):
+    type: Literal["message"] = "message"
+    role: Literal["system", "user", "assistant", "developer"]
+    content: str | list[ResponsesInputContent]
+
+
+class ResponsesRequest(BaseModel):
+    """`POST /v1/responses` 请求体。"""
+
+    # OpenAI 协议占位：实际使用 backend .env 的 CHAT_MODEL。
+    model: str | None = None
+    input: str | list[ResponsesInputMessage]
+    instructions: str | None = None
+    stream: bool = False
+    temperature: float | None = None
+    top_p: float | None = None
+    max_output_tokens: int | None = None
+    previous_response_id: str | None = None
+    store: bool = True
+    conversation_id: str | None = Field(default=None)
+
+    @field_validator("input")
+    @classmethod
+    def _at_least_one_user(
+        cls,
+        v: str | list[ResponsesInputMessage],
+    ) -> str | list[ResponsesInputMessage]:
+        if isinstance(v, str):
+            if not v.strip():
+                raise ValueError("input 字符串不能为空")
+            return v
+        if not v:
+            raise ValueError("input 数组不能为空")
+        if not any(m.role == "user" for m in v):
+            raise ValueError("input 中至少要有一条 role=user")
+        return v
+
+
+class ResponsesOutputTextContent(BaseModel):
+    type: Literal["output_text"] = "output_text"
+    text: str
+    annotations: list[Any] = Field(default_factory=list)
+
+
+class ResponsesOutputMessage(BaseModel):
+    type: Literal["message"] = "message"
+    id: str
+    role: Literal["assistant"] = "assistant"
+    content: list[ResponsesOutputTextContent]
+    status: Literal["completed", "incomplete", "in_progress"] = "completed"
+
+
+class ResponsesUsage(BaseModel):
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+
+
+class ResponsesResponse(BaseModel):
+    """`POST /v1/responses` 响应体（非流式）。"""
+
+    id: str
+    object: Literal["response"] = "response"
+    created_at: int
+    model: str
+    status: Literal["completed", "failed", "in_progress", "incomplete"] = "completed"
+    output: list[ResponsesOutputMessage]
+    output_text: str
+    usage: ResponsesUsage = Field(default_factory=ResponsesUsage)
+    trace_id: str = ""
+    policy: PolicyHint | None = None
+    previous_response_id: str | None = None
+    incomplete_details: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------

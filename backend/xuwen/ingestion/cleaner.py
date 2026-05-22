@@ -30,9 +30,27 @@ _CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 # 形如 [图片: xxx.png] 的原始占位标记，统一替换为 [图片]
 _BRACKET_MEDIA_RE = re.compile(r"\[(图片|语音|视频|文件|表情|动画表情)[:：][^\]]+\]")
 
+# QQ 自带文字表情 token：`[/汪汪]` `[/呲牙]` `[/破涕为笑]` 等。
+# 这种 token 既不是 Unicode emoji 也不是图片，直接进库会让主模型在回复时
+# 模仿出 "[/xxx]" 字面字符串。统一归一化为 [表情]。
+_QQ_NATIVE_FACE_RE = re.compile(r"\[/[^\]\n]{1,16}\]")
+
 # QQ uid 通用形式：`u_` + 22 个 base64url 字符
 # 用于兜底匹配未知 uid（不是 self/friend 的那种）
 _GENERIC_QQ_UID_RE = re.compile(r"@?u_[A-Za-z0-9_-]{20,24}")
+
+
+def _build_mention_pattern(names: list[str]) -> re.Pattern[str] | None:
+    """根据多个名字/别名构造 `@(name1|name2|...)` 提及正则。
+
+    名字按长度降序排，避免短名字优先匹配（如先匹"明"再吃掉"小明"）。
+    """
+    cleaned = [n for n in names if n]
+    if not cleaned:
+        return None
+    cleaned.sort(key=len, reverse=True)
+    alts = "|".join(re.escape(n) for n in cleaned)
+    return re.compile(rf"@(?:{alts})")
 
 
 class Cleaner:
@@ -44,13 +62,9 @@ class Cleaner:
             self.rules = rules if rules is not None else load_rules(settings.pii_rules_path)
         else:
             self.rules = []
-        # 名字形式的 @ 提及替换
-        self._self_mention_re = (
-            re.compile(rf"@{re.escape(settings.self_name)}") if settings.self_name else None
-        )
-        self._friend_mention_re = (
-            re.compile(rf"@{re.escape(settings.friend_name)}") if settings.friend_name else None
-        )
+        # 名字形式的 @ 提及替换；同时识别 self_aliases / friend_aliases 里的所有别名。
+        self._self_mention_re = _build_mention_pattern(settings.all_self_names)
+        self._friend_mention_re = _build_mention_pattern(settings.all_friend_names)
         # uid 形式的 @ 提及替换（兼容 QQ 在 mention 文本里直接写 @u_xxxx 的情况）
         self._self_uid_re = (
             self._uid_pattern(settings.self_uid) if settings.self_uid else None
@@ -111,8 +125,11 @@ class Cleaner:
         return text.strip()
 
     def _normalize_brackets(self, text: str) -> str:
-        """把 [图片: xxx.png] 这种带文件名的占位统一为 [图片]。"""
-        return _BRACKET_MEDIA_RE.sub(lambda m: f"[{m.group(1)}]", text)
+        """把 [图片: xxx.png] 这种带文件名的占位统一为 [图片]，
+        再把 QQ 自带文字表情 `[/汪汪]` 归一化为 [表情]，避免模型学到这种诡异格式。"""
+        text = _BRACKET_MEDIA_RE.sub(lambda m: f"[{m.group(1)}]", text)
+        text = _QQ_NATIVE_FACE_RE.sub("[表情]", text)
+        return text
 
     def _normalize_mentions(self, text: str) -> str:
         """把 @自己 替换为 @你，@朋友 替换为 @我（站在 friend 视角生成训练样本）。

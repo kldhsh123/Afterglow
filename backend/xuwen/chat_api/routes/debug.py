@@ -80,6 +80,22 @@ def config_snapshot(state: AppState = Depends(get_state)) -> dict[str, Any]:
         "writeback_enabled": s.writeback_enabled,
         "writeback_batch_turns": s.writeback_batch_turns,
         "writeback_vectorize": s.writeback_vectorize,
+        "live_top_k": s.live_top_k,
+        "ai_generated_source_weight": s.ai_generated_source_weight,
+        "ai_generated_long_term_enabled": s.ai_generated_long_term_enabled,
+        "response_policy": {
+            "model_enabled": s.response_policy_model_enabled,
+            "model": s.resolved_response_policy_model,
+            "endpoint_overridden": bool(s.response_policy_api_url.strip()),
+            "key_overridden": _is_secret_set(
+                s.response_policy_api_key.get_secret_value()
+            ),
+            "temperature": s.response_policy_temperature,
+            "max_tokens": s.response_policy_max_tokens,
+        },
+        "silence_response_sentinel": s.silence_response_sentinel,
+        "silence_finish_reason": s.silence_finish_reason,
+        "responses_store_capacity": s.responses_store_capacity,
         "vision_enabled": s.vision_enabled,
         "chat_model_supports_vision": s.chat_model_supports_vision,
         "web_access_enabled": s.web_access_enabled,

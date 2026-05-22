@@ -250,9 +250,19 @@ def find_sticker_tokens(text: str) -> list[tuple[int, int, str]]:
 def render_sticker_block_for_prompt(stickers: list[Sticker]) -> str:
     """把表情包列表渲染成 system prompt 的一段说明。"""
     if not stickers:
-        return ""
-    lines = ["你可以发以下表情包。用 `[sticker:名字]` 占位（前端会自动渲染为图片）："]
+        return (
+            "【表情包】当前没有可用的表情包；**绝对不要**输出 `[sticker:xxx]` 形式的占位，"
+            "用文字 / emoji 表达即可（否则会出现一段乱码）。"
+        )
+    names = "、".join(f"[sticker:{s.name}]" for s in stickers)
+    lines = [
+        "【表情包】只能从下面这份列表里挑，**不要自创**也不要修改名字（少一个字 / 多一个字都会让前端渲染失败）：",
+    ]
     for s in stickers:
         lines.append(f"- [sticker:{s.name}]：{s.description}")
+    lines.append(
+        f"以上是当前**全部**可用名字：{names}。"
+        "用名字一字不差地写出来，否则不要输出 `[sticker:...]` 这种格式——用文字代替。"
+    )
     lines.append("挑选要贴合语境的；不要为了发而发，文字回应优先。")
     return "\n".join(lines)

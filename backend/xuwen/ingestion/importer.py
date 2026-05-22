@@ -134,6 +134,27 @@ async def import_history(
             await embedder.aclose()
         # store 不主动关：LanceDB 连接复用更稳
 
+    # 生成 / 更新作息画像 circadian_profile.json
+    try:
+        from xuwen.persona.circadian import (
+            CIRCADIAN_PROFILE_FILENAME,
+            compute_circadian_profile,
+            save_circadian_profile,
+        )
+
+        profile = compute_circadian_profile(cleaned)
+        save_circadian_profile(
+            profile,
+            settings.persona_data_dir / CIRCADIAN_PROFILE_FILENAME,
+        )
+    except Exception:
+        # 画像生成失败不影响导入主链路
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "circadian profile 生成失败，已忽略", exc_info=True
+        )
+
     duration = round(time.perf_counter() - start, 3)
     report = ImportReport(
         total_raw_messages=raw_count,

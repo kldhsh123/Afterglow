@@ -9,6 +9,7 @@ from xuwen.chat_api.schemas import (
     AppInfoResponse,
     HealthResponse,
     ReadinessResponse,
+    UpdateInfoPayload,
 )
 from xuwen.chat_api.state import AppState, get_state
 
@@ -43,6 +44,18 @@ async def readyz(state: AppState = Depends(get_state)) -> ReadinessResponse:
     return ReadinessResponse(ready=not issues, issues=issues)
 
 
+@router.post("/info/check-update", response_model=UpdateInfoPayload, tags=["meta"])
+@router.post("/v1/info/check-update", response_model=UpdateInfoPayload, tags=["meta"])
+async def check_update(state: AppState = Depends(get_state)) -> UpdateInfoPayload:
+    """手动触发一次版本检查，返回最新 snapshot。
+
+    内部 5 秒节流：连续点击只第一次真打 GitHub API。
+    UPDATE_CHECK_ENABLED=false 时也允许这个端点（用户主动行为）。
+    """
+    info = await state.update_checker.force_check_now()
+    return UpdateInfoPayload.model_validate(info.to_dict())
+
+
 @router.get("/info", response_model=AppInfoResponse, tags=["meta"])
 @router.get("/v1/info", response_model=AppInfoResponse, tags=["meta"])
 def info(state: AppState = Depends(get_state)) -> AppInfoResponse:
@@ -65,4 +78,7 @@ def info(state: AppState = Depends(get_state)) -> AppInfoResponse:
         chat_model=s.chat_model,
         version=__version__,
         has_persona_card=has_card,
+        update=UpdateInfoPayload.model_validate(
+            state.update_checker.snapshot().to_dict()
+        ),
     )

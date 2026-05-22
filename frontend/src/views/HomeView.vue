@@ -11,9 +11,11 @@ import { useTypewriter } from '@/composables/useTypewriter'
 import MessageList from '@/components/chat/MessageList.vue'
 import ChatInput from '@/components/chat/ChatInput.vue'
 import ErrorBanner from '@/components/common/ErrorBanner.vue'
+import UpdateBanner from '@/components/common/UpdateBanner.vue'
 import DebugDrawer from '@/components/common/DebugDrawer.vue'
 import OnboardingDialog from '@/components/onboarding/OnboardingDialog.vue'
 import { Bug, Sparkles } from 'lucide-vue-next'
+import type { UpdateInfo } from '@/types/api'
 
 const chat = useChatStore()
 const settings = useSettingsStore()
@@ -21,6 +23,7 @@ const memory = useMemoryStore()
 
 let currentStream: StreamHandle | null = null
 const debugOpen = ref(false)
+const updateInfo = ref<UpdateInfo | null>(null)
 
 const showOnboarding = computed(() => !settings.onboardingDone)
 
@@ -35,6 +38,7 @@ onMounted(async () => {
       self_name: info.self_name,
       relationship_description: info.relationship_description,
     })
+    updateInfo.value = info.update
   } catch (e) {
     // 不强制后端在线；只是同步元数据失败而已
     console.warn('无法获取后端 /info：', e)
@@ -168,6 +172,7 @@ async function startProactiveTopic() {
 
 <template>
   <div class="flex flex-col h-full">
+    <UpdateBanner :update="updateInfo" />
     <ErrorBanner />
     <div class="flex-1 min-h-0">
       <MessageList @pick-sample="pickSample" />

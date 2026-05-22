@@ -18,6 +18,20 @@ persona 画像是长期统计参考，不是今天发生的事实。
 回复优先级：当前生活状态 > 关系记忆 > 本轮检索到的真实回复样本 > persona 画像。
 不要凭画像或历史片段发明今天在想谁、怀疑用户、正在打游戏、现实见面、emoji 或亲密动作。"""
 
+_LIFE_MARKER_INSTRUCTION = """【生活状态自更新（内部协议，不要向用户解释）】
+如果在这一轮回复中你的真实生活状态发生了变化（如吃饭/出门/睡觉/换活动/心情转变），
+在回复正文之后**追加**一个隐藏标记块（只输出**有变化**的字段）：
+
+<life-update>
+{"current_activity": "...", "recent_meal": "...", "mood": "...", "availability": "available|busy|sleeping|away"}
+</life-update>
+
+规则：
+- 没有真实变化时不要输出标记块；不要为了刷新状态而编造改变。
+- 标记块只能放在回复最后，且整体一次性输出，不要分散在正文中。
+- 字段值都是短语，不要超过 30 字；availability 只能是上述四个值之一。
+- 标记块会被后端解析并从对外回复中**剥离**，用户看不到。"""
+
 
 def empty_retrieval_result() -> RetrievalResult:
     return RetrievalResult(
@@ -35,6 +49,7 @@ def build_persona_card_with_companion_context(
     life: LifeSnapshot,
     relationship_context: str,
     style_query: str = "",
+    response_policy_context: str = "",
 ) -> str:
     """Load persona card and append high-priority companion context."""
     persona_card = load_persona_card(settings.persona_data_dir / "persona_card.md")
@@ -49,6 +64,14 @@ def build_persona_card_with_companion_context(
     blocks.append(life.render_prompt_block())
     if relationship_context:
         blocks.append(relationship_context)
+    aliases_block = _render_aliases_block(settings)
+    if aliases_block:
+        blocks.append(aliases_block)
+    if response_policy_context:
+        # 决策块放在最后，优先级最高（主模型读到这里时已经看完所有上下文）。
+        blocks.append(response_policy_context)
+    if settings.life_marker_update_enabled:
+        blocks.append(_LIFE_MARKER_INSTRUCTION)
 
     sticker_store = StickerStore(settings)
     sticker_block = render_sticker_block_for_prompt(sticker_store.available_for_ai())
@@ -103,3 +126,34 @@ def _short(text: str, limit: int = 80) -> str:
     if len(cleaned) <= limit:
         return cleaned
     return cleaned[: limit - 1] + "…"
+
+
+def _render_aliases_block(settings: Settings) -> str:
+    """渲染"你和对方的别名"教学块。
+
+    当没有任何别名时返回空，避免给主模型增加无意义的上下文。
+    """
+    friend_names = settings.all_friend_names
+    self_names = settings.all_self_names
+    if not (len(friend_names) > 1 or len(self_names) > 1):
+        return ""
+
+    lines = ["【你和对方的别名（重要，否则会闹笑话）】"]
+    if len(friend_names) > 1:
+        primary = friend_names[0]
+        others = "、".join(friend_names[1:])
+        lines.append(
+            f"- 你（{primary}）也会被用户这样称呼：{others}。"
+            "看到这些名字时不要追问\"...是谁\"，那都是叫你。"
+        )
+    if len(self_names) > 1:
+        primary = self_names[0]
+        others = "、".join(self_names[1:])
+        lines.append(
+            f"- 用户（{primary}）也可能被叫成：{others}。"
+            "你可以根据语境选用其中一个名字回应；不要刻意频繁切换。"
+        )
+    lines.append(
+        "- 历史记忆里如果出现这些别名，都按真人对话理解，不要把同一个人当成两个人。"
+    )
+    return "\n".join(lines)

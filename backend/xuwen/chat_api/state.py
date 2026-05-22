@@ -8,12 +8,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from xuwen.chat_api.llm_client import LLMClient
+from xuwen.chat_api.responses_store import ResponsesStore
 from xuwen.chat_api.web_fetch import WebFetchClient
 from xuwen.chat_api.web_search import WebSearchClient
 from xuwen.companion.life import LifeStateManager
 from xuwen.companion.relationship import RelationshipMemoryManager
 from xuwen.config import Settings
 from xuwen.core.metrics import MetricsRecorder
+from xuwen.core.update_check import UpdateChecker
 from xuwen.ingestion.embedder import EmbeddingClient
 from xuwen.memory.retriever import HybridRetriever
 from xuwen.memory.store import MemoryStore
@@ -29,11 +31,14 @@ class AppState:
     embedder: EmbeddingClient
     llm: LLMClient
     life_llm: LLMClient
+    response_policy_llm: LLMClient
     retriever: HybridRetriever
     writeback: WritebackQueue
     metrics: MetricsRecorder
     life: LifeStateManager
     relationship_memory: RelationshipMemoryManager
+    responses_store: ResponsesStore
+    update_checker: UpdateChecker
     web_search: WebSearchClient | None = None
     web_fetch: WebFetchClient | None = None
 

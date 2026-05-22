@@ -24,6 +24,11 @@ from xuwen.ingestion.parser import load_qq_json, parse_messages
 from xuwen.ingestion.splitter import split_sessions
 from xuwen.persona.analyzer import analyze_persona
 from xuwen.persona.card import render_persona_card, save_persona_card, save_persona_report
+from xuwen.persona.circadian import (
+    CIRCADIAN_PROFILE_FILENAME,
+    compute_circadian_profile,
+    save_circadian_profile,
+)
 from xuwen.persona.style_profile import build_style_profile, save_style_profile
 
 console = Console()
@@ -79,9 +84,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     save_style_profile(style_profile, style_path)
 
+    # 作息画像
+    circadian_profile = compute_circadian_profile(cleaned)
+    circadian_path = out_dir / CIRCADIAN_PROFILE_FILENAME
+    save_circadian_profile(circadian_profile, circadian_path)
+
     console.print(f"[green]报告已保存：[/]{json_path}")
     console.print(f"[green]卡片已保存：[/]{card_path}")
     console.print(f"[green]场景画像已保存：[/]{style_path}")
+    console.print(
+        f"[green]作息画像已保存：[/]{circadian_path}"
+        f"（样本 {circadian_profile.sample_size}，{circadian_profile.summary}）"
+    )
     return 0
 
 

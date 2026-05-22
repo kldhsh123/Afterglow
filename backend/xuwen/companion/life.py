@@ -17,6 +17,11 @@ from typing import Any, cast
 from xuwen.chat_api.llm_client import GenerationParams, LLMClient
 from xuwen.config import Settings
 from xuwen.core.metrics import MetricsRecorder
+from xuwen.persona.circadian import (
+    CircadianProfile,
+    is_night_hour_for_profile,
+    load_circadian_profile,
+)
 from xuwen.persona.prompt import ChatMessage
 
 logger = logging.getLogger(__name__)
@@ -102,6 +107,14 @@ class LifeStateManager:
         self.settings = settings
         self.path = settings.persona_data_dir / "life_state.json"
 
+    def _load_circadian_profile(self) -> CircadianProfile | None:
+        """加载作息画像；文件不存在则返回 None，调用方走默认作息。"""
+        from xuwen.persona.circadian import CIRCADIAN_PROFILE_FILENAME
+
+        return load_circadian_profile(
+            self.settings.persona_data_dir / CIRCADIAN_PROFILE_FILENAME
+        )
+
     def snapshot(self, now: datetime | None = None) -> LifeSnapshot:
         now = now or datetime.now()
         state = self._load_or_create(now)
@@ -178,6 +191,7 @@ class LifeStateManager:
         now = now or datetime.now()
         before = self.snapshot(now)
         state = self._load_or_create(now)
+        circadian = self._load_circadian_profile()
         if not _should_update_state(
             settings=self.settings,
             state=state,
@@ -185,6 +199,7 @@ class LifeStateManager:
             now=now,
             current_user_text=current_user_text,
             trigger=trigger,
+            circadian=circadian,
         ):
             return before
         prompt = _build_decision_prompt(
@@ -197,6 +212,7 @@ class LifeStateManager:
             relationship_context=relationship_context,
             memory_context=memory_context,
             trigger=trigger,
+            circadian=circadian,
         )
         messages = [
             {
@@ -257,6 +273,53 @@ class LifeStateManager:
             encoding="utf-8",
         )
         return data
+
+    def apply_marker_patch(
+        self,
+        patch_text: str,
+        *,
+        now: datetime | None = None,
+        trigger: str = "marker",
+    ) -> LifeSnapshot | None:
+        """主模型在回复里输出的 life-update 标记块写入 life。
+
+        patch_text 是 <life-update>...</life-update> 中间的 JSON 字符串。
+        解析失败、无可用字段时返回 None（不影响主回复链路）。
+        """
+        if not patch_text or not patch_text.strip():
+            return None
+        try:
+            data = _extract_json_object(patch_text)
+        except Exception:
+            logger.warning("life marker JSON 解析失败", exc_info=True)
+            return None
+        if not isinstance(data, dict):
+            return None
+        patch: dict[str, object] = {}
+        for src, dst in (
+            ("current_activity", "current_activity"),
+            ("current_event_id", "current_event_id"),
+            ("recent_meal", "recent_meal"),
+            ("mood", "mood"),
+            ("availability", "availability"),
+            ("topic_seed", "topic_seed"),
+            ("next_update_at", "next_update_at"),
+            ("reply_delay_reason", "reply_delay_reason"),
+            ("reason", "reason"),
+        ):
+            value = data.get(src)
+            if isinstance(value, str):
+                cleaned = " ".join(value.split()).strip()
+                if cleaned:
+                    patch[dst] = cleaned[:_MAX_FIELD_CHARS]
+        delay = data.get("reply_delay_seconds")
+        if isinstance(delay, int | float | str):
+            patch["reply_delay_seconds"] = delay
+        if not patch:
+            return None
+        now = now or datetime.now()
+        state = self._load_or_create(now)
+        return self._apply_decision(state, patch, now=now, trigger=trigger)
 
     def _apply_decision(
         self,
@@ -483,6 +546,7 @@ def _build_decision_prompt(
     relationship_context: str,
     memory_context: str,
     trigger: str,
+    circadian: CircadianProfile | None = None,
 ) -> str:
     recent_text = "\n".join(
         f"{_speaker(settings, m.role)}: {m.content}" for m in recent[-8:]
@@ -494,6 +558,7 @@ def _build_decision_prompt(
     plan = state.get("daily_plan")
     plan_text = json.dumps(plan, ensure_ascii=False) if isinstance(plan, list) else "（暂无）"
     plan_decided = bool(state.get("plan_decided_by_model"))
+    circadian_text = _format_circadian_for_prompt(circadian, now)
     relationship_text = relationship_context[:1200]
     memory_text = memory_context[:1600]
     next_update_at = before.next_update_at or "（未设置）"
@@ -521,6 +586,9 @@ def _build_decision_prompt(
 今日计划骨架：
 {plan_text}
 今日计划是否已经由模型确认：{"是" if plan_decided else "否"}
+
+TA 的真实作息画像（来自历史聊天时间分布，请优先采纳，覆盖默认 8-23 假设）：
+{circadian_text}
 
 最近时间线事件：
 {timeline_text or "（暂无）"}
@@ -583,6 +651,28 @@ JSON 格式：
 }}"""
 
 
+def _format_circadian_for_prompt(profile: CircadianProfile | None, now: datetime) -> str:
+    """把作息画像格式化成一段供 prompt 用的描述。"""
+    if profile is None or profile.sample_size < 30:
+        return "（无可用画像，沿用默认作息：清醒 8:00-23:00；如对方实际是夜猫子或跨时区，请根据聊天内容自行调整）"
+    is_weekend = now.weekday() >= 5
+    label = "周末" if is_weekend else "工作日"
+    hourly = profile.weekend_hourly if is_weekend else profile.weekday_hourly
+    if not any(hourly):
+        hourly = profile.hourly_activity
+    # 取活跃度 >= 0.3 的小时列出来
+    active_hours = [str(h) for h, v in enumerate(hourly) if v >= 0.3]
+    active_text = "、".join(f"{h}点" for h in active_hours) if active_hours else "（数据稀疏）"
+    start, end = profile.typical_awake_range
+    return (
+        f"- 通常清醒时段：{start:02d}:00 - {end:02d}:00\n"
+        f"- 深夜活跃占比：{profile.night_owl_score:.0%}"
+        f"（{'明显夜猫子' if profile.night_owl_score >= 0.4 else '偏晚睡型' if profile.night_owl_score >= 0.2 else '常规作息'}）\n"
+        f"- 今天是{label}，历史上活跃的小时：{active_text}\n"
+        f"- 备注：{profile.summary}"
+    )
+
+
 def _speaker(settings: Settings, role: str) -> str:
     if role == "user":
         return settings.self_name or "用户"
@@ -599,6 +689,7 @@ def _should_update_state(
     now: datetime,
     current_user_text: str,
     trigger: str,
+    circadian: CircadianProfile | None = None,
 ) -> bool:
     current = state.get("current")
     if not isinstance(current, dict):
@@ -617,7 +708,9 @@ def _should_update_state(
         return True
     if _contains_any(text, _LIFE_INTERRUPT_PATTERNS):
         return True
-    if (now.hour >= 22 or now.hour < 6) and _contains_any(text, _USER_NIGHT_PATTERNS):
+    # 深夜熬夜判定：根据 circadian profile 而非硬编码 22-06，
+    # 这样夜猫子 TA 的"对方的深夜"自然偏移到凌晨更深的时段
+    if is_night_hour_for_profile(now.hour, circadian) and _contains_any(text, _USER_NIGHT_PATTERNS):
         return True
     return False
 

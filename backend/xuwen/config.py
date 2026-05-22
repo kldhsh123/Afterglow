@@ -54,6 +54,17 @@ class Settings(BaseSettings):
     self_uid: str = Field(default="", description="你的 QQ uid（即 selfUid）")
     friend_name: str = Field(default="", description="对方（需要模仿的人）的名字")
     friend_uid: str = Field(default="", description="对方的 QQ uid")
+    # 别名：朋友间互相称呼时经常会用真名/网名/昵称/外号；都列在这里，
+    # cleaner / retriever / prompt 都会识别这些是同一个人。
+    # .env 里用逗号分隔：SELF_ALIASES=小明,Mike,明哥
+    self_aliases: list[str] = Field(
+        default_factory=list,
+        description="你（用户）的别名列表，用于 cleaner/retriever 识别同一个人。",
+    )
+    friend_aliases: list[str] = Field(
+        default_factory=list,
+        description="对方的别名列表，包括真名/网名/昵称/外号。",
+    )
 
     # ----- 关系与模板 -----
     relationship_type: RelationshipType = "friend"
@@ -101,6 +112,34 @@ class Settings(BaseSettings):
     life_update_interval_minutes: int = 60
     # 生活状态可建议延迟回复；这里限制实际 sleep 上限，避免请求被模型拖太久。
     life_max_reply_delay_seconds: int = 45
+    # 主模型在回复中输出 <life-update>JSON</life-update> 标记块时，
+    # 后端解析后直接 patch life 状态（零额外 API 调用），并从对外回复中剥离标记。
+    # 关闭时仍兜底过滤标记块，避免前端看到。
+    life_marker_update_enabled: bool = True
+
+    # 模型有时会输出库里没有的 sticker 名字。默认开启重试：检测到所有 sticker
+    # 都不存在时，追加一条 system 提示让主模型重新生成一次回复。
+    # 仅非流式生效（流式已发出的 chunk 没法回收）；失败 1 次后回退到短句兜底。
+    sticker_reject_retry: bool = True
+
+    # ----- 流式输出策略 -----
+    # 默认关闭真流式：Afterglow 模拟"真人朋友在 IM 里发消息"，真人不会逐字蹦出，
+    # 应该一次性出现完整一条。stream=true 请求仍按 OpenAI SSE 协议返回，但内部
+    # 一次性生成完整文本，然后包装成单个 content chunk 发出（即"假流式"）。
+    # 想恢复真流式（调试 / 测试）可设为 true。
+    response_streaming_enabled: bool = False
+
+    # ----- 版本更新检查 -----
+    # 默认开启：后端启动时一次性调用 update_check_url 查询最新发布版本。
+    # 结果通过 /info 接口的 update 字段对外暴露，前端可据此显示升级提示。
+    # 设为 false 即完全静默（CI / 离线场景）。
+    # 后续要重新检查由前端"立即检查"按钮（POST /info/check-update）触发；
+    # 请求只会 GET 一个公开 URL，不传任何身份 / 配置 / API key。
+    update_check_enabled: bool = True
+    update_check_url: str = (
+        "https://api.github.com/repos/kldhsh123/Afterglow/releases/latest"
+    )
+    update_check_timeout_seconds: float = 8.0
 
     # ----- 视觉理解（vision / VLM）-----
     # 总开关。默认关闭，避免新用户配置出错。
@@ -162,6 +201,7 @@ class Settings(BaseSettings):
     response_pair_top_k: int = 24
     friend_top_k: int = 32
     window_top_k: int = 16
+    live_top_k: int = 12
     final_context_k: int = 12
     rrf_k: int = 60
     recency_half_life_days: float = 30.0
@@ -169,6 +209,32 @@ class Settings(BaseSettings):
     warmth_boost: float = 0.12
     live_source_weight: float = 1.08
     history_source_weight: float = 1.0
+    ai_generated_source_weight: float = 0.25
+    # false：ai_generated 只在同一 conversation_id 内参与语义检索；
+    # true：允许 AI 生成回复跨会话长期累积并参与 live 语义检索。
+    ai_generated_long_term_enabled: bool = False
+
+    # ----- 本轮互动决策小模型（默认关闭；留空复用 LIFE_* 配置）-----
+    # 规则层会先给出稳定保守的判断；开启后，小模型只负责补充意图、语气和检索重点。
+    # 安全/沉默/要图/表情等硬规则不会被小模型降级覆盖。
+    response_policy_model_enabled: bool = False
+    response_policy_api_url: str = ""
+    response_policy_api_key: SecretStr = Field(default=SecretStr(""))
+    response_policy_model: str = ""
+    response_policy_temperature: float = 0.2
+    response_policy_max_tokens: int = 260
+
+    # ----- 沉默响应（决策层判断本轮不应回复时返回的内容）-----
+    # content 字段放一个明确的 sentinel，让标准 OpenAI 客户端也能区分
+    # "AI 主动选择不说话" 和 "网络异常 / 空回复"；Afterglow 客户端仍可读 policy.should_reply。
+    silence_response_sentinel: str = "[silent]"
+    # finish_reason 默认仍用扩展值 "silenced"；严格 enum 校验的 OpenAI SDK 可改为 "stop"。
+    silence_finish_reason: Literal["silenced", "stop"] = "silenced"
+
+    # ----- /v1/responses 服务端缓存 -----
+    # OpenAI Responses API 通过 previous_response_id 找回上一轮上下文；
+    # Afterglow 用进程内 LRU 缓存 response_id → conversation_id 的映射。
+    responses_store_capacity: int = 512
 
     # ----- 回写 -----
     writeback_enabled: bool = True
@@ -343,6 +409,26 @@ class Settings(BaseSettings):
             return None
         return v
 
+    @field_validator("self_aliases", "friend_aliases", mode="before")
+    @classmethod
+    def _split_aliases(cls, v: object) -> object:
+        """支持 .env 里用逗号分隔传入别名列表。
+
+        例如 SELF_ALIASES=小明,Mike,明哥 → ["小明", "Mike", "明哥"]。
+        留空 / None 视为空列表。
+        """
+        if v is None:
+            return []
+        if isinstance(v, str):
+            text = v.strip()
+            if not text:
+                return []
+            # 已经是 JSON 数组字符串就让 pydantic 自己解析
+            if text.startswith("["):
+                return v
+            return [s.strip() for s in text.split(",") if s.strip()]
+        return v
+
     @model_validator(mode="after")
     def _check_window(self) -> Settings:
         if self.window_overlap >= self.window_size:
@@ -396,6 +482,33 @@ class Settings(BaseSettings):
         """生活时间线模型名；留空则复用主聊天模型。"""
         return self.life_model or self.chat_model
 
+    @property
+    def resolved_response_policy_api_url(self) -> str:
+        """互动决策小模型 endpoint；留空则复用 LIFE_*，LIFE_* 也空再复用主 LLM。"""
+        return self.response_policy_api_url or self.resolved_life_api_url
+
+    @property
+    def resolved_response_policy_api_key(self) -> SecretStr:
+        """互动决策小模型 key；留空则复用 LIFE_*，LIFE_* 也空再复用主 LLM。"""
+        if self.response_policy_api_key.get_secret_value():
+            return self.response_policy_api_key
+        return self.resolved_life_api_key
+
+    @property
+    def resolved_response_policy_model(self) -> str:
+        """互动决策小模型名；留空则复用 LIFE_MODEL，LIFE_MODEL 也空再复用 CHAT_MODEL。"""
+        return self.response_policy_model or self.resolved_life_model
+
+    @property
+    def all_self_names(self) -> list[str]:
+        """`self_name` + `self_aliases` 去重后的完整列表（保留顺序）。"""
+        return _dedupe_names([self.self_name, *self.self_aliases])
+
+    @property
+    def all_friend_names(self) -> list[str]:
+        """`friend_name` + `friend_aliases` 去重后的完整列表（保留顺序）。"""
+        return _dedupe_names([self.friend_name, *self.friend_aliases])
+
     def require_identity(self) -> None:
         """在导入 / 启动 API 等场景必须有完整身份信息。
 
@@ -430,3 +543,18 @@ def get_settings() -> Settings:
     需要重新加载时调用 `get_settings.cache_clear()`。
     """
     return Settings()
+
+
+def _dedupe_names(names: list[str]) -> list[str]:
+    """保留顺序去重 + 去空 + 去前后空格。"""
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in names:
+        if not isinstance(raw, str):
+            continue
+        name = raw.strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        out.append(name)
+    return out
