@@ -161,7 +161,7 @@ Afterglow 不内置模型，所有 LLM 调用都走你自己配置的 OpenAI 兼
 
 | 角色 | 必需？ | 作用 | 推荐 | 配置项 |
 |---|---|---|---|---|
-| **主聊天模型** | ✅ 必需 | 生成最终回复，决定"像不像 TA" | **DeepSeek**（性价比高、中文好）/ **Gemini 2.5 Pro / Flash**（长上下文）/ GPT-4o / Claude | `OPENAI_BASE_URL` `OPENAI_API_KEY` `CHAT_MODEL` |
+| **主聊天模型** | ✅ 必需 | 生成最终回复，决定"像不像 TA" | **DeepSeek** / **Gemini**  | `OPENAI_BASE_URL` `OPENAI_API_KEY` `CHAT_MODEL` |
 | **Embedding 模型** | ✅ 必需 | 向量化历史聊天与检索 query | Qwen3-Embedding-8B（阿里云 DashScope 免费额度，或合作伙伴二次元 API 中转站免费提供该模型） | `EMBEDDING_API_URL` `EMBEDDING_API_KEY` `EMBEDDING_MODEL` `EMBEDDING_DIM` |
 | **打标小模型** | 🔧 可选 | 给历史 chunk 打 mood / topic / importance 软标签 | **[智谱清言 glm-4-flash](https://www.bigmodel.cn/invite?icode=Q2FUoY2w04wQb%2FoIugMwsA%3D%3D)（免费）** | `LABELING_ENABLED=true` `LABEL_API_*` `LABEL_MODEL` |
 | **生活状态 / 网页意图小模型** | 🔧 可选 | 维护 AI 当前在做什么、判断要不要打开 URL | **[智谱清言 glm-4-flash](https://www.bigmodel.cn/invite?icode=Q2FUoY2w04wQb%2FoIugMwsA%3D%3D)（免费）** | `LIFE_API_*` `LIFE_MODEL` |
