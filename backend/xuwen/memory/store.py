@@ -265,6 +265,56 @@ class MemoryStore:
                 )
                 raise
 
+    async def existing_ids(self, table: str, ids: Iterable[str]) -> set[str]:
+        """返回 ids 中已经存在于 table 的子集。
+
+        用于 import 续跑：embed 前先查库跳过已写入的 chunk_id，避免
+        中断后重跑时重复调用 embedding API（chunk_id 是基于内容 hash 的，
+        相同内容会得到相同 id）。
+
+        分批查询，避免单条 IN 子句过长触发解析器限制。
+        """
+        ids_list = [str(i) for i in ids if i]
+        if not ids_list:
+            return set()
+        tbl = self._table(table)
+        start = time.perf_counter()
+        existing: set[str] = set()
+        # IN 子句一次最多 500 个 id；LanceDB 列式存储下 select(["id"]) 也不会拉回向量
+        _IN_BATCH = 500
+        try:
+            for offset in range(0, len(ids_list), _IN_BATCH):
+                slice_ids = ids_list[offset : offset + _IN_BATCH]
+                id_list_sql = ", ".join(_quote_lance(i) for i in slice_ids)
+                where = f"id IN ({id_list_sql})"
+                arrow_tbl = (
+                    tbl.search()
+                    .where(where)
+                    .select(["id"])
+                    .limit(len(slice_ids))
+                    .to_arrow()
+                )
+                for v in arrow_tbl["id"].to_pylist():
+                    if isinstance(v, str) and v:
+                        existing.add(v)
+            self._record_db_perf(
+                "existing_ids",
+                table,
+                start,
+                rows=len(existing),
+                detail=f"queried={len(ids_list)}",
+            )
+            return existing
+        except Exception as e:
+            self._record_db_perf(
+                "existing_ids",
+                table,
+                start,
+                status="error",
+                detail=type(e).__name__,
+            )
+            raise
+
     async def list_unlabeled_friend_chunks(self, limit: int = 1000) -> list[dict[str, Any]]:
         """列出 friend_messages 中还没打标的 chunk（mood 为空或缺失）。
 
