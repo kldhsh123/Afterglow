@@ -138,6 +138,18 @@ def is_ai_silence_signal(
     return True
 
 
+def effective_silence_sentinel(settings: Settings) -> str:
+    """返回当前生效的沉默 sentinel；AI 自主沉默被开关关闭时返回空串。
+
+    传空串给 render_prompt_block → 不注入沉默指令；
+    传空串给 is_ai_silence_signal → 第一道守卫直接返回 False。
+    一个开关同时关掉 prompt 入口和 pipeline 兜底，避免散点漏改。
+    """
+    if not settings.ai_silence_enabled:
+        return ""
+    return settings.silence_response_sentinel
+
+
 def looks_like_sticker_only_intent(raw_text: str) -> bool:
     """判断模型原始输出是否"基本只是想发 sticker"。
 

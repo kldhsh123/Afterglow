@@ -25,6 +25,7 @@ from xuwen.chat_api.chat_pipeline import (
     available_sticker_names,
     build_policy_hint,
     build_sticker_retry_hint,
+    effective_silence_sentinel,
     extract_and_apply_life_marker,
     fallback_for_rejected_sticker,
     is_ai_silence_signal,
@@ -246,7 +247,7 @@ async def responses(
         relationship_context=relationship_block,
         style_query=current_user_text,
         response_policy_context=decision.render_prompt_block(
-            silence_sentinel=state.settings.silence_response_sentinel,
+            silence_sentinel=effective_silence_sentinel(state.settings),
         ),
     )
     web_context = ""
@@ -355,7 +356,7 @@ async def responses(
         # AI 自主沉默：主模型严格输出 sentinel → 转沉默路径，跳过 sticker 兜底。
         ai_silenced = is_ai_silence_signal(
             assistant_text,
-            sentinel=state.settings.silence_response_sentinel,
+            sentinel=effective_silence_sentinel(state.settings),
             decision=decision,
         )
         if ai_silenced:
@@ -937,7 +938,7 @@ async def _stream_response(
     # 流式事件已经发完，前端收到的内容仍是 sentinel，由 sentinel 自身表达沉默语义。
     ai_silenced = is_ai_silence_signal(
         assistant_text,
-        sentinel=state.settings.silence_response_sentinel,
+        sentinel=effective_silence_sentinel(state.settings),
         decision=decision,
     )
     if ai_silenced:

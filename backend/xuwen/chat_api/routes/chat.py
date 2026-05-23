@@ -17,6 +17,7 @@ from xuwen.chat_api.chat_pipeline import (
     available_sticker_names,
     build_policy_hint,
     build_sticker_retry_hint,
+    effective_silence_sentinel,
     extract_and_apply_life_marker,
     fallback_for_rejected_sticker,
     is_ai_silence_signal,
@@ -237,7 +238,7 @@ async def chat_completions(
         relationship_context=relationship_block,
         style_query=current_user_text,
         response_policy_context=response_decision.render_prompt_block(
-            silence_sentinel=state.settings.silence_response_sentinel,
+            silence_sentinel=effective_silence_sentinel(state.settings),
         ),
     )
     web_context = ""
@@ -366,7 +367,7 @@ async def chat_completions(
         # unsafe 等硬边界场景由 is_ai_silence_signal 内部守卫，不会进入这里。
         ai_silenced = is_ai_silence_signal(
             assistant_text,
-            sentinel=state.settings.silence_response_sentinel,
+            sentinel=effective_silence_sentinel(state.settings),
             decision=response_decision,
         )
         if ai_silenced:
@@ -634,7 +635,7 @@ async def _stream_response(
     full_text = "".join(buffer)
     ai_silenced = is_ai_silence_signal(
         full_text,
-        sentinel=state.settings.silence_response_sentinel,
+        sentinel=effective_silence_sentinel(state.settings),
         decision=decision,
     )
     if ai_silenced:

@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from xuwen.chat_api.chat_pipeline import (
     available_sticker_names,
     build_policy_hint,
+    effective_silence_sentinel,
     is_ai_silence_signal,
 )
 from xuwen.chat_api.companion_prompt import (
@@ -166,7 +167,7 @@ async def proactive(
         relationship_context=relationship_context,
         style_query=req.topic_hint or retrieval_query,
         response_policy_context=response_decision.render_prompt_block(
-            silence_sentinel=state.settings.silence_response_sentinel,
+            silence_sentinel=effective_silence_sentinel(state.settings),
         ),
     )
     proactive_user_message = (
@@ -224,7 +225,7 @@ async def proactive(
     # 命中 sentinel 时按沉默语义返回，但不写历史正文（避免 [silent] 污染检索）。
     ai_silenced = is_ai_silence_signal(
         text,
-        sentinel=state.settings.silence_response_sentinel,
+        sentinel=effective_silence_sentinel(state.settings),
         decision=response_decision,
     )
     if ai_silenced:

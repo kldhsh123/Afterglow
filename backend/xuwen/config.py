@@ -230,6 +230,10 @@ class Settings(BaseSettings):
     silence_response_sentinel: str = "[silent]"
     # finish_reason 默认仍用扩展值 "silenced"；严格 enum 校验的 OpenAI SDK 可改为 "stop"。
     silence_finish_reason: Literal["silenced", "stop"] = "silenced"
+    # AI 自主沉默：是否允许主模型在低风险场景输出 sentinel 主动"不回"。
+    # 关闭后 prompt 不再注入沉默出口、即使模型违规输出 sentinel 也按普通文本处理；
+    # unsafe / 规则层 silence 等硬边界与本开关无关，始终由规则层独立控制。
+    ai_silence_enabled: bool = True
 
     # ----- /v1/responses 服务端缓存 -----
     # OpenAI Responses API 通过 previous_response_id 找回上一轮上下文；
