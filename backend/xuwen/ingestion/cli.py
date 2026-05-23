@@ -19,6 +19,7 @@ from rich.logging import RichHandler
 from rich.table import Table
 
 from xuwen.config import Settings, get_settings
+from xuwen.ingestion.embedder import EmbeddingClient
 from xuwen.ingestion.importer import import_history
 from xuwen.memory.store import MemoryStore
 
@@ -45,12 +46,17 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p_import = sub.add_parser("import", help="把导出的 JSON 导入向量库")
-    p_import.add_argument("json_path", type=Path, help="导出的 JSON 文件路径（自动识别格式）")
+    p_import.add_argument(
+        "json_paths",
+        type=Path,
+        nargs="+",
+        help="一个或多个导出 JSON 文件路径（自动识别格式，可混合 QQ 和微信）",
+    )
     p_import.add_argument("--env-file", type=Path, default=None, help="可选：.env 文件路径")
     p_import.add_argument(
         "--plugin",
         default=None,
-        help="可选：强制使用某个 plugin（如 qqexporter_v5）。不指定则自动识别。",
+        help="可选：强制使用某个 plugin（如 qqexporter_v5 / wechat_weflow）。不指定则自动识别。",
     )
 
     sub.add_parser("stats", help="显示向量库当前统计")
@@ -117,7 +123,19 @@ _LABELS_ASCII = {
 async def _run_import(args: argparse.Namespace) -> int:
     settings = _load_settings(args.env_file)
     L = _LABELS_ASCII if args.ascii else _LABELS_CN
-    console.print(f"[bold]开始导入：[/]{args.json_path}")
+
+    paths: list[Path] = list(args.json_paths)
+    if not paths:
+        console.print("[red]错误：至少需要一个 JSON 文件路径。[/red]")
+        return 1
+
+    multi = len(paths) > 1
+    if multi:
+        console.print(
+            f"[bold]批量导入：[/]{len(paths)} 个文件，共享 LanceDB 连接和 Embedding 客户端"
+        )
+    else:
+        console.print(f"[bold]开始导入：[/]{paths[0]}")
 
     # 打标阶段进度回调：按 batch 打印「已打标 done/total」
     # 只有 labeling_enabled=true 时才会真正触发（否则 importer 内部跳过）
@@ -135,14 +153,51 @@ async def _run_import(args: argparse.Namespace) -> int:
         if done == total or done % max(1, total // 10) < settings.label_batch_size:
             console.print(f"[dim]·[/] 已打标 {done}/{total}")
 
-    report = await import_history(
-        args.json_path,
-        settings,
-        plugin_name=args.plugin,
-        label_progress_cb=_label_progress if settings.labeling_enabled else None,
-    )
+    # 多文件场景：CLI 拥有 store + embedder，循环里复用同一份；
+    # 单文件场景也走这条路径，省一次 connect/disconnect。
+    store = MemoryStore(settings)
+    await store.connect()
+    store.ensure_tables()
+    embedder = EmbeddingClient(settings)
 
-    tbl = Table(title=L["title"], show_lines=False)
+    reports: list = []
+    try:
+        for idx, path in enumerate(paths):
+            is_last = idx == len(paths) - 1
+            if multi:
+                console.print(
+                    f"\n[bold cyan][{idx + 1}/{len(paths)}][/] 处理 {path}"
+                )
+            report = await import_history(
+                path,
+                settings,
+                store=store,
+                embedder=embedder,
+                plugin_name=args.plugin,
+                label_progress_cb=_label_progress if settings.labeling_enabled else None,
+                # 中间文件跳过 circadian 计算，避免被后续文件覆盖；
+                # 最后一个文件触发，画像基于该文件的 cleaned 数据生成。
+                update_circadian=is_last,
+            )
+            reports.append((path, report))
+            _print_report(report, L, header=str(path) if multi else None)
+    finally:
+        await embedder.aclose()
+
+    if multi:
+        _print_aggregate(reports, L)
+        # circadian 局限提示：只反映最后一个文件
+        console.print(
+            "[yellow]提示：[/]作息画像 (circadian_profile.json) 仅基于最后一个文件计算，"
+            "建议把数据量最大或最具代表性的对话放在最后一位。"
+        )
+    return 0
+
+
+def _print_report(report, L: dict[str, str], *, header: str | None = None) -> None:
+    """打印单个文件的导入报告。"""
+    title = L["title"] if header is None else f"{L['title']} — {header}"
+    tbl = Table(title=title, show_lines=False)
     tbl.add_column(L["metric"])
     tbl.add_column(L["value"], justify="right")
     tbl.add_row(L["raw"], str(report.total_raw_messages))
@@ -162,7 +217,47 @@ async def _run_import(args: argparse.Namespace) -> int:
     console.print(tbl)
     for note in report.notes:
         console.print(f"[yellow]{L['tip']}[/]{note}")
-    return 0
+
+
+def _print_aggregate(reports: list, L: dict[str, str]) -> None:
+    """打印多文件汇总。所有数值简单相加，duration 累加为总耗时。"""
+    if not reports:
+        return
+    fields = (
+        "total_raw_messages", "parsed_messages", "skipped_messages", "sessions",
+        "friend_chunks", "window_chunks", "response_pairs",
+        "embedded_friend", "embedded_window", "embedded_response_pairs",
+        "upserted_friend", "upserted_window", "upserted_response_pairs",
+        "duration_seconds",
+    )
+    totals: dict[str, float] = {f: 0 for f in fields}
+    for _, r in reports:
+        for f in fields:
+            totals[f] += getattr(r, f) or 0
+
+    label_map = (
+        (L["raw"], "total_raw_messages"),
+        (L["parsed"], "parsed_messages"),
+        (L["skipped"], "skipped_messages"),
+        (L["sessions"], "sessions"),
+        (L["friend"], "friend_chunks"),
+        (L["window"], "window_chunks"),
+        (L["pair"], "response_pairs"),
+        (L["emb_friend"], "embedded_friend"),
+        (L["emb_window"], "embedded_window"),
+        (L["emb_pair"], "embedded_response_pairs"),
+        (L["up_friend"], "upserted_friend"),
+        (L["up_window"], "upserted_window"),
+        (L["up_pair"], "upserted_response_pairs"),
+        (L["duration"], "duration_seconds"),
+    )
+    tbl = Table(title=f"{L['title']} (合计 {len(reports)} 个文件)", show_lines=False)
+    tbl.add_column(L["metric"])
+    tbl.add_column(L["value"], justify="right")
+    for label, field in label_map:
+        val = totals[field]
+        tbl.add_row(label, f"{val:.3f}" if field == "duration_seconds" else str(int(val)))
+    console.print(tbl)
 
 
 async def _run_stats(args: argparse.Namespace) -> int:

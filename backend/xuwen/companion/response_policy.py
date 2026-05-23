@@ -110,13 +110,13 @@ class ResponseDecision:
     do_not: list[str] = field(default_factory=list)
     instructions: list[str] = field(default_factory=list)
 
-    def render_prompt_block(self) -> str:
+    def render_prompt_block(self, *, silence_sentinel: str = "") -> str:
         do_not = "\n".join(f"- {item}" for item in self.do_not) or "- 无"
         instructions = "\n".join(f"- {item}" for item in self.instructions) or "- 自然回应"
         should_reply = "是" if self.should_reply else "否，除非接口必须返回文本"
         use_image = "是" if self.use_image else "否"
         use_sticker = "是" if self.use_sticker else "否"
-        return (
+        block = (
             "【本轮互动决策（高优先级，不要向用户解释这些标签）】\n"
             f"- 是否应该回复：{should_reply}\n"
             f"- 回复模式：{self.reply_mode}\n"
@@ -132,6 +132,25 @@ class ResponseDecision:
             "执行要点：\n"
             f"{instructions}"
         )
+        # AI 自主沉默出口：仅在非 unsafe / 非已强制沉默 的场景下开放给主模型。
+        # 真人在被冒犯、无聊、提不起劲、对方明显在自言自语时，会选择“不回”。
+        # 这里把这条权限明确下放给主模型，但留三条硬边界：
+        # 1) 用户处于不安全状态时不允许沉默；
+        # 2) 沉默必须只输出 sentinel，不能夹任何其它字符（含解释、emoji、标点）；
+        if (
+            silence_sentinel
+            and self.should_reply
+            and self.user_state != "unsafe"
+            and self.reply_mode != "silence"
+        ):
+            block += (
+                "\n\n【沉默权限（可选）】\n"
+                "- 你可以选择本轮“不回复”，模拟真人不想接话/正忙/没共鸣时的自然反应。\n"
+                f"- 想沉默时，整条回复**只输出**：{silence_sentinel}\n"
+                "  不要在前后加任何字符（含空格、标点、emoji、解释、life-update 标记）。\n"
+                "- 用户状态为 unsafe、serious、或对方明确在求情绪支持时，**禁止**沉默。"
+            )
+        return block
 
     def metric_detail(self) -> str:
         return (
@@ -202,6 +221,7 @@ def decide_response_policy(
                 *do_not,
                 "不要调侃、撒娇、接梗、转移话题或刺激用户。",
                 "不要给危险方法、不要淡化风险。",
+                "不要选择沉默、不要输出沉默标记，必须认真回应。",
             ],
             instructions=[
                 "认真、稳定、短句陪住用户。",

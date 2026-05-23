@@ -8,10 +8,10 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, SecretStr, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from xuwen.core.errors import ConfigError
 
@@ -51,17 +51,43 @@ class Settings(BaseSettings):
 
     # ----- 身份 -----
     self_name: str = Field(default="", description="你（用户）的名字")
-    self_uid: str = Field(default="", description="你的 QQ uid（即 selfUid）")
+    self_uid: str = Field(
+        default="",
+        description=(
+            "你的主 UID（QQ 为 u_xxx，微信为 wxid_xxx）；"
+            "也支持逗号分隔多个 UID（跨平台 / 跨账号场景），等价于 SELF_UIDS。"
+        ),
+    )
     friend_name: str = Field(default="", description="对方（需要模仿的人）的名字")
-    friend_uid: str = Field(default="", description="对方的 QQ uid")
+    friend_uid: str = Field(
+        default="",
+        description=(
+            "对方的主 UID（QQ 为 u_xxx，微信为 wxid_xxx）；"
+            "也支持逗号分隔多个 UID（跨平台 / 跨账号场景），等价于 FRIEND_UIDS。"
+        ),
+    )
+    # 同一个人可能在多个平台 / 多个账号上聊天（QQ uid + 微信 wxid + 小号等），
+    # 把所有 UID 都列进来，import 时会被视为同一个人。
+    # 推荐直接在 SELF_UID 里用逗号分隔多个 UID；本字段是历史兼容字段，效果等同。
+    # 注：NoDecode 让 pydantic-settings 跳过对 .env 字符串值的 JSON 预解码，
+    # 把原始字符串直接交给下方 _split_aliases validator 处理；
+    # 否则 list[str] 字段从 .env 加载时会先 json.loads(value) → 普通逗号串报错。
+    self_uids: Annotated[list[str], NoDecode] = Field(
+        default_factory=list,
+        description="兼容字段：你（用户）的全部 UID 列表，推荐直接在 SELF_UID 里逗号分隔。",
+    )
+    friend_uids: Annotated[list[str], NoDecode] = Field(
+        default_factory=list,
+        description="兼容字段：对方的全部 UID 列表，推荐直接在 FRIEND_UID 里逗号分隔。",
+    )
     # 别名：朋友间互相称呼时经常会用真名/网名/昵称/外号；都列在这里，
     # cleaner / retriever / prompt 都会识别这些是同一个人。
     # .env 里用逗号分隔：SELF_ALIASES=小明,Mike,明哥
-    self_aliases: list[str] = Field(
+    self_aliases: Annotated[list[str], NoDecode] = Field(
         default_factory=list,
         description="你（用户）的别名列表，用于 cleaner/retriever 识别同一个人。",
     )
-    friend_aliases: list[str] = Field(
+    friend_aliases: Annotated[list[str], NoDecode] = Field(
         default_factory=list,
         description="对方的别名列表，包括真名/网名/昵称/外号。",
     )
@@ -230,6 +256,10 @@ class Settings(BaseSettings):
     silence_response_sentinel: str = "[silent]"
     # finish_reason 默认仍用扩展值 "silenced"；严格 enum 校验的 OpenAI SDK 可改为 "stop"。
     silence_finish_reason: Literal["silenced", "stop"] = "silenced"
+    # AI 自主沉默：是否允许主模型在低风险场景输出 sentinel 主动"不回"。
+    # 关闭后 prompt 不再注入沉默出口、即使模型违规输出 sentinel 也按普通文本处理；
+    # unsafe / 规则层 silence 等硬边界与本开关无关，始终由规则层独立控制。
+    ai_silence_enabled: bool = True
 
     # ----- /v1/responses 服务端缓存 -----
     # OpenAI Responses API 通过 previous_response_id 找回上一轮上下文；
@@ -409,13 +439,15 @@ class Settings(BaseSettings):
             return None
         return v
 
-    @field_validator("self_aliases", "friend_aliases", mode="before")
+    @field_validator(
+        "self_aliases", "friend_aliases", "self_uids", "friend_uids", mode="before"
+    )
     @classmethod
     def _split_aliases(cls, v: object) -> object:
-        """支持 .env 里用逗号分隔传入别名列表。
+        """支持 .env 里用逗号分隔传入字符串列表。
 
         例如 SELF_ALIASES=小明,Mike,明哥 → ["小明", "Mike", "明哥"]。
-        留空 / None 视为空列表。
+        同样适用于 SELF_UIDS=u_abc,wxid_xyz,u_old。留空 / None 视为空列表。
         """
         if v is None:
             return []
@@ -505,25 +537,44 @@ class Settings(BaseSettings):
         return _dedupe_names([self.self_name, *self.self_aliases])
 
     @property
+    def all_self_uids(self) -> list[str]:
+        """`self_uid`（按逗号切分）+ `self_uids` 去重后的完整 UID 列表。
+
+        用于跨平台 / 跨账号导入时把同一个人的多个 UID 视为同一身份。
+        例：QQ 主号 + QQ 小号 + 微信 wxid → 都标为 self。
+
+        支持两种填法（等价）：
+        - `SELF_UID=u_qq,wxid_me`（推荐，省一个字段）
+        - `SELF_UID=u_qq` + `SELF_UIDS=wxid_me`（历史兼容）
+        """
+        return _dedupe_names([*_split_csv(self.self_uid), *self.self_uids])
+
+    @property
     def all_friend_names(self) -> list[str]:
         """`friend_name` + `friend_aliases` 去重后的完整列表（保留顺序）。"""
         return _dedupe_names([self.friend_name, *self.friend_aliases])
+
+    @property
+    def all_friend_uids(self) -> list[str]:
+        """`friend_uid`（按逗号切分）+ `friend_uids` 去重后的完整 UID 列表。"""
+        return _dedupe_names([*_split_csv(self.friend_uid), *self.friend_uids])
 
     def require_identity(self) -> None:
         """在导入 / 启动 API 等场景必须有完整身份信息。
 
         错误信息会引导用户去 .env 哪一行填什么，而不是只说"缺失"。
+        允许使用 SELF_UID（单值）或 SELF_UIDS（复数列表）任意一种来提供 UID，
+        FRIEND_UID / FRIEND_UIDS 同理。
         """
-        missing = [
-            name
-            for name, val in (
-                ("SELF_NAME", self.self_name),
-                ("SELF_UID", self.self_uid),
-                ("FRIEND_NAME", self.friend_name),
-                ("FRIEND_UID", self.friend_uid),
-            )
-            if not val
-        ]
+        missing: list[str] = []
+        if not self.self_name:
+            missing.append("SELF_NAME")
+        if not self.all_self_uids:
+            missing.append("SELF_UID 或 SELF_UIDS")
+        if not self.friend_name:
+            missing.append("FRIEND_NAME")
+        if not self.all_friend_uids:
+            missing.append("FRIEND_UID 或 FRIEND_UIDS")
         if missing:
             raise ConfigError(
                 "缺少必填配置：" + ", ".join(missing) + "。\n"
@@ -558,3 +609,14 @@ def _dedupe_names(names: list[str]) -> list[str]:
         seen.add(name)
         out.append(name)
     return out
+
+
+def _split_csv(value: str) -> list[str]:
+    """把单值 UID 字段里的逗号分隔形式切成 list；不含逗号则原样返回单元素。
+
+    例：`"u_abc,wxid_xyz"` → `["u_abc", "wxid_xyz"]`；
+        `"u_abc"` → `["u_abc"]`；`""` → `[]`。
+    """
+    if not value:
+        return []
+    return [s.strip() for s in value.split(",") if s.strip()]

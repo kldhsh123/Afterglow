@@ -31,7 +31,7 @@ async def readyz(state: AppState = Depends(get_state)) -> ReadinessResponse:
         issues.append("OPENAI_API_KEY 未配置")
     if not settings.embedding_api_key.get_secret_value():
         issues.append("EMBEDDING_API_KEY 未配置")
-    if not (settings.self_uid and settings.friend_uid):
+    if not (settings.all_self_uids and settings.all_friend_uids):
         issues.append("SELF_UID / FRIEND_UID 未配置")
     try:
         stats = await state.store.stats()

@@ -17,8 +17,10 @@ from xuwen.chat_api.chat_pipeline import (
     available_sticker_names,
     build_policy_hint,
     build_sticker_retry_hint,
+    effective_silence_sentinel,
     extract_and_apply_life_marker,
     fallback_for_rejected_sticker,
+    is_ai_silence_signal,
     looks_like_sticker_only_intent,
 )
 from xuwen.chat_api.companion_prompt import (
@@ -48,6 +50,7 @@ from xuwen.chat_api.vision_client import VisionClient
 from xuwen.chat_api.web_fetch import render_url_context, resolve_fetch_urls
 from xuwen.chat_api.web_search import render_web_context, should_search_web
 from xuwen.companion.response_policy import (
+    ResponseDecision,
     decide_response_policy,
     refine_decision_with_llm,
 )
@@ -234,7 +237,9 @@ async def chat_completions(
         life=life,
         relationship_context=relationship_block,
         style_query=current_user_text,
-        response_policy_context=response_decision.render_prompt_block(),
+        response_policy_context=response_decision.render_prompt_block(
+            silence_sentinel=effective_silence_sentinel(state.settings),
+        ),
     )
     web_context = ""
     web_should_search = should_search_web(current_user_text)
@@ -328,6 +333,7 @@ async def chat_completions(
                 ),
                 trace_id=trace_id,
                 policy=policy_hint,
+                decision=response_decision,
             ),
             media_type="text/event-stream",
         )
@@ -357,9 +363,26 @@ async def chat_completions(
             stripped,
             valid_sticker_names=valid_names,
         )
+        # AI 自主沉默：主模型严格输出 sentinel → 转沉默路径。
+        # unsafe 等硬边界场景由 is_ai_silence_signal 内部守卫，不会进入这里。
+        ai_silenced = is_ai_silence_signal(
+            assistant_text,
+            sentinel=effective_silence_sentinel(state.settings),
+            decision=response_decision,
+        )
+        if ai_silenced:
+            state.metrics.record(
+                "chat.silenced.ai",
+                0.0,
+                detail=f"trace={trace_id},{response_decision.metric_detail()}",
+            )
         # 模型整段只发了不存在的 sticker → sanitize 后空。
         # 先尝试让主模型重新生成一次（带明确提示），失败再退回 reply_mode-aware 短句。
-        if assistant_text in {"嗯", ""} and looks_like_sticker_only_intent(stripped):
+        if (
+            not ai_silenced
+            and assistant_text in {"嗯", ""}
+            and looks_like_sticker_only_intent(stripped)
+        ):
             retried = False
             if state.settings.sticker_reject_retry:
                 hint = build_sticker_retry_hint(stripped, valid_names)
@@ -424,14 +447,16 @@ async def chat_completions(
             WritebackTurn(
                 conversation_id=req.conversation_id,
                 user_text=current_user_text,
-                assistant_text=assistant_text,
+                # 沉默时写空 assistant_text，保持与规则层 silence 短路一致：
+                # 历史里不留 sentinel 文本，避免后续检索把 [silent] 当成真人风格。
+                assistant_text="" if ai_silenced else assistant_text,
                 user_image_shas=image_shas,
             )
         )
         await state.relationship_memory.remember_turn(
             conversation_id=req.conversation_id,
             user_text=current_user_text,
-            assistant_text=assistant_text,
+            assistant_text="" if ai_silenced else assistant_text,
         )
     # 假流式：客户端传 stream=true 但后端配置不启用真流式 → 把完整内容包装成
     # 单个 content chunk + 收尾，按 OpenAI SSE 协议返回，客户端无感。
@@ -442,6 +467,9 @@ async def chat_completions(
                 trace_id=trace_id,
                 assistant_text=assistant_text,
                 policy=policy_hint,
+                finish_reason=(
+                    state.settings.silence_finish_reason if ai_silenced else "stop"
+                ),
             ),
             media_type="text/event-stream",
         )
@@ -452,7 +480,9 @@ async def chat_completions(
             Choice(
                 index=0,
                 message=APIChatMessage(role="assistant", content=assistant_text),
-                finish_reason="stop",
+                finish_reason=(
+                    state.settings.silence_finish_reason if ai_silenced else "stop"
+                ),
             )
         ],
         usage=Usage(),
@@ -467,6 +497,7 @@ async def _pseudo_stream_chunks(
     trace_id: str,
     assistant_text: str,
     policy: PolicyHint,
+    finish_reason: str = "stop",
 ) -> AsyncIterator[bytes]:
     """OpenAI SSE 协议包装：把已经生成好的完整 assistant_text 作为单个 content chunk
     发出，再发 finish + [DONE]。等同非流式行为，但符合 stream=true 客户端协议预期。"""
@@ -488,7 +519,7 @@ async def _pseudo_stream_chunks(
     yield _format_sse(_chunk({"role": "assistant"}))
     if assistant_text:
         yield _format_sse(_chunk({"content": assistant_text}))
-    final = _chunk({}, finish="stop")
+    final = _chunk({}, finish=finish_reason)
     final["policy"] = policy.model_dump()
     yield _format_sse(final)
     yield b"data: [DONE]\n\n"
@@ -506,6 +537,7 @@ async def _stream_response(
     initial_delay_seconds: int,
     trace_id: str,
     policy: PolicyHint,
+    decision: ResponseDecision,
 ) -> AsyncIterator[bytes]:
     """OpenAI SSE 格式生成 chunk；收尾块带 policy 字段。"""
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
@@ -598,7 +630,23 @@ async def _stream_response(
                 detail=f"trace={trace_id},mode={policy.reply_mode},stream",
             )
 
-    yield _format_sse(_chunk_dict({}, finish="stop", extra={"policy": policy.model_dump()}))
+    # AI 自主沉默：累积完整 buffer == sentinel → finish_reason 改 silenced，
+    # 写历史时 assistant_text 置空（与规则层 silence 短路保持一致）。
+    full_text = "".join(buffer)
+    ai_silenced = is_ai_silence_signal(
+        full_text,
+        sentinel=effective_silence_sentinel(state.settings),
+        decision=decision,
+    )
+    if ai_silenced:
+        state.metrics.record(
+            "chat.silenced.ai",
+            0.0,
+            detail=f"trace={trace_id},{decision.metric_detail()},stream",
+        )
+    finish_reason = state.settings.silence_finish_reason if ai_silenced else "stop"
+
+    yield _format_sse(_chunk_dict({}, finish=finish_reason, extra={"policy": policy.model_dump()}))
     yield b"data: [DONE]\n\n"
 
     # 流结束后用累积的完整 raw 文本跑 life-update 标记块解析（apply 即可，
@@ -609,8 +657,8 @@ async def _stream_response(
         enabled=state.settings.life_marker_update_enabled,
     )
 
-    assistant_text = "".join(buffer)
-    if conversation_id and assistant_text:
+    assistant_text = "" if ai_silenced else full_text
+    if conversation_id and (assistant_text or ai_silenced):
         await state.writeback.enqueue_turn(
             WritebackTurn(
                 conversation_id=conversation_id,

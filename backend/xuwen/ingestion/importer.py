@@ -34,11 +34,14 @@ async def import_history(
     embedder: EmbeddingClient | None = None,
     plugin_name: str | None = None,
     label_progress_cb: Callable[[int, int], None] | None = None,
+    update_circadian: bool = True,
 ) -> ImportReport:
     """从导出 JSON 文件导入到 LanceDB。
 
     plugin_name 强制使用某个 plugin；不传则按 plugin 注册顺序自动 match。
     label_progress_cb 透传给打标阶段，用于 CLI 显示进度（done, total）。
+    update_circadian=False 时跳过画像生成，留给多文件批量导入的调用方在最末一次或
+    跑完所有文件后单独触发，避免中间文件覆盖最终画像。
     """
     settings.require_identity()
 
@@ -135,25 +138,28 @@ async def import_history(
         # store 不主动关：LanceDB 连接复用更稳
 
     # 生成 / 更新作息画像 circadian_profile.json
-    try:
-        from xuwen.persona.circadian import (
-            CIRCADIAN_PROFILE_FILENAME,
-            compute_circadian_profile,
-            save_circadian_profile,
-        )
+    # 多文件批量导入场景下 CLI 会传 update_circadian=False 跳过本步，
+    # 由 CLI 在循环结束后统一处理，避免每个中间文件都重算一次画像。
+    if update_circadian:
+        try:
+            from xuwen.persona.circadian import (
+                CIRCADIAN_PROFILE_FILENAME,
+                compute_circadian_profile,
+                save_circadian_profile,
+            )
 
-        profile = compute_circadian_profile(cleaned)
-        save_circadian_profile(
-            profile,
-            settings.persona_data_dir / CIRCADIAN_PROFILE_FILENAME,
-        )
-    except Exception:
-        # 画像生成失败不影响导入主链路
-        import logging
+            profile = compute_circadian_profile(cleaned)
+            save_circadian_profile(
+                profile,
+                settings.persona_data_dir / CIRCADIAN_PROFILE_FILENAME,
+            )
+        except Exception:
+            # 画像生成失败不影响导入主链路
+            import logging
 
-        logging.getLogger(__name__).warning(
-            "circadian profile 生成失败，已忽略", exc_info=True
-        )
+            logging.getLogger(__name__).warning(
+                "circadian profile 生成失败，已忽略", exc_info=True
+            )
 
     duration = round(time.perf_counter() - start, 3)
     report = ImportReport(

@@ -9,7 +9,12 @@ import time
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 
-from xuwen.chat_api.chat_pipeline import available_sticker_names, build_policy_hint
+from xuwen.chat_api.chat_pipeline import (
+    available_sticker_names,
+    build_policy_hint,
+    effective_silence_sentinel,
+    is_ai_silence_signal,
+)
 from xuwen.chat_api.companion_prompt import (
     build_persona_card_with_companion_context,
     empty_retrieval_result,
@@ -161,7 +166,9 @@ async def proactive(
         life=life,
         relationship_context=relationship_context,
         style_query=req.topic_hint or retrieval_query,
-        response_policy_context=response_decision.render_prompt_block(),
+        response_policy_context=response_decision.render_prompt_block(
+            silence_sentinel=effective_silence_sentinel(state.settings),
+        ),
     )
     proactive_user_message = (
         _proactive_context_text(req)
@@ -213,6 +220,28 @@ async def proactive(
         (time.perf_counter() - start) * 1000,
         detail=state.settings.chat_model,
     )
+
+    # AI 自主沉默：主动话题轮 AI 选择"算了不开话题了"也合理；
+    # 命中 sentinel 时按沉默语义返回，但不写历史正文（避免 [silent] 污染检索）。
+    ai_silenced = is_ai_silence_signal(
+        text,
+        sentinel=effective_silence_sentinel(state.settings),
+        decision=response_decision,
+    )
+    if ai_silenced:
+        state.metrics.record(
+            "companion.silenced.ai",
+            0.0,
+            detail=f"trace={trace_id},{response_decision.metric_detail()}",
+        )
+        return ProactiveResponse(
+            message=state.settings.silence_response_sentinel,
+            life=_life_to_dict(life),
+            relationship_memory=relationship_context,
+            trace_id=trace_id,
+            policy=policy_hint,
+            silenced=True,
+        )
 
     if req.conversation_id and text:
         await state.writeback.enqueue_turn(

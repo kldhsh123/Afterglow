@@ -25,8 +25,10 @@ from xuwen.chat_api.chat_pipeline import (
     available_sticker_names,
     build_policy_hint,
     build_sticker_retry_hint,
+    effective_silence_sentinel,
     extract_and_apply_life_marker,
     fallback_for_rejected_sticker,
+    is_ai_silence_signal,
     looks_like_sticker_only_intent,
 )
 from xuwen.chat_api.companion_prompt import (
@@ -54,6 +56,7 @@ from xuwen.chat_api.vision_client import VisionClient
 from xuwen.chat_api.web_fetch import render_url_context, resolve_fetch_urls
 from xuwen.chat_api.web_search import render_web_context, should_search_web
 from xuwen.companion.response_policy import (
+    ResponseDecision,
     decide_response_policy,
     refine_decision_with_llm,
 )
@@ -243,7 +246,9 @@ async def responses(
         life=life,
         relationship_context=relationship_block,
         style_query=current_user_text,
-        response_policy_context=decision.render_prompt_block(),
+        response_policy_context=decision.render_prompt_block(
+            silence_sentinel=effective_silence_sentinel(state.settings),
+        ),
     )
     web_context = ""
     web_should_search = should_search_web(current_user_text)
@@ -318,6 +323,7 @@ async def responses(
                 trace_id=trace_id,
                 policy=policy_hint,
                 previous_response_id=req.previous_response_id,
+                decision=decision,
             ),
             media_type="text/event-stream",
         )
@@ -347,8 +353,24 @@ async def responses(
             stripped,
             valid_sticker_names=valid_names,
         )
+        # AI 自主沉默：主模型严格输出 sentinel → 转沉默路径，跳过 sticker 兜底。
+        ai_silenced = is_ai_silence_signal(
+            assistant_text,
+            sentinel=effective_silence_sentinel(state.settings),
+            decision=decision,
+        )
+        if ai_silenced:
+            state.metrics.record(
+                "responses.silenced.ai",
+                0.0,
+                detail=f"trace={trace_id},{decision.metric_detail()}",
+            )
         # 同 chat.py：模型只发了不存在 sticker → 先 retry，失败再退到短句
-        if assistant_text in {"嗯", ""} and looks_like_sticker_only_intent(stripped):
+        if (
+            not ai_silenced
+            and assistant_text in {"嗯", ""}
+            and looks_like_sticker_only_intent(stripped)
+        ):
             retried = False
             if state.settings.sticker_reject_retry:
                 hint = build_sticker_retry_hint(stripped, valid_names)
@@ -412,14 +434,15 @@ async def responses(
             WritebackTurn(
                 conversation_id=conversation_id,
                 user_text=current_user_text,
-                assistant_text=assistant_text,
+                # 沉默时写空 assistant_text，与规则层 silence 短路一致。
+                assistant_text="" if ai_silenced else assistant_text,
                 user_image_shas=image_shas,
             )
         )
         await state.relationship_memory.remember_turn(
             conversation_id=conversation_id,
             user_text=current_user_text,
-            assistant_text=assistant_text,
+            assistant_text="" if ai_silenced else assistant_text,
         )
 
     state.responses_store.put(
@@ -427,7 +450,7 @@ async def responses(
             response_id=response_id,
             conversation_id=conversation_id,
             user_text=current_user_text,
-            assistant_text=assistant_text,
+            assistant_text="" if ai_silenced else assistant_text,
             created_at=int(time.time()),
             model=model_name,
         )
@@ -435,7 +458,20 @@ async def responses(
 
     # 假流式：stream=true 但后端不启用真流式 → 把完整 assistant_text 包装成
     # 完整事件序列（一个 output_text.delta 含全部内容）发出。
+    # 沉默时切到 _stream_silenced，与规则层 silence 短路保持一致。
     if req.stream:
+        if ai_silenced:
+            return StreamingResponse(
+                _stream_silenced(
+                    response_id=response_id,
+                    model_name=model_name,
+                    trace_id=trace_id,
+                    sentinel=state.settings.silence_response_sentinel,
+                    policy=policy_hint,
+                    previous_response_id=req.previous_response_id,
+                ),
+                media_type="text/event-stream",
+            )
         return StreamingResponse(
             _pseudo_stream_events(
                 response_id=response_id,
@@ -736,6 +772,7 @@ async def _stream_response(
     trace_id: str,
     policy: PolicyHint,
     previous_response_id: str | None,
+    decision: ResponseDecision,
 ) -> AsyncIterator[bytes]:
     """正常流式：把主模型 delta 翻译成 Responses 事件序列。"""
     import asyncio
@@ -897,19 +934,34 @@ async def _stream_response(
         enabled=state.settings.life_marker_update_enabled,
     )
 
-    if conversation_id and assistant_text:
+    # AI 自主沉默：累积完整 buffer == sentinel → 写历史时置空，避免污染检索；
+    # 流式事件已经发完，前端收到的内容仍是 sentinel，由 sentinel 自身表达沉默语义。
+    ai_silenced = is_ai_silence_signal(
+        assistant_text,
+        sentinel=effective_silence_sentinel(state.settings),
+        decision=decision,
+    )
+    if ai_silenced:
+        state.metrics.record(
+            "responses.silenced.ai",
+            0.0,
+            detail=f"trace={trace_id},{decision.metric_detail()},stream",
+        )
+    persisted_text = "" if ai_silenced else assistant_text
+
+    if conversation_id and (persisted_text or ai_silenced):
         await state.writeback.enqueue_turn(
             WritebackTurn(
                 conversation_id=conversation_id,
                 user_text=user_text,
-                assistant_text=assistant_text,
+                assistant_text=persisted_text,
                 user_image_shas=image_shas,
             )
         )
         await state.relationship_memory.remember_turn(
             conversation_id=conversation_id,
             user_text=user_text,
-            assistant_text=assistant_text,
+            assistant_text=persisted_text,
         )
 
     state.responses_store.put(
@@ -917,7 +969,7 @@ async def _stream_response(
             response_id=response_id,
             conversation_id=conversation_id,
             user_text=user_text,
-            assistant_text=assistant_text,
+            assistant_text=persisted_text,
             created_at=created_at,
             model=model_name,
         )

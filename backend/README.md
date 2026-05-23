@@ -42,8 +42,8 @@ uv sync --extra dev
 # 2. 配置环境变量
 cp .env.example .env
 # 用编辑器打开 .env，按文件内注释填写：
-#   - SELF_NAME / SELF_UID：你自己的名字和 QQ uid
-#   - FRIEND_NAME / FRIEND_UID：对方的名字和 QQ uid
+#   - SELF_NAME / SELF_UID：你自己的名字和账号 UID（QQ 是 u_xxx，微信是 wxid_xxx）
+#   - FRIEND_NAME / FRIEND_UID：你想让 AI 模仿的那个人的名字和账号 UID（同上格式）
 #   - OPENAI_API_KEY / EMBEDDING_API_KEY：主聊天模型和 Embedding 模型的 API key
 #   - XUWEN_API_KEY：访问后端 API 的本地密钥，建议使用长随机字符串
 # 如何获取 SELF_UID / FRIEND_UID 见下方"如何找到 UID"。
@@ -80,7 +80,15 @@ cp .env.example .env
 uv run pytest
 
 # 4. 导入历史聊天记录
-uv run python -m xuwen.ingestion.cli import 路径/到/你的_qq_export.json
+uv run python -m xuwen.ingestion.cli import 路径/到/你的_导出.json
+# 多文件批量导入（QQ + 微信 / 多账号场景）：
+# uv run python -m xuwen.ingestion.cli import qq_导出.json wechat_导出.json 小号_导出.json
+# 自动识别格式：QQChatExporter V5（chatInfo.selfUid）/ WeFlow 微信（weflow.format=arkme-json）。
+# 也可显式指定：--plugin qqexporter_v5 或 --plugin wechat_weflow。
+# 导出时请**只勾选纯文本**，不要带图片/语音/视频/文件等附件——Afterglow 只用文本语料。
+# 多文件场景下：
+#   - circadian_profile.json 仅基于最后一个文件生成（把最近 / 最具代表性的对话放最后）
+#   - scripts/analyze_persona.py 当前也只接受单个 JSON，挑代表性最强的一份单独跑
 # 若已开启 LABELING_ENABLED=true，导入完成后会继续跑打标阶段。
 # 未打标 chunk 仍正常参与向量召回，只是不享受后续标签加权。
 
@@ -93,7 +101,7 @@ uv run python -m xuwen.ingestion.cli stats
 # 6. 生成 persona 卡片与场景风格画像（建议做，否则 prompt 缺画像，回答会偏通用）
 #    persona 是离线统计画像，只提供长期语气参考；当天状态由 life_state.json 决定。
 #    会生成 persona_card.md / persona_report.json / persona_style_profile.json。
-uv run python scripts/analyze_persona.py 路径/到/你的_qq_export.json
+uv run python scripts/analyze_persona.py 路径/到/你的聊天记录.json
 
 # 7. 启动 chat API（OpenAI 兼容）
 uv run uvicorn xuwen.chat_api.app:create_app --factory --reload
@@ -114,7 +122,27 @@ uv run python scripts/eval_retrieval.py --eval dataset.jsonl  # 带 ground truth
 
 ## 如何找到 UID
 
-QQChatExporter V5 导出的 JSON 顶部有 `chatInfo` 字段，结构如下：
+Afterglow 用 `SELF_UID` / `FRIEND_UID` 在导入时区分"哪条消息是你说的、哪条是对方说的"。
+**`FRIEND_*` 永远填你想让 AI 模仿的那个人，不是你自己。**
+两个 ID 都直接写进 `.env`，无需引号。
+
+> **跨平台 / 多账号**：同一个朋友可能既在 QQ 又在微信上聊过，或者你自己有多个账号。
+> 这种情况下**直接在 `SELF_UID` / `FRIEND_UID` 里用逗号分隔**列出所有 UID：
+>
+> ```env
+> SELF_UID=u_qq_main,wxid_me_main,wxid_me_alt
+> FRIEND_UID=wxid_friend_main,u_friend_qq,wxid_friend_alt
+> ```
+>
+> CLI 会把逗号分隔的 UID 全部视为同一个人。
+> （历史上还有一对兼容字段 `SELF_UIDS` / `FRIEND_UIDS`，效果完全等价，新配置无需用到。）
+
+> **导出前先确认：只勾选纯文本**。Afterglow 不消费图片 / 语音 / 视频 / 文件，导出工具里
+> 这些选项请全部关掉——JSON 更小、导入更快、也更不容易意外泄漏附件链接。
+
+### QQ（QQChatExporter V5）
+
+导出的 JSON 顶部有 `chatInfo` 字段：
 
 ```json
 {
@@ -137,7 +165,52 @@ QQChatExporter V5 导出的 JSON 顶部有 `chatInfo` 字段，结构如下：
 }
 ```
 
-把 `selfUid` 填到 `SELF_UID`，第一条 `sender.uid` 中非 self 的填到 `FRIEND_UID`。`SELF_NAME` / `FRIEND_NAME` 用易读的名字即可。
+把 `selfUid` 填到 `SELF_UID`，第一条 `sender.uid` 中非 self 的填到 `FRIEND_UID`。
+`SELF_NAME` / `FRIEND_NAME` 用易读的名字即可。
+
+### 微信（[WeFlow](https://github.com/hicccc77/WeFlow) `arkme-json`）
+
+WeFlow 导出 JSON 顶部有 `weflow.format = "arkme-json"`，结构如下：
+
+```json
+{
+  "weflow": {"format": "arkme-json", ...},
+  "senders": [
+    {"senderID": 1, "wxid": "wxid_xxx", "displayName": "MC"},
+    {"senderID": 2, "wxid": "wxid_yyy", "displayName": "开朗的火山河123"}
+  ],
+  "messages": [
+    {"isSend": 1, "senderID": 2, ...},   // ← isSend=1 的 senderID 指向"你自己"
+    {"isSend": 0, "senderID": 1, ...}    // ← isSend=0 的 senderID 指向"对方"
+  ]
+}
+```
+
+定位步骤：
+
+1. 在 `messages` 里随便找一条 `"isSend": 1` 的消息，记下它的 `senderID`。
+2. 回到 `senders` 数组，按这个 `senderID` 找到对应那一项 —— 它的 `wxid` 就是你的 `SELF_UID`，`displayName` 可作为 `SELF_NAME`。
+3. `senders` 里另外那个人就是 `FRIEND_*`。
+
+以上面的 JSON 为例（`isSend=1` 对应 `senderID=2`）：
+
+```env
+SELF_NAME=开朗的火山河123
+SELF_UID=wxid_yyy
+FRIEND_NAME=MC
+FRIEND_UID=wxid_xxx
+```
+
+> **群聊提醒**：当前 WeFlow plugin 在 `wxid` 都不匹配时会按 `isSend` 字段兜底（`1` → self、`0` → friend）。
+> 这只在私聊里语义正确；群聊有多人发言，**必须**显式填 `FRIEND_UID` 才能正确区分。
+
+> **快速取值（命令行）**：
+> ```bash
+> # 看 senders 列表
+> grep -A2 '"senderID"' 你的.json | grep -E 'wxid|displayName' | head
+> # 看你的 senderID（isSend=1 的）
+> grep -B1 '"isSend": 1' 你的.json | grep senderID | head -3
+> ```
 
 ## 项目结构
 
