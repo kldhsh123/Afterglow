@@ -2,6 +2,13 @@
 
 入口：`import_history(path, settings)`。
 所有 IO 都通过依赖注入，方便 mock。
+
+中断续跑保证：
+- chunk_id 基于内容 hash 确定性生成，相同源文件得到相同 id；
+- 三路 chunk（friend / window / response_pair）各自独立执行 "查库去重 →
+  分批 embed → 立刻 upsert" 流程；
+- 任意一批 embedding API 失败时，**已经 upsert 入库的 batch 不丢**，重跑
+  会跳过这些已存在的 chunk_id，仅对剩余未入库的部分发 embedding 调用。
 """
 
 from __future__ import annotations
@@ -10,10 +17,17 @@ import asyncio
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from xuwen.config import Settings
 from xuwen.core.errors import IngestionError
-from xuwen.core.models import ChunkBundle, ImportReport
+from xuwen.core.models import (
+    ChunkBundle,
+    DialogueWindowChunk,
+    FriendMessageChunk,
+    ImportReport,
+    ResponsePairChunk,
+)
 from xuwen.ingestion.chunker import (
     build_friend_chunks,
     build_response_pair_chunks,
@@ -23,7 +37,18 @@ from xuwen.ingestion.cleaner import Cleaner
 from xuwen.ingestion.embedder import EmbeddingClient
 from xuwen.ingestion.parser import load_qq_json, parse_messages
 from xuwen.ingestion.splitter import build_windows, split_sessions
+from xuwen.memory.schema import (
+    TABLE_DIALOGUE_WINDOWS,
+    TABLE_FRIEND_MESSAGES,
+    TABLE_RESPONSE_PAIRS,
+)
 from xuwen.memory.store import MemoryStore
+
+
+# 单路 upsert 流水线深度：embed 一批后异步丢后台 upsert，最多积压这么多个未完成
+# task。LanceDB 写锁让真正在执行的始终只有 1 个，剩下的排队，主要影响内存中暂存
+# 的 embeddings 数量。4 × 100 条 × 4096 维 ≈ 6 MB / track，整体可控。
+_UPSERT_INFLIGHT_LIMIT = 4
 
 
 async def import_history(
@@ -97,7 +122,7 @@ async def import_history(
             notes=notes or ["未产出任何 chunk，请检查导入数据"],
         )
 
-    # 5) embed
+    # 5) embed + upsert（每批边 embed 边写库，支持中断续跑）
     owns_embedder = embedder is None
     if embedder is None:
         embedder = EmbeddingClient(settings)
@@ -106,36 +131,63 @@ async def import_history(
         await store.connect()
         store.ensure_tables()
     try:
-        # 三路 embedding 并行执行，节省 API 延迟
-        friend_embeddings, window_embeddings, pair_embeddings = await asyncio.gather(
-            _embed_chunks(
-                embedder,
-                [c.chunk_id for c in bundle.friend_chunks],
-                [c.dialogue_snippet or c.text for c in bundle.friend_chunks],
-            ),
-            _embed_chunks(
-                embedder,
-                [c.chunk_id for c in bundle.window_chunks],
-                [c.text for c in bundle.window_chunks],
-            ),
-            _embed_chunks(
-                embedder,
-                [c.chunk_id for c in bundle.response_pair_chunks],
-                [c.user_text for c in bundle.response_pair_chunks],
-            ),
+        # 三路独立处理：每路先查库去重，再分批 embed + 立刻 upsert。
+        # 三路之间并行；同一路内的 batch 之间是串行的，确保 upsert 顺序与 embed 完成顺序一致。
+        # 外层 batch_size = embedding_batch_size * embedding_max_concurrency，
+        # 让 embedder.embed_texts() 内部仍能切成多个 HTTP 批次跑满并发，
+        # 同时控制每次 upsert 的颗粒度（防止上千条一次性进内存）。
+        upsert_batch = max(
+            settings.embedding_batch_size,
+            settings.embedding_batch_size * max(1, settings.embedding_max_concurrency),
         )
-
-        # 6) upsert
-        n_friend = await store.upsert_friend_chunks(bundle.friend_chunks, friend_embeddings)
-        n_window = await store.upsert_window_chunks(bundle.window_chunks, window_embeddings)
-        n_pair = await store.upsert_response_pair_chunks(
-            bundle.response_pair_chunks,
-            pair_embeddings,
+        friend_stats, window_stats, pair_stats = await asyncio.gather(
+            _embed_and_upsert_track(
+                embedder=embedder,
+                store=store,
+                chunks=bundle.friend_chunks,
+                text_of=lambda c: c.dialogue_snippet or c.text,
+                table=TABLE_FRIEND_MESSAGES,
+                upsert_fn=store.upsert_friend_chunks,
+                batch_size=upsert_batch,
+            ),
+            _embed_and_upsert_track(
+                embedder=embedder,
+                store=store,
+                chunks=bundle.window_chunks,
+                text_of=lambda c: c.text,
+                table=TABLE_DIALOGUE_WINDOWS,
+                upsert_fn=store.upsert_window_chunks,
+                batch_size=upsert_batch,
+            ),
+            _embed_and_upsert_track(
+                embedder=embedder,
+                store=store,
+                chunks=bundle.response_pair_chunks,
+                text_of=lambda c: c.user_text,
+                table=TABLE_RESPONSE_PAIRS,
+                upsert_fn=store.upsert_response_pair_chunks,
+                batch_size=upsert_batch,
+            ),
         )
     finally:
         if owns_embedder:
             await embedder.aclose()
         # store 不主动关：LanceDB 连接复用更稳
+
+    n_friend = friend_stats["upserted"]
+    n_window = window_stats["upserted"]
+    n_pair = pair_stats["upserted"]
+    skipped_friend = friend_stats["skipped"]
+    skipped_window = window_stats["skipped"]
+    skipped_pair = pair_stats["skipped"]
+    embedded_friend = friend_stats["embedded"]
+    embedded_window = window_stats["embedded"]
+    embedded_pair = pair_stats["embedded"]
+    if skipped_friend or skipped_window or skipped_pair:
+        notes.append(
+            f"续跑跳过已入库的 chunk："
+            f"friend {skipped_friend} / window {skipped_window} / pair {skipped_pair}"
+        )
 
     # 生成 / 更新作息画像 circadian_profile.json
     # 多文件批量导入场景下 CLI 会传 update_circadian=False 跳过本步，
@@ -170,9 +222,9 @@ async def import_history(
         friend_chunks=len(bundle.friend_chunks),
         window_chunks=len(bundle.window_chunks),
         response_pairs=len(bundle.response_pair_chunks),
-        embedded_friend=len(friend_embeddings),
-        embedded_window=len(window_embeddings),
-        embedded_response_pairs=len(pair_embeddings),
+        embedded_friend=embedded_friend,
+        embedded_window=embedded_window,
+        embedded_response_pairs=embedded_pair,
         upserted_friend=n_friend,
         upserted_window=n_window,
         upserted_response_pairs=n_pair,
@@ -180,8 +232,10 @@ async def import_history(
         notes=notes,
     )
 
-    # 如果启用了打标，导入完成后顺手跑一遍（仅新增 chunk）
-    if settings.labeling_enabled and n_friend > 0:
+    # 如果启用了打标，导入完成后顺手跑一遍（仅对未打标 chunk 操作）。
+    # 续跑场景下 n_friend 可能为 0（全部已存在），但库里仍可能有未打标的 chunk，
+    # 所以触发条件含 skipped_friend；labeling 本身是增量的，重复调用无害。
+    if settings.labeling_enabled and (n_friend > 0 or skipped_friend > 0):
         from xuwen.persona.labeling import label_all_unlabeled
 
         try:
@@ -205,18 +259,93 @@ async def import_history(
 # ---------------------------------------------------------------------------
 
 
-async def _embed_chunks(
+async def _embed_and_upsert_track(
+    *,
     embedder: EmbeddingClient,
-    ids: list[str],
-    texts: list[str],
-) -> dict[str, list[float]]:
-    """把文本列表向量化并按 id 组装为字典。"""
-    if not ids:
-        return {}
-    if len(ids) != len(texts):
-        raise IngestionError("chunk ids 与 texts 长度不一致")
-    vectors = await embedder.embed_texts(texts)
-    return {cid: vec for cid, vec in zip(ids, vectors, strict=True)}
+    store: MemoryStore,
+    chunks: list[FriendMessageChunk] | list[DialogueWindowChunk] | list[ResponsePairChunk],
+    text_of: Callable[[Any], str],
+    table: str,
+    upsert_fn: Callable[[list[Any], dict[str, list[float]]], Any],
+    batch_size: int,
+) -> dict[str, int]:
+    """一路 chunk 的"查库去重 → 分批 embed → 异步 upsert"流程。
+
+    流水线策略：embed 一批后**不等 upsert 完成**就开始 embed 下一批，
+    upsert 在后台 task 中跑。Semaphore 限制 in-flight upsert 数量，
+    避免高数据量场景下 task 堆积爆内存。LanceDB store 内部有 _write_lock，
+    所有后台 upsert 仍会串行执行写入。
+
+    返回 {total, skipped, embedded, upserted}：
+    - total：本次 chunker 产出的 chunk 总数
+    - skipped：因 chunk_id 已存在库中而被跳过的（续跑场景）
+    - embedded：实际发送给 embedding API 的 chunk 数
+    - upserted：成功写入 LanceDB 的 chunk 数（理论上 == embedded）
+
+    单批 embedding 失败时，已 spawn 的 upsert task 会被等到完成（让已 embed
+    的批落库）后再向上抛出 embed 错误；下次重跑通过 chunk_id 跳过这些。
+    """
+    stats = {"total": len(chunks), "skipped": 0, "embedded": 0, "upserted": 0}
+    if not chunks:
+        return stats
+
+    # 1) 库去重：跳过 chunk_id 已存在的（续跑场景下避免重复 embed）
+    chunks_by_id: dict[str, Any] = {c.chunk_id: c for c in chunks if c.chunk_id}
+    existing = await store.existing_ids(table, list(chunks_by_id.keys()))
+    pending = [c for cid, c in chunks_by_id.items() if cid not in existing]
+    stats["skipped"] = len(existing)
+
+    # 2) 分批 embed + 异步 upsert（流水线化）
+    bs = max(1, batch_size)
+    # 同一时刻允许在飞的 upsert task 上限。LanceDB 内部 _write_lock 串行所有写入，
+    # 所以这里控制的主要是"内存中暂存的 embeddings 字典数量"。
+    # 4 个 × 100 条 × 4096 维 ≈ 6 MB / track，整体内存压力可控。
+    sem = asyncio.Semaphore(_UPSERT_INFLIGHT_LIMIT)
+    upsert_tasks: list[asyncio.Task[int]] = []
+
+    async def _upsert_one(
+        batch_: list[Any], embeddings_: dict[str, list[float]]
+    ) -> int:
+        try:
+            return await upsert_fn(batch_, embeddings_)
+        finally:
+            sem.release()
+
+    try:
+        for offset in range(0, len(pending), bs):
+            batch = pending[offset : offset + bs]
+            if not batch:
+                continue
+            texts = [text_of(c) for c in batch]
+            vectors = await embedder.embed_texts(texts)
+            if len(vectors) != len(batch):
+                raise IngestionError("embedding 返回向量数与 chunk 数不一致")
+            embeddings = {
+                c.chunk_id: vec for c, vec in zip(batch, vectors, strict=True)
+            }
+            stats["embedded"] += len(embeddings)
+            # 拿一个 slot；slot 满时阻塞 embed loop，防止 task 堆积爆内存
+            await sem.acquire()
+            upsert_tasks.append(
+                asyncio.create_task(_upsert_one(batch, embeddings))
+            )
+    except BaseException:
+        # embed 阶段抛错：等所有已 spawn 的 upsert 完成（给已 embed 的批落库机会），
+        # 然后向上抛 embed 错误；upsert 自身错误这里吞掉，不覆盖主因。
+        if upsert_tasks:
+            results = await asyncio.gather(*upsert_tasks, return_exceptions=True)
+            for r in results:
+                if not isinstance(r, BaseException):
+                    stats["upserted"] += int(r)
+        raise
+
+    # embed 全部成功：等所有后台 upsert 落库
+    results = await asyncio.gather(*upsert_tasks, return_exceptions=True)
+    for r in results:
+        if isinstance(r, BaseException):
+            raise r
+        stats["upserted"] += int(r)
+    return stats
 
 
 def run_import_sync(json_path: str | Path, settings: Settings) -> ImportReport:
