@@ -11,7 +11,7 @@ import re
 
 from xuwen.chat_api.schemas import PolicyHint
 from xuwen.chat_api.sticker_store import StickerStore
-from xuwen.companion.life import LifeStateManager
+from xuwen.companion.life import LifeSnapshot, LifeStateManager
 from xuwen.companion.response_policy import ResponseDecision
 from xuwen.config import Settings
 
@@ -26,7 +26,12 @@ _LIFE_MARKER_RE = re.compile(
 )
 
 
-def build_policy_hint(decision: ResponseDecision) -> PolicyHint:
+def build_policy_hint(
+    decision: ResponseDecision,
+    *,
+    reply_delay_seconds: int = 0,
+    reply_delay_reason: str = "",
+) -> PolicyHint:
     """把 ResponseDecision 映射成 OpenAI 响应里附带的 PolicyHint。"""
     return PolicyHint(
         should_reply=decision.should_reply,
@@ -34,7 +39,31 @@ def build_policy_hint(decision: ResponseDecision) -> PolicyHint:
         user_state=decision.user_state,
         risk_level=decision.risk_level,
         reason=decision.derived_reason(),
+        reply_delay_seconds=max(0, reply_delay_seconds),
+        reply_delay_reason=reply_delay_reason if reply_delay_seconds > 0 else "",
     )
+
+
+def effective_reply_delay_seconds(
+    *,
+    life: LifeSnapshot,
+    decision: ResponseDecision,
+    settings: Settings,
+) -> int:
+    """计算本轮建议给客户端执行的延迟秒数。
+
+    沉默场景延迟=0；其它情况取 life / decision 两者较大值。
+    availability=sleeping 时若模型/规则层都没给延迟，启用兜底（避免 sleeping 秒回）。
+    """
+    if not decision.should_reply:
+        return 0
+    raw = max(life.reply_delay_seconds, decision.reply_delay_seconds)
+    # sleeping 兜底：模型不一定每次都听 prompt 给 5-45 秒，这里强制最小值。
+    if life.availability == "sleeping":
+        floor = max(0, settings.life_sleeping_min_reply_delay_seconds)
+        if floor > 0:
+            raw = max(raw, floor)
+    return max(0, min(raw, settings.life_max_reply_delay_seconds))
 
 
 def extract_and_apply_life_marker(

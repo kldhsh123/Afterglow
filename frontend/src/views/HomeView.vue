@@ -14,8 +14,8 @@ import ErrorBanner from '@/components/common/ErrorBanner.vue'
 import UpdateBanner from '@/components/common/UpdateBanner.vue'
 import DebugDrawer from '@/components/common/DebugDrawer.vue'
 import OnboardingDialog from '@/components/onboarding/OnboardingDialog.vue'
-import { Bug, Sparkles } from 'lucide-vue-next'
-import type { UpdateInfo } from '@/types/api'
+import { Bug, ChevronDown, Sparkles } from 'lucide-vue-next'
+import type { PolicyHint, UpdateInfo } from '@/types/api'
 
 const chat = useChatStore()
 const settings = useSettingsStore()
@@ -24,8 +24,30 @@ const memory = useMemoryStore()
 let currentStream: StreamHandle | null = null
 const debugOpen = ref(false)
 const updateInfo = ref<UpdateInfo | null>(null)
+// MessageList 暴露的 jumpToBottom，由工具栏"到底"按钮调用
+const messageListRef = ref<{ jumpToBottom: () => void } | null>(null)
 
 const showOnboarding = computed(() => !settings.onboardingDone)
+
+function jumpToBottom() {
+  messageListRef.value?.jumpToBottom()
+}
+
+function replyDelayMs(policy?: PolicyHint | null): number {
+  // 调试模式优先：本地覆盖后端给的延迟，便于压测 typewriter / 等待行为
+  if (settings.debugForceReplyDelay) {
+    const forced = Number(settings.debugReplyDelaySeconds ?? 0)
+    if (!Number.isFinite(forced) || forced <= 0) return 0
+    return Math.min(forced, 120) * 1000
+  }
+  const seconds = Number(policy?.reply_delay_seconds ?? 0)
+  if (!Number.isFinite(seconds) || seconds <= 0) return 0
+  return Math.min(seconds, 120) * 1000
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
 
 onMounted(async () => {
   // 拉取后端 /info 同步元数据（不阻塞 UI）
@@ -74,6 +96,21 @@ function send(text: string, images: string[] = []) {
   const typer = useTypewriter((piece) => {
     chat.appendAssistantChunk(assistantMsg.id, piece)
   })
+  let delayUntil = 0
+  let silenced = false
+  const runAfterReplyDelay = (fn: () => void) => {
+    const guarded = () => {
+      // 沉默场景下不再向 typer 推任何文本，避免 sentinel/已到达 chunk 上屏
+      if (silenced) return
+      if (chat.streamingId === assistantMsg.id) fn()
+    }
+    const waitMs = Math.max(0, delayUntil - Date.now())
+    if (waitMs > 0) {
+      window.setTimeout(guarded, waitMs)
+    } else {
+      guarded()
+    }
+  }
 
   // 异步拉取记忆出处（不阻塞流式）
   void attachMemorySources(assistantMsg.id, text)
@@ -100,21 +137,33 @@ function send(text: string, images: string[] = []) {
     },
     {
       onTrace: (traceId) => chat.setMessageTraceId(assistantMsg.id, traceId),
-      onChunk: (t) => typer.pushText(t),
+      onPolicy: (policy) => {
+        const until = Date.now() + replyDelayMs(policy)
+        delayUntil = Math.max(delayUntil, until)
+      },
+      onSilenced: () => {
+        // AI 选择沉默：清空已显示文本、标记 silenced，气泡走灰色占位。
+        if (silenced) return
+        silenced = true
+        chat.markMessageSilenced(assistantMsg.id)
+        chat.isGenerating = false
+      },
+      onChunk: (t) => runAfterReplyDelay(() => typer.pushText(t)),
       onDone: () => {
-        typer.finish()
-        // 等动画追上后再结束（最多再 1.5 秒）
-        const startWait = Date.now()
-        const settle = () => {
-          // 简单做：直接 finish；剩余字符 finish() 会自动 flush
-          chat.finishAssistantMessage(assistantMsg.id)
+        if (silenced) {
+          // 沉默已在 onSilenced 里收尾，不再触发 typer.finish / setMessageContent
           chat.isGenerating = false
+          return
         }
-        if (Date.now() - startWait < 50) {
-          setTimeout(settle, 50)
-        } else {
-          settle()
-        }
+        runAfterReplyDelay(() => {
+          typer.finish()
+          // 等动画追上后再结束（最多再 1.5 秒）
+          window.setTimeout(() => {
+            if (chat.streamingId !== assistantMsg.id) return
+            chat.finishAssistantMessage(assistantMsg.id)
+            chat.isGenerating = false
+          }, 50)
+        })
       },
       onError: (err) => {
         chat.setError(`聊天出错：${err.message}`)
@@ -155,6 +204,13 @@ async function startProactiveTopic() {
   try {
     const result = await requestProactiveTopic(chat.conversationId, 'manual')
     if (result.trace_id) chat.setMessageTraceId(assistantMsg.id, result.trace_id)
+    const delay = replyDelayMs(result.policy)
+    if (delay > 0) await wait(delay)
+    // 后端在沉默场景会返回 silenced=true，且 message 是 sentinel；前端走灰色占位。
+    if (result.silenced) {
+      chat.markMessageSilenced(assistantMsg.id)
+      return
+    }
     chat.setMessageContent(assistantMsg.id, result.message.trim() || '嗯')
   } catch (e) {
     const err = e instanceof Error ? e : new Error(String(e))
@@ -175,7 +231,7 @@ async function startProactiveTopic() {
     <UpdateBanner :update="updateInfo" />
     <ErrorBanner />
     <div class="flex-1 min-h-0">
-      <MessageList @pick-sample="pickSample" />
+      <MessageList ref="messageListRef" @pick-sample="pickSample" />
     </div>
     <div class="px-4 sm:px-6 pb-2">
       <div class="max-w-3xl mx-auto flex justify-start">
@@ -191,6 +247,18 @@ async function startProactiveTopic() {
         >
           <Sparkles :size="14" />
           <span>开个话题</span>
+        </button>
+        <button
+          class="ml-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full
+                 text-xs text-ink-soft dark:text-night-text-soft
+                 bg-paper-soft/80 dark:bg-night-bg-soft/80
+                 border border-ink/5 dark:border-night-text/10
+                 hover:text-ink dark:hover:text-night-text"
+          title="一键滑到最新消息"
+          @click="jumpToBottom"
+        >
+          <ChevronDown :size="14" />
+          <span>到底</span>
         </button>
         <button
           class="ml-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full

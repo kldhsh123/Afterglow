@@ -91,6 +91,16 @@ export const useChatStore = defineStore('chat', () => {
     if (m) m.content = text
   }
 
+  function markMessageSilenced(id: string) {
+    const m = messages.value.find((x) => x.id === id)
+    if (!m) return
+    // 沉默 = AI 选择不回复；正文清空，置 silenced 标记给气泡渲染层用
+    m.content = ''
+    m.silenced = true
+    m.pending = false
+    if (streamingId.value === id) streamingId.value = null
+  }
+
   function attachMemorySources(id: string, sources: ChatMessage['memorySources']) {
     const m = messages.value.find((x) => x.id === id)
     if (m) m.memorySources = sources
@@ -141,6 +151,7 @@ export const useChatStore = defineStore('chat', () => {
     appendAssistantChunk,
     finishAssistantMessage,
     setMessageContent,
+    markMessageSilenced,
     attachMemorySources,
     setMessageTraceId,
     setError,

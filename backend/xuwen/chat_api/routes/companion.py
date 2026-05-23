@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 
@@ -12,6 +11,7 @@ from pydantic import BaseModel, Field
 from xuwen.chat_api.chat_pipeline import (
     available_sticker_names,
     build_policy_hint,
+    effective_reply_delay_seconds,
     effective_silence_sentinel,
     is_ai_silence_signal,
 )
@@ -144,7 +144,16 @@ async def proactive(
             0.0,
             detail=f"trace={trace_id},{response_decision.metric_detail()}",
         )
-    policy_hint = build_policy_hint(response_decision)
+    reply_delay_seconds = effective_reply_delay_seconds(
+        life=life,
+        decision=response_decision,
+        settings=state.settings,
+    )
+    policy_hint = build_policy_hint(
+        response_decision,
+        reply_delay_seconds=reply_delay_seconds,
+        reply_delay_reason=life.reply_delay_reason,
+    )
 
     if not response_decision.should_reply:
         state.metrics.record(
@@ -193,15 +202,6 @@ async def proactive(
         current_user_message=proactive_user_message,
         web_context=web_context,
     )
-
-    delay_seconds = max(life.reply_delay_seconds, response_decision.reply_delay_seconds)
-    if delay_seconds > 0:
-        await asyncio.sleep(
-            min(
-                delay_seconds,
-                state.settings.life_max_reply_delay_seconds,
-            )
-        )
 
     start = time.perf_counter()
     text = sanitize_assistant_text(

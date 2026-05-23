@@ -24,6 +24,10 @@ interface PersistedSettings {
   preferPiiRedaction: boolean
   /** 是否首次启动完成引导 */
   onboardingDone: boolean
+  /** 调试用：强制覆盖后端的 reply_delay_seconds（仅本地，不影响后端决策） */
+  debugForceReplyDelay: boolean
+  /** 调试用：本地覆盖的延迟秒数，启用 debugForceReplyDelay 时生效 */
+  debugReplyDelaySeconds: number
 }
 
 const DEFAULTS: PersistedSettings = {
@@ -38,6 +42,8 @@ const DEFAULTS: PersistedSettings = {
   localApiKey: '',
   preferPiiRedaction: true,
   onboardingDone: false,
+  debugForceReplyDelay: false,
+  debugReplyDelaySeconds: 0,
 }
 
 function loadFromStorage(): PersistedSettings {
@@ -71,6 +77,8 @@ export const useSettingsStore = defineStore('settings', () => {
   const localApiKey = ref(initial.localApiKey)
   const preferPiiRedaction = ref(initial.preferPiiRedaction)
   const onboardingDone = ref(initial.onboardingDone)
+  const debugForceReplyDelay = ref(initial.debugForceReplyDelay)
+  const debugReplyDelaySeconds = ref(initial.debugReplyDelaySeconds)
 
   // 派生：当前实际是不是暗色
   const isDark = computed(() => {
@@ -126,6 +134,8 @@ export const useSettingsStore = defineStore('settings', () => {
       localApiKey: localApiKey.value,
       preferPiiRedaction: preferPiiRedaction.value,
       onboardingDone: onboardingDone.value,
+      debugForceReplyDelay: debugForceReplyDelay.value,
+      debugReplyDelaySeconds: debugReplyDelaySeconds.value,
     }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
   }
@@ -144,6 +154,8 @@ export const useSettingsStore = defineStore('settings', () => {
       localApiKey,
       preferPiiRedaction,
       onboardingDone,
+      debugForceReplyDelay,
+      debugReplyDelaySeconds,
     ],
     persist,
     { deep: false },
@@ -194,6 +206,8 @@ export const useSettingsStore = defineStore('settings', () => {
     localApiKey.value = DEFAULTS.localApiKey
     preferPiiRedaction.value = DEFAULTS.preferPiiRedaction
     onboardingDone.value = DEFAULTS.onboardingDone
+    debugForceReplyDelay.value = DEFAULTS.debugForceReplyDelay
+    debugReplyDelaySeconds.value = DEFAULTS.debugReplyDelaySeconds
   }
 
   return {
@@ -208,6 +222,8 @@ export const useSettingsStore = defineStore('settings', () => {
     localApiKey,
     preferPiiRedaction,
     onboardingDone,
+    debugForceReplyDelay,
+    debugReplyDelaySeconds,
     isDark,
     documentTitle,
     applyFromBackend,

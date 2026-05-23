@@ -10,6 +10,7 @@
 
 ## 🔒 数据隐私（重要）
 
+- **请先取得对方同意**：聊天记录高度敏感，包含双方共同产生的私人内容。导出聊天记录、导入本项目、向模型或第三方 API 发送相关文本前，请确认你有权这样做，并尽量取得聊天对方的明确同意。
 - **本地持久化**：聊天数据、向量索引、persona 卡片、生活状态和图片缓存默认存储在本机 `.data/`。项目不会自带远程上传逻辑。
 - **不是默认零外发**：如果你配置云端模型/API，相关文本会发送给这些服务。要做到完全离线，需要把主聊天、Embedding、打标、生活状态、视觉等模型全部指向本地服务，并关闭联网搜索 / 网页读取。
 - **可能外发的数据**：导入阶段会把文本发送给你配置的 Embedding API；开启语义打标会把朋友单条 chunk 发送给 Label API；聊天阶段会把检索上下文发送给主 LLM API；生活状态 / 裸域名确认会调用 `LIFE_*` 小模型；开启联网检索会把搜索查询发送给 Tavily 或 SearXNG；开启 URL 读取会请求用户给出的公开网页。这些接口由你选用并自付费。
@@ -22,7 +23,7 @@
 必需：
 
 - **主聊天模型**：OpenAI 兼容 `/chat/completions`，负责最终回复。配置 `OPENAI_BASE_URL`、`OPENAI_API_KEY`、`CHAT_MODEL`。
-- **Embedding / 向量模型**：OpenAI 兼容 `/embeddings`，负责历史导入、检索和 live memory 回写。配置 `EMBEDDING_API_URL`、`EMBEDDING_API_KEY`、`EMBEDDING_MODEL`、`EMBEDDING_DIM`。
+- **Embedding / 向量模型**：OpenAI 兼容 `/embeddings`，负责历史导入、检索和 live memory 回写。配置 `EMBEDDING_API_URL`、`EMBEDDING_API_KEY`、`EMBEDDING_MODEL`、`EMBEDDING_DIM`，需要时可用 `EMBEDDING_MAX_CONCURRENCY` / `EMBEDDING_MAX_REQUESTS_PER_MINUTE` 控制导入请求压力。
 - **本地磁盘目录**：默认 `.data/lancedb`、`.data/persona`、`.data/images`。
 
 可选：
@@ -47,6 +48,11 @@ cp .env.example .env
 #   - OPENAI_API_KEY / EMBEDDING_API_KEY：主聊天模型和 Embedding 模型的 API key
 #   - XUWEN_API_KEY：访问后端 API 的本地密钥，建议使用长随机字符串
 # 如何获取 SELF_UID / FRIEND_UID 见下方"如何找到 UID"。
+#
+# 可选：Embedding 导入限流。最大并发限制同时在飞的 HTTP 请求数；
+# 每分钟请求数按 HTTP 请求计，不按 batch 内文本条数计。0 表示不主动限速。
+#   EMBEDDING_MAX_CONCURRENCY=4
+#   EMBEDDING_MAX_REQUESTS_PER_MINUTE=0
 #
 # 可选：生活时间线 / 网页意图小模型。留空会复用主 LLM；单独配置可用更便宜的小模型。
 # 它维护 AI 的当前生活状态、下一次更新时间和回复延迟；
@@ -242,6 +248,17 @@ EMBEDDING_INCLUDE_ENCODING_FORMAT=false
 ```
 
 后端会在错误日志里打印脱敏后的请求体摘要，方便确认实际发送格式。
+
+### Embedding 429：上游限流
+
+导入默认最多同时发起 4 个 embedding 请求；如果上游 RPM 更低，可以降低并发并设置每分钟请求数：
+
+```env
+EMBEDDING_MAX_CONCURRENCY=1
+EMBEDDING_MAX_REQUESTS_PER_MINUTE=60
+```
+
+`EMBEDDING_MAX_REQUESTS_PER_MINUTE` 统计的是 HTTP 请求次数；一个请求里包含多少条文本由 `EMBEDDING_BATCH_SIZE` 决定。
 
 ### LanceDB 写库报 `Spill has sent an error`
 

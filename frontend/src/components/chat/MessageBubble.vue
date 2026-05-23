@@ -115,6 +115,15 @@ function closeLightbox() {
         :is-user="isUser"
       />
 
+      <!-- AI 选择沉默（不回复）：灰色低对比占位，不走 markdown -->
+      <div
+        v-else-if="!isUser && message.silenced"
+        class="px-4 py-3 text-chat sm:text-chat-lg leading-relaxed italic
+               text-ink-soft/70 dark:text-night-text-soft/70 select-none"
+      >
+        对方暂时没回复
+      </div>
+
       <!-- 朋友正在打字 -->
       <TypingIndicator v-else-if="!isUser && message.pending && !message.content" />
 
