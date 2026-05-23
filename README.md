@@ -416,8 +416,6 @@ AGPL-3.0-or-later
 
 <div align="center">
 
-### ⭐ Star History
-
 <picture>
   <source
     media="(prefers-color-scheme: dark)"
