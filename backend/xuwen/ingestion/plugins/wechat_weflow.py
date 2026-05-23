@@ -254,14 +254,19 @@ def _infer_role(
     settings: Settings,
     is_system: bool,
 ) -> SenderRole:
-    """先 wxid 匹配，再 isSend 兜底；系统消息单独归类。"""
+    """先用 UID 集合命中，再 isSend 兜底；系统消息单独归类。
+
+    settings.all_self_uids / all_friend_uids 把跨平台 / 跨账号的多个 UID
+    合并成一个集合，所以同一个人在 QQ 和微信的两个账号都能被识别为同一身份。
+    """
     if is_system:
         return "system"
-    # 1) 显式 UID 配置优先（要求用户把 .env 的 self_uid/friend_uid 填成 wxid）
-    if sender_wxid and settings.self_uid and sender_wxid == settings.self_uid:
-        return "self"
-    if sender_wxid and settings.friend_uid and sender_wxid == settings.friend_uid:
-        return "friend"
+    # 1) UID 集合优先（要求用户把 wxid 加进 .env 的 self_uid 或 SELF_UIDS）
+    if sender_wxid:
+        if sender_wxid in settings.all_self_uids:
+            return "self"
+        if sender_wxid in settings.all_friend_uids:
+            return "friend"
     # 2) WeFlow 自带的 isSend 字段足够可靠
     if is_send == 1:
         return "self"

@@ -142,9 +142,13 @@ def _parse_one(
 def _infer_role(uid: str, settings: Settings, *, system: bool) -> SenderRole:
     if system:
         return "system"
-    if uid and settings.self_uid and uid == settings.self_uid:
+    if not uid:
+        return "other"
+    # 用集合判定：同一个人可能跨平台 / 跨账号，settings.all_self_uids 把所有
+    # self UID（主 + SELF_UIDS 列表）合并；friend 同理。
+    if uid in settings.all_self_uids:
         return "self"
-    if uid and settings.friend_uid and uid == settings.friend_uid:
+    if uid in settings.all_friend_uids:
         return "friend"
     return "other"
 

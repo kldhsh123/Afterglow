@@ -154,7 +154,7 @@ mindmap
 | Node.js | ≥ 20 | 前端构建 | **仅用前端时需要**；纯 API 用户可不装 |
 | [uv](https://github.com/astral-sh/uv) | latest | Python 包管理 | 推荐 |
 | [pnpm](https://pnpm.io/) | latest | Node 包管理 | 仅前端 |
-| [QQChatExporter V5](https://github.com/shuakami/qq-chat-exporter) / [WeFlow](https://github.com/hicccc77/WeFlow)（微信，`arkme-json`）导出 JSON | — | 真人聊天数据源 | 至少一份；plugin 自动识别格式 |
+| [QQChatExporter V5](https://github.com/shuakami/qq-chat-exporter) / [WeFlow](https://github.com/hicccc77/WeFlow)（微信，`arkme-json`）导出纯文本 JSON | — | 真人聊天数据源 | 至少一份；plugin 会自动识别格式 |
 
 ### 1. 准备模型（API）
 
@@ -201,6 +201,7 @@ cp .env.example .env
   - QQ：`SELF_UID` / `FRIEND_UID` 填 QQChatExporter 导出 JSON 里的 `selfUid` / 对方 `sender.uid`（`u_xxx` 形式）
   - 微信：填 WeFlow 导出 JSON 里 `senders[]` 的 `wxid`（`wxid_xxx` 形式）；定位方法见 `backend/README.md`
   - `FRIEND_*` 永远是**你想让 AI 模仿的那个人**，不是你自己
+  - **跨平台 / 多账号**：同一个人有多个 UID（QQ + 微信 / 主号 + 小号），直接在 `SELF_UID` / `FRIEND_UID` 里**用逗号分隔**列上所有 UID，导入时会被视为同一身份。例：`FRIEND_UID=u_qq_friend,wxid_friend_main,wxid_friend_alt`
 - **主聊天模型** —— `OPENAI_BASE_URL` / `OPENAI_API_KEY` / `CHAT_MODEL`
 - **Embedding 模型** —— `EMBEDDING_API_URL` / `EMBEDDING_API_KEY` / `EMBEDDING_MODEL` / `EMBEDDING_DIM`
 - **本地访问密钥** —— `XUWEN_API_KEY`（长随机串；调用方在 Header 带 `Authorization: Bearer <key>`）
@@ -214,11 +215,23 @@ cp .env.example .env
 #### 步骤 ③：导入历史聊天
 
 ```bash
+# 单文件
 uv run python -m xuwen.ingestion.cli import 路径/到/你的聊天记录.json
+
+# 多文件（同一个朋友在 QQ + 微信都聊过、或者多个账号）
+uv run python -m xuwen.ingestion.cli import qq_导出.json wechat_导出.json 小号_导出.json
 ```
 
+- CLI 自动按 JSON 顶层特征识别 QQ / WeFlow 格式，**可任意混合**
+- 跨平台 / 多账号场景：在 `.env` 用 `SELF_UID=u_qq,wxid_me` 和 `FRIEND_UID=u_qq,wxid_friend`（**逗号分隔**）把全部 UID 列出来
+- 多文件按命令行顺序处理，共享 LanceDB 连接与 Embedding 客户端
 - 开启 `LABELING_ENABLED=true` 时会接着自动打标
 - 中断 / 限流失败不丢导入数据，之后可续跑：`uv run python -m xuwen.ingestion.cli label`
+
+> **⚠️ 多文件场景的两个局限（重要）**
+>
+> - **作息画像 (`circadian_profile.json`) 仅基于最后一个文件生成**——把数据量最大或最具代表性的对话放在**命令行最后一位**，画像才能反映 TA 真实的作息分布。
+> - **下一步 `analyze_persona` 当前也只接受单个 JSON**——多文件场景下，建议挑那个最具代表性的（通常就是同一份"最后一位"文件）单独跑画像。LanceDB 向量库本身是合并的，检索能用上全部数据，但 persona 卡片不会跨文件合并。
 
 #### 步骤 ④：生成 persona 卡片 + 作息画像
 
@@ -233,6 +246,8 @@ uv run python scripts/analyze_persona.py 路径/到/你的聊天记录.json
 > - `circadian_profile.json` — TA 的真实作息（识别夜猫子 / 跨时区 / 工作日 vs 周末）
 >
 > 注意：persona 是离线统计画像，只提供长期语气参考；当天在做什么由 `life_state.json` 和聊天时的小模型状态决定。
+>
+> **⚠️ 当前只接受单个 JSON 文件。** 如果你在步骤 ③ 导入了多个文件，请挑**数据量最大或最具代表性**的那一份跑 persona——通常就是步骤 ③ 命令行里放在最后一位的那个文件（与 circadian 画像保持一致）。后续会支持多文件合并 persona，欢迎 PR。
 
 #### 步骤 ⑤：启动 chat API
 

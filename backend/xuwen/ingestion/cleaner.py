@@ -79,13 +79,15 @@ class Cleaner:
         # 名字形式的 @ 提及替换；同时识别 self_aliases / friend_aliases 里的所有别名。
         self._self_mention_re = _build_mention_pattern(settings.all_self_names)
         self._friend_mention_re = _build_mention_pattern(settings.all_friend_names)
-        # uid 形式的 @ 提及替换（兼容 QQ 在 mention 文本里直接写 @u_xxxx 的情况）
-        self._self_uid_re = (
-            self._uid_pattern(settings.self_uid) if settings.self_uid else None
-        )
-        self._friend_uid_re = (
-            self._uid_pattern(settings.friend_uid) if settings.friend_uid else None
-        )
+        # uid 形式的 @ 提及替换（兼容 QQ 在 mention 文本里直接写 @u_xxxx 的情况）。
+        # 用 all_self_uids / all_friend_uids 而不是单个 self_uid，以支持
+        # 跨平台 / 跨账号场景（同一个人有多个 UID，全部需要替换成 @你 / @我）。
+        self._self_uid_res = [
+            self._uid_pattern(uid) for uid in settings.all_self_uids if uid
+        ]
+        self._friend_uid_res = [
+            self._uid_pattern(uid) for uid in settings.all_friend_uids if uid
+        ]
 
     # ------------------------------------------------------------------
     # 公开接口
@@ -165,13 +167,13 @@ class Cleaner:
     def _normalize_uids(self, text: str) -> str:
         """清理消息中出现的 QQ uid。
 
-        - 已配置的 self_uid / friend_uid：按视角替换为 @你 / @我
+        - 已配置的 self / friend uid（含跨平台 / 跨账号别名）：按视角替换为 @你 / @我
         - 其它未知 uid（兜底）：替换为 @某人，避免泄漏 + 污染词频统计
         """
-        if self._self_uid_re is not None:
-            text = self._self_uid_re.sub("@你", text)
-        if self._friend_uid_re is not None:
-            text = self._friend_uid_re.sub("@我", text)
+        for pattern in self._self_uid_res:
+            text = pattern.sub("@你", text)
+        for pattern in self._friend_uid_res:
+            text = pattern.sub("@我", text)
         # 兜底：仍残留的 u_xxx 格式 uid（含 @ 或不含）
         text = _GENERIC_QQ_UID_RE.sub("@某人", text)
         return text

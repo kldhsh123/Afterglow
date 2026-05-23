@@ -81,9 +81,14 @@ uv run pytest
 
 # 4. 导入历史聊天记录
 uv run python -m xuwen.ingestion.cli import 路径/到/你的_导出.json
+# 多文件批量导入（QQ + 微信 / 多账号场景）：
+# uv run python -m xuwen.ingestion.cli import qq_导出.json wechat_导出.json 小号_导出.json
 # 自动识别格式：QQChatExporter V5（chatInfo.selfUid）/ WeFlow 微信（weflow.format=arkme-json）。
 # 也可显式指定：--plugin qqexporter_v5 或 --plugin wechat_weflow。
 # 导出时请**只勾选纯文本**，不要带图片/语音/视频/文件等附件——Afterglow 只用文本语料。
+# 多文件场景下：
+#   - circadian_profile.json 仅基于最后一个文件生成（把最近 / 最具代表性的对话放最后）
+#   - scripts/analyze_persona.py 当前也只接受单个 JSON，挑代表性最强的一份单独跑
 # 若已开启 LABELING_ENABLED=true，导入完成后会继续跑打标阶段。
 # 未打标 chunk 仍正常参与向量召回，只是不享受后续标签加权。
 
@@ -120,6 +125,17 @@ uv run python scripts/eval_retrieval.py --eval dataset.jsonl  # 带 ground truth
 Afterglow 用 `SELF_UID` / `FRIEND_UID` 在导入时区分"哪条消息是你说的、哪条是对方说的"。
 **`FRIEND_*` 永远填你想让 AI 模仿的那个人，不是你自己。**
 两个 ID 都直接写进 `.env`，无需引号。
+
+> **跨平台 / 多账号**：同一个朋友可能既在 QQ 又在微信上聊过，或者你自己有多个账号。
+> 这种情况下**直接在 `SELF_UID` / `FRIEND_UID` 里用逗号分隔**列出所有 UID：
+>
+> ```env
+> SELF_UID=u_qq_main,wxid_me_main,wxid_me_alt
+> FRIEND_UID=wxid_friend_main,u_friend_qq,wxid_friend_alt
+> ```
+>
+> CLI 会把逗号分隔的 UID 全部视为同一个人。
+> （历史上还有一对兼容字段 `SELF_UIDS` / `FRIEND_UIDS`，效果完全等价，新配置无需用到。）
 
 > **导出前先确认：只勾选纯文本**。Afterglow 不消费图片 / 语音 / 视频 / 文件，导出工具里
 > 这些选项请全部关掉——JSON 更小、导入更快、也更不容易意外泄漏附件链接。
