@@ -108,6 +108,36 @@ def fallback_for_rejected_sticker(reply_mode: str) -> str:
     return _STICKER_REJECT_FALLBACK_BY_MODE.get(reply_mode, "……")
 
 
+def is_ai_silence_signal(
+    assistant_text: str,
+    *,
+    sentinel: str,
+    decision: ResponseDecision,
+) -> bool:
+    """判断主模型是否选择了"沉默"出口。
+
+    判定规则：
+    - sentinel 非空；
+    - sanitize 后的整段文本 strip() 等于 sentinel（不允许任何额外字符）；
+    - 决策不处于 unsafe（unsafe 场景下 AI 必须回复，sentinel 直接忽略当文本处理）；
+    - 决策本来 should_reply=True 且 reply_mode!="silence"（规则层已强制沉默
+      的场景走自己的短路，不进入这里）。
+
+    严格匹配是为了避免模型把 sentinel 当成正文一部分顺手输出导致误吞回复。
+    """
+    if not sentinel:
+        return False
+    if not assistant_text:
+        return False
+    if assistant_text.strip() != sentinel:
+        return False
+    if decision.user_state == "unsafe":
+        return False
+    if not decision.should_reply or decision.reply_mode == "silence":
+        return False
+    return True
+
+
 def looks_like_sticker_only_intent(raw_text: str) -> bool:
     """判断模型原始输出是否"基本只是想发 sticker"。
 
