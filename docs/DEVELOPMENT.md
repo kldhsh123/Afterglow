@@ -61,6 +61,16 @@ backend/xuwen/
 
 导入系统已经按插件拆开。主流程只需要统一的 `NormalizedMessage`，不关心消息来自 QQ、微信还是其它平台。
 
+目前内置 plugin：
+
+| name | display_name | 输入格式 | 识别特征 |
+|---|---|---|---|
+| `qqexporter_v5` | QQChatExporter V5 | QQ 导出 JSON | `metadata.name` 含 `qqchatexporter` 或 `chatInfo.selfUid` 存在 |
+| `wechat_weflow` | WeChat (WeFlow arkme-json) | 微信 WeFlow 导出 JSON | `weflow.format = "arkme-json"` 或 `session + senders + messages` 同时存在 |
+
+CLI 在导入时按注册顺序遍历 `match()`，第一个命中的负责 `parse()`；
+也可以用 `--plugin <name>` 强制指定。
+
 插件接口在 `backend/xuwen/ingestion/plugins/__init__.py`：
 
 ```python
@@ -153,6 +163,7 @@ uv run python -m xuwen.ingestion.cli plugins
 
 ```bash
 uv run python -m xuwen.ingestion.cli import export.json --plugin qqexporter_v5
+uv run python -m xuwen.ingestion.cli import export.json --plugin wechat_weflow
 ```
 
 ## 测试与质量检查

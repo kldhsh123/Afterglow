@@ -23,9 +23,11 @@ from xuwen.ingestion.plugins import (
     select_plugin,
 )
 from xuwen.ingestion.plugins.qqexporter_v5 import QQExporterV5Plugin
+from xuwen.ingestion.plugins.wechat_weflow import WeChatWeFlowPlugin
 
 # 注册内置 plugins（每次 import 都幂等替换）
 register_plugin(QQExporterV5Plugin())
+register_plugin(WeChatWeFlowPlugin())
 
 
 def load_qq_json(path: str | Path) -> dict[str, Any]:

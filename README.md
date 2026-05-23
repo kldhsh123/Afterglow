@@ -50,7 +50,8 @@ EMBEDDING_BATCH_SIZE=25
 - **PII 默认脱敏**：手机号 / 邮箱 / 身份证 / 银行卡 / IP 在入库前自动替换为占位符。QQ 号、URL、域名按设计**保留**（uid 需要匹配、URL 是对话语境的一部分）。
 - **`.env` 已在 `.gitignore`**：切勿把含有 API key 的配置文件提交到 git。
 - **后端 API 默认需要鉴权**：除 `/healthz` 外，所有接口默认要求 `XUWEN_API_KEY`，避免模型额度、记忆数据和调试信息被滥用。
-- **导出 JSON 风险提醒**：QQChatExporter 导出的 JSON 含有完整聊天明文，分享给他人前请自行确认。
+- **导出 JSON 风险提醒**：[QQChatExporter](https://github.com/shuakami/qq-chat-exporter) / [WeFlow](https://github.com/hicccc77/WeFlow) 等导出工具产出的 JSON 含有完整聊天明文（含 wxid / uid 等账号信息），分享给他人前请自行确认。
+- **导出时只勾选纯文本**：Afterglow 只消费文本语料，导出工具一律**关闭图片 / 语音 / 视频 / 文件**等附件选项。这样导出的 JSON 体积小、不含媒体二进制，导入也更快。
 
 ---
 
@@ -153,7 +154,7 @@ mindmap
 | Node.js | ≥ 20 | 前端构建 | **仅用前端时需要**；纯 API 用户可不装 |
 | [uv](https://github.com/astral-sh/uv) | latest | Python 包管理 | 推荐 |
 | [pnpm](https://pnpm.io/) | latest | Node 包管理 | 仅前端 |
-| [QQChatExporter V5](https://github.com/shuakami/qq-chat-exporter) 导出 JSON | — | 真人聊天数据源 | 至少一份 |
+| [QQChatExporter V5](https://github.com/shuakami/qq-chat-exporter) / [WeFlow](https://github.com/hicccc77/WeFlow)（微信，`arkme-json`）导出 JSON | — | 真人聊天数据源 | 至少一份；plugin 自动识别格式 |
 
 ### 1. 准备模型（API）
 
@@ -196,7 +197,10 @@ cp .env.example .env
 
 用编辑器打开 `.env`，按文件内注释填写：
 
-- **身份信息** —— `SELF_NAME` / `SELF_UID` / `FRIEND_NAME` / `FRIEND_UID`（如何找到 UID 见 `backend/README.md`）
+- **身份信息** —— `SELF_NAME` / `SELF_UID` / `FRIEND_NAME` / `FRIEND_UID`
+  - QQ：`SELF_UID` / `FRIEND_UID` 填 QQChatExporter 导出 JSON 里的 `selfUid` / 对方 `sender.uid`（`u_xxx` 形式）
+  - 微信：填 WeFlow 导出 JSON 里 `senders[]` 的 `wxid`（`wxid_xxx` 形式）；定位方法见 `backend/README.md`
+  - `FRIEND_*` 永远是**你想让 AI 模仿的那个人**，不是你自己
 - **主聊天模型** —— `OPENAI_BASE_URL` / `OPENAI_API_KEY` / `CHAT_MODEL`
 - **Embedding 模型** —— `EMBEDDING_API_URL` / `EMBEDDING_API_KEY` / `EMBEDDING_MODEL` / `EMBEDDING_DIM`
 - **本地访问密钥** —— `XUWEN_API_KEY`（长随机串；调用方在 Header 带 `Authorization: Bearer <key>`）
@@ -210,7 +214,7 @@ cp .env.example .env
 #### 步骤 ③：导入历史聊天
 
 ```bash
-uv run python -m xuwen.ingestion.cli import 路径/到/你的_qq_export.json
+uv run python -m xuwen.ingestion.cli import 路径/到/你的聊天记录.json
 ```
 
 - 开启 `LABELING_ENABLED=true` 时会接着自动打标
@@ -219,7 +223,7 @@ uv run python -m xuwen.ingestion.cli import 路径/到/你的_qq_export.json
 #### 步骤 ④：生成 persona 卡片 + 作息画像
 
 ```bash
-uv run python scripts/analyze_persona.py 路径/到/你的_qq_export.json
+uv run python scripts/analyze_persona.py 路径/到/你的聊天记录.json
 ```
 
 > **🔍 必做这一步。** 这一步生成四个文件到 `PERSONA_DATA_DIR`：
@@ -344,7 +348,7 @@ A：可以。`.env` 设 `ENABLE_PII_REDACTION=false`，或通过 `PII_RULES_PATH
 A：QQ 号在导出文件里到处都是（uid 关联需要）；URL 是对话语境的一部分（朋友分享 B 站视频是有意义的）。脱敏列表只覆盖一旦泄漏就造成实质损失的"硬隐私"。
 
 **Q：能否导入微信 / Telegram / Discord 数据？**
-A：当前只支持 QQChatExporter V5 的 JSON 格式，并且短时间内不会支持其他平台，您可以提出PR来帮助我们。要支持其它来源，写一个新 parser 输出 `NormalizedMessage` 即可，下游流水线无需改动。
+A：已内置两个导入 plugin —— [QQChatExporter V5](https://github.com/shuakami/qq-chat-exporter)（QQ）和 [WeFlow](https://github.com/hicccc77/WeFlow) `arkme-json`（微信）。CLI 会按 JSON 顶层特征自动识别，无需额外参数。导出时记得**只勾选纯文本，不要带图片/语音/文件等附件**。其它平台目前没有内置 plugin，但写一个新 plugin 输出 `NormalizedMessage` 即可，下游流水线无需改动，欢迎 PR。
 
 **Q：会不会越聊越不像？**
 A：每轮对话都会异步回写到 `live_messages`（`trust_level=0.35`，权重远低于历史 `1.0`）。前端可在设置页"暂停回写"避免污染。

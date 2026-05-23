@@ -35,6 +35,20 @@ _BRACKET_MEDIA_RE = re.compile(r"\[(图片|语音|视频|文件|表情|动画表
 # 模仿出 "[/xxx]" 字面字符串。统一归一化为 [表情]。
 _QQ_NATIVE_FACE_RE = re.compile(r"\[/[^\]\n]{1,16}\]")
 
+# 微信内置 emoji token：`[微笑]` `[捂脸]` `[害羞]` `[破涕为笑]` 等。
+# 微信本地表情名都是 1-4 个中文字 + 方括号；不是图片，也不是 Unicode emoji，
+# 直接进库会让主模型在回复时模仿出 `[微笑]` 字面字符串。
+# 用反白名单的方式归一化：所有"[中文1-4字]" → [表情]，但保留系统占位符。
+_WECHAT_EMOJI_RE = re.compile(r"\[[一-龥]{1,4}\]")
+
+# 这些方括号占位符承载明确语义（媒体类型 / 撤回 / 系统），由 plugin / 上游
+# 显式生成，emoji 归一化必须放过它们；否则 [图片] 会被错误改写成 [表情]。
+_RESERVED_BRACKET_TOKENS: frozenset[str] = frozenset({
+    "[图片]", "[语音]", "[视频]", "[文件]", "[位置]", "[链接]", "[通话]",
+    "[名片]", "[小程序]", "[转账]", "[红包]", "[表情]", "[表情包]", "[动画表情]",
+    "[撤回]", "[系统消息]", "[引用]", "[未知消息]", "[附件]",
+})
+
 # QQ uid 通用形式：`u_` + 22 个 base64url 字符
 # 用于兜底匹配未知 uid（不是 self/friend 的那种）
 _GENERIC_QQ_UID_RE = re.compile(r"@?u_[A-Za-z0-9_-]{20,24}")
@@ -126,9 +140,14 @@ class Cleaner:
 
     def _normalize_brackets(self, text: str) -> str:
         """把 [图片: xxx.png] 这种带文件名的占位统一为 [图片]，
-        再把 QQ 自带文字表情 `[/汪汪]` 归一化为 [表情]，避免模型学到这种诡异格式。"""
+        再把 QQ 自带文字表情 `[/汪汪]` 和微信内置 emoji `[微笑]` 都归一化为 [表情]，
+        避免模型学到这种字面 token。系统占位符（[图片] / [位置] / ...）保留原样。"""
         text = _BRACKET_MEDIA_RE.sub(lambda m: f"[{m.group(1)}]", text)
         text = _QQ_NATIVE_FACE_RE.sub("[表情]", text)
+        text = _WECHAT_EMOJI_RE.sub(
+            lambda m: m.group(0) if m.group(0) in _RESERVED_BRACKET_TOKENS else "[表情]",
+            text,
+        )
         return text
 
     def _normalize_mentions(self, text: str) -> str:
