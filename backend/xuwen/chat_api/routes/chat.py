@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import time
@@ -17,6 +16,7 @@ from xuwen.chat_api.chat_pipeline import (
     available_sticker_names,
     build_policy_hint,
     build_sticker_retry_hint,
+    effective_reply_delay_seconds,
     effective_silence_sentinel,
     extract_and_apply_life_marker,
     fallback_for_rejected_sticker,
@@ -187,7 +187,16 @@ async def chat_completions(
             0.0,
             detail=f"trace={trace_id},{response_decision.metric_detail()}",
         )
-    policy_hint = build_policy_hint(response_decision)
+    reply_delay_seconds = effective_reply_delay_seconds(
+        life=life,
+        decision=response_decision,
+        settings=state.settings,
+    )
+    policy_hint = build_policy_hint(
+        response_decision,
+        reply_delay_seconds=reply_delay_seconds,
+        reply_delay_reason=life.reply_delay_reason,
+    )
 
     # silence 短路
     if not response_decision.should_reply:
@@ -327,10 +336,6 @@ async def chat_completions(
                 conversation_id=req.conversation_id,
                 user_text=current_user_text,
                 image_shas=image_shas,
-                initial_delay_seconds=max(
-                    life.reply_delay_seconds,
-                    response_decision.reply_delay_seconds,
-                ),
                 trace_id=trace_id,
                 policy=policy_hint,
                 decision=response_decision,
@@ -338,10 +343,6 @@ async def chat_completions(
             media_type="text/event-stream",
         )
 
-    await _sleep_for_life_delay(
-        max(life.reply_delay_seconds, response_decision.reply_delay_seconds),
-        state,
-    )
     _llm_start = time.perf_counter()
     try:
         raw_assistant_text = await state.llm.complete_chat(
@@ -386,7 +387,8 @@ async def chat_completions(
             retried = False
             if state.settings.sticker_reject_retry:
                 hint = build_sticker_retry_hint(stripped, valid_names)
-                retry_messages = list(messages) + [
+                retry_messages = [
+                    *messages,
                     {"role": "system", "content": hint},
                 ]
                 try:
@@ -504,8 +506,13 @@ async def _pseudo_stream_chunks(
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
     created = int(time.time())
 
-    def _chunk(delta: dict[str, Any], finish: str | None = None) -> dict[str, Any]:
-        return {
+    def _chunk(
+        delta: dict[str, Any],
+        finish: str | None = None,
+        *,
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
             "id": completion_id,
             "object": "chat.completion.chunk",
             "created": created,
@@ -515,8 +522,13 @@ async def _pseudo_stream_chunks(
                 {"index": 0, "delta": delta, "finish_reason": finish},
             ],
         }
+        if extra:
+            payload.update(extra)
+        return payload
 
-    yield _format_sse(_chunk({"role": "assistant"}))
+    yield _format_sse(
+        _chunk({"role": "assistant"}, extra={"policy": policy.model_dump()})
+    )
     if assistant_text:
         yield _format_sse(_chunk({"content": assistant_text}))
     final = _chunk({}, finish=finish_reason)
@@ -534,7 +546,6 @@ async def _stream_response(
     conversation_id: str | None,
     user_text: str,
     image_shas: list[str],
-    initial_delay_seconds: int,
     trace_id: str,
     policy: PolicyHint,
     decision: ResponseDecision,
@@ -571,8 +582,9 @@ async def _stream_response(
             payload.update(extra)
         return payload
 
-    yield _format_sse(_chunk_dict({"role": "assistant"}))
-    await _sleep_for_life_delay(initial_delay_seconds, state)
+    yield _format_sse(
+        _chunk_dict({"role": "assistant"}, extra={"policy": policy.model_dump()})
+    )
 
     _stream_start = time.perf_counter()
     try:
@@ -685,8 +697,13 @@ async def _stream_silenced(
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
     created = int(time.time())
 
-    def _chunk(delta: dict[str, Any], finish: str | None = None) -> dict[str, Any]:
-        return {
+    def _chunk(
+        delta: dict[str, Any],
+        finish: str | None = None,
+        *,
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
             "id": completion_id,
             "object": "chat.completion.chunk",
             "created": created,
@@ -700,8 +717,13 @@ async def _stream_silenced(
                 }
             ],
         }
+        if extra:
+            payload.update(extra)
+        return payload
 
-    yield _format_sse(_chunk({"role": "assistant"}))
+    yield _format_sse(
+        _chunk({"role": "assistant"}, extra={"policy": policy.model_dump()})
+    )
     sentinel = settings.silence_response_sentinel
     if sentinel:
         yield _format_sse(_chunk({"content": sentinel}))
@@ -761,12 +783,6 @@ def _record_web_fetch_skipped(
         0.0,
         detail=f"reason={reason},trace={trace_id},url_count={len(urls)}",
     )
-
-
-async def _sleep_for_life_delay(seconds: int, state: AppState) -> None:
-    bounded = max(0, min(seconds, state.settings.life_max_reply_delay_seconds))
-    if bounded:
-        await asyncio.sleep(bounded)
 
 
 _unused: tuple[type, ...] = (ChatMessage, ImagePart, ImageUrlPayload, TextPart)

@@ -1,5 +1,10 @@
 import { authHeaders, jsonRequest, streamUrl } from '@/api/client'
-import type { ChatCompletionRequest, ProactiveRequest, ProactiveResponse } from '@/types/api'
+import type {
+  ChatCompletionRequest,
+  PolicyHint,
+  ProactiveRequest,
+  ProactiveResponse,
+} from '@/types/api'
 
 /**
  * 与后端 /v1/chat/completions 建立 SSE 流式连接。
@@ -11,6 +16,10 @@ import type { ChatCompletionRequest, ProactiveRequest, ProactiveResponse } from 
 export interface StreamHandlers {
   onChunk: (text: string) => void
   onTrace?: (traceId: string) => void
+  onPolicy?: (policy: PolicyHint) => void
+  /** AI 本轮选择沉默（finish_reason='silenced' 或 should_reply=false）。
+   *  调用方应清空已打字内容、用灰色占位渲染气泡。 */
+  onSilenced?: () => void
   onDone?: () => void
   onError?: (err: Error) => void
 }
@@ -111,7 +120,20 @@ function parseEvent(raw: string, handlers: StreamHandlers): void {
         return
       }
       if (typeof parsed?.trace_id === 'string') handlers.onTrace?.(parsed.trace_id)
-      const delta = parsed?.choices?.[0]?.delta
+      if (isPolicyHint(parsed?.policy)) {
+        handlers.onPolicy?.(parsed.policy)
+        // policy 阶段就能判沉默：should_reply=false 表示规则层已经决定不回。
+        // 提前触发可避免后续 sentinel chunk 短暂上屏。
+        if (parsed.policy.should_reply === false) handlers.onSilenced?.()
+      }
+      const choice = parsed?.choices?.[0]
+      // finish_reason 由后端 _stream_silenced / AI 自主沉默时打到 'silenced'。
+      // 注意：不依赖 sentinel 字符串本身（后端可配置），只看 finish_reason。
+      if (choice?.finish_reason === 'silenced') {
+        handlers.onSilenced?.()
+        continue
+      }
+      const delta = choice?.delta
       const content = delta?.content
       if (typeof content === 'string' && content) {
         handlers.onChunk(content)
@@ -121,4 +143,10 @@ function parseEvent(raw: string, handlers: StreamHandlers): void {
       continue
     }
   }
+}
+
+function isPolicyHint(value: unknown): value is PolicyHint {
+  if (!value || typeof value !== 'object') return false
+  const obj = value as Record<string, unknown>
+  return typeof obj.should_reply === 'boolean' && typeof obj.reply_mode === 'string'
 }

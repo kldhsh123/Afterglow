@@ -109,6 +109,7 @@ class PolicyHint(BaseModel):
     放在 response 顶层让调用方（IM bot / 前端 / 自动化脚本）能识别：
     - AI 这一轮是否主动选择不回复（`should_reply=false` + `finish_reason="silenced"`）
     - 回复时是什么模式（撒娇 / 认真 / 转移 / 接梗 …）
+    - 客户端应等待多久再展示回复内容（`reply_delay_seconds`）
 
     OpenAI 官方 SDK 不会读取这个字段，但也不会因为它存在而报错。
     """
@@ -118,6 +119,8 @@ class PolicyHint(BaseModel):
     user_state: str
     risk_level: str
     reason: str = Field(default="", description="人类可读的简短原因")
+    reply_delay_seconds: int = Field(default=0, description="建议客户端延迟展示回复的秒数")
+    reply_delay_reason: str = Field(default="", description="延迟原因短语；无延迟时为空")
 
 
 class Choice(BaseModel):

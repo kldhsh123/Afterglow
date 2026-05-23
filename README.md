@@ -1,42 +1,55 @@
-# Afterglow（续温）
+<div align="center">
+
+# 🌅 Afterglow（续温）
 
 > 把曾经对你好的话，续成往后的陪伴。
 
-**Afterglow** 是一个本地运行的"AI 朋友"系统：把你和朋友（或恋人、亲人、同事）的真实历史聊天记录导入向量库，配合 LLM 用 RAG 让对方"继续陪你说话"——语气、用词、节奏都贴近真实的他/她。
-当你想念某个不太能联系的人，可以在这里再读到他熟悉的语气。
+一个本地运行的「AI 朋友」系统。  
+导入真实历史聊天记录，通过 RAG + Persona + OpenAI 兼容 API，让熟悉的人以接近原本的语气继续陪你说话。
 
-项目主页：<https://afterglow.kldhsh.top/>
+</div>
+
+[![Website](https://img.shields.io/badge/官网-afterglow.kldhsh.top-8B5CF6?style=flat-square)](https://afterglow.kldhsh.top/) [![License](https://img.shields.io/github/license/kldhsh123/Afterglow?style=flat-square)](https://github.com/kldhsh123/Afterglow/blob/main/LICENSE) [![Last Commit](https://img.shields.io/github/last-commit/kldhsh123/Afterglow?style=flat-square)](https://github.com/kldhsh123/Afterglow/commits/main) [![Release Name](https://img.shields.io/badge/dynamic/json?style=flat-square&label=Release&query=$.name&url=https%3A%2F%2Fapi.github.com%2Frepos%2Fkldhsh123%2FAfterglow%2Freleases%2Flatest&logo=github)](https://github.com/kldhsh123/Afterglow/releases/latest)
 
 ---
 
-## 项目定位
+## 🔗 相关项目
+
+- [Afterglow-QQBot](https://github.com/kldhsh123/Afterglow-QQBot) — Afterglow 的 QQBot 适配器
+
+---
+
+## 🎯 项目定位
 
 - **项目主体在 `backend/`**：核心能力都在后端，包括导入、清洗、向量化、LanceDB 存储、检索融合、persona 生成、生活状态、联网检索、网页读取、OpenAI 兼容 API 和调试诊断。
 - **`frontend/` 主要用于本地测试和调试体验**：它提供聊天界面、设置页、记忆溯源和诊断入口，方便验证后端能力；第三方程序接入时应优先调用后端 API，而不是依赖前端状态。
 
-## 致谢
+## 🙏 致谢
 
 感谢 [LINUX DO](https://linux.do) 各位佬友对项目实现提出的建议，Afterglow 的很多实现细节都来自这些反馈的反复打磨。
 
 Issue 模板参考自一个我已经忘记来源的开源项目；这个模板我认为非常好用。如果你知道原始来源，欢迎联系我，我会补上准确来源和鸣谢。
 
-## 交流与支持
+## 💬 交流与支持
 
 - 项目交流 QQ 群：`330316577`
+- 赞助支持：<https://afdian.com/a/kldhsh123>
 - 我们的长期合作伙伴 [二次元论坛](https://www.ecylt.top/) 的 [二次元 API 中转站](https://api.223387.xyz/) 提供免费的 Embedding 模型 `Qwen3-Embedding-8B`。对于项目的支持，我们非常感谢。
 
 如果需要使用该 Embedding 模型，请在 `backend/.env` 中修改以下配置，并按服务说明填写对应的 `EMBEDDING_API_URL` / `EMBEDDING_API_KEY`：
 
 ```env
 EMBEDDING_MODEL=Qwen3-Embedding-8B
-EMBEDDING_DIM=1024
+EMBEDDING_DIM=4096
 EMBEDDING_BATCH_SIZE=25
+EMBEDDING_MAX_REQUESTS_PER_MINUTE=100
 ```
 
 ---
 
 ## 🔒 数据隐私（必读）
 
+- **请先取得对方同意**：聊天记录高度敏感，包含双方共同产生的私人内容。导出聊天记录、导入本项目、向模型或第三方 API 发送相关文本前，请确认你有权这样做，并尽量取得聊天对方的明确同意。
 - **本地持久化**：聊天数据、向量索引、persona 卡片、生活状态和图片缓存都默认保存在你机器上的 `backend/.data/`，仓库不会自带任何远程数据上传逻辑。
 - **不是默认零外发**：如果你把模型配置成云端 API，相关文本会发送给对应服务。要做到完全离线，需要把主聊天模型、Embedding 模型、打标小模型、生活状态小模型、视觉模型都指向本地服务，并关闭联网搜索 / 网页读取。
 - **可能外发的数据**：
@@ -136,7 +149,7 @@ mindmap
 - **AI 回复长期累积可控**：默认 `AI_GENERATED_LONG_TERM_ENABLED=false`，AI 回复只在同一会话内用于连续性；如果希望 AI 分身随着长期互动形成自己的变化轨迹，可以开启该项，让 `ai_generated` 跨会话参与低权重语义检索。
 - **持续生长记忆**：每轮对话都异步回写 `live_messages`，向量库不再是一次性快照。
 - **本轮互动决策层**：生成回复前先判断本轮该认真、安抚、撒娇、接梗、转移、沉默、发图还是表情；也会在用户烦躁、崩溃、失眠、关系压力等场景下禁止继续刺激用户。规则引擎兜底安全场景；如果开启 `RESPONSE_POLICY_MODEL_ENABLED`，会再叫一次小模型做有界微调（不能降级 risk、不能撤销规则给的安全/沉默/要图/要表情判断）。
-- **沉默响应**：决策层判断本轮不应回复时直接短路，不调主模型，返回 `finish_reason="silenced"` + sentinel content + `policy.should_reply=false`，让 IM bot / 调度器能跳过本次推送。严格 OpenAI SDK 用户可改 `SILENCE_FINISH_REASON=stop` 退回标准。
+- **沉默与延迟响应**：决策层判断本轮不应回复时直接短路，不调主模型，返回 `finish_reason="silenced"` + sentinel content + `policy.should_reply=false`；生活状态建议的拟人化延迟放在 `policy.reply_delay_seconds`，由客户端决定何时展示。
 - **真实时间 + 生活状态**：每次模型调用都会收到当前时区下的真实时间；生活时间线由可配置小模型维护，回答"在干嘛/吃了吗/睡没睡"时优先使用当前状态。
 - **可选联网**：后端默认支持 Tavily，也可切到 SearXNG；在明确需要公开实时信息时把网页摘要注入 prompt，默认关闭。
 - **零微调**：完全靠 RAG + Prompt Engineering + Persona 卡片，不动模型权重。
@@ -203,7 +216,7 @@ cp .env.example .env
   - `FRIEND_*` 永远是**你想让 AI 模仿的那个人**，不是你自己
   - **跨平台 / 多账号**：同一个人有多个 UID（QQ + 微信 / 主号 + 小号），直接在 `SELF_UID` / `FRIEND_UID` 里**用逗号分隔**列上所有 UID，导入时会被视为同一身份。例：`FRIEND_UID=u_qq_friend,wxid_friend_main,wxid_friend_alt`
 - **主聊天模型** —— `OPENAI_BASE_URL` / `OPENAI_API_KEY` / `CHAT_MODEL`
-- **Embedding 模型** —— `EMBEDDING_API_URL` / `EMBEDDING_API_KEY` / `EMBEDDING_MODEL` / `EMBEDDING_DIM`
+- **Embedding 模型** —— `EMBEDDING_API_URL` / `EMBEDDING_API_KEY` / `EMBEDDING_MODEL` / `EMBEDDING_DIM` / `EMBEDDING_BATCH_SIZE` / `EMBEDDING_MAX_CONCURRENCY` / `EMBEDDING_MAX_REQUESTS_PER_MINUTE`
 - **本地访问密钥** —— `XUWEN_API_KEY`（长随机串；调用方在 Header 带 `Authorization: Bearer <key>`）
 
 > **⚠️ 关键提醒（容易踩的坑）**
@@ -398,3 +411,28 @@ pnpm build                      # 类型检查 + 生产构建
 ## 📜 License
 
 AGPL-3.0-or-later
+
+---
+
+<div align="center">
+
+### ⭐ Star History
+
+<picture>
+  <source
+    media="(prefers-color-scheme: dark)"
+    srcset="https://api.star-history.com/svg?repos=kldhsh123/Afterglow&type=Date&theme=dark"
+  />
+  <source
+    media="(prefers-color-scheme: light)"
+    srcset="https://api.star-history.com/svg?repos=kldhsh123/Afterglow&type=Date"
+  />
+  <img
+    alt="Star History Chart"
+    src="https://api.star-history.com/svg?repos=kldhsh123/Afterglow&type=Date"
+  />
+</picture>
+
+<sub>如果 Afterglow 帮你留住了一些温度，欢迎点一颗 ⭐。</sub>
+
+</div>

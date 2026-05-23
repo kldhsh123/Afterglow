@@ -25,6 +25,7 @@ from xuwen.chat_api.chat_pipeline import (
     available_sticker_names,
     build_policy_hint,
     build_sticker_retry_hint,
+    effective_reply_delay_seconds,
     effective_silence_sentinel,
     extract_and_apply_life_marker,
     fallback_for_rejected_sticker,
@@ -190,7 +191,16 @@ async def responses(
             0.0,
             detail=f"trace={trace_id},{decision.metric_detail()}",
         )
-    policy_hint = build_policy_hint(decision)
+    reply_delay_seconds = effective_reply_delay_seconds(
+        life=life,
+        decision=decision,
+        settings=state.settings,
+    )
+    policy_hint = build_policy_hint(
+        decision,
+        reply_delay_seconds=reply_delay_seconds,
+        reply_delay_reason=life.reply_delay_reason,
+    )
     response_id = _new_response_id()
 
     # silence 短路
@@ -306,8 +316,6 @@ async def responses(
         max_tokens=req.max_output_tokens,
     )
 
-    initial_delay_seconds = max(life.reply_delay_seconds, decision.reply_delay_seconds)
-
     if req.stream and state.settings.response_streaming_enabled:
         return StreamingResponse(
             _stream_response(
@@ -319,7 +327,6 @@ async def responses(
                 conversation_id=conversation_id,
                 user_text=current_user_text,
                 image_shas=image_shas,
-                initial_delay_seconds=initial_delay_seconds,
                 trace_id=trace_id,
                 policy=policy_hint,
                 previous_response_id=req.previous_response_id,
@@ -328,11 +335,6 @@ async def responses(
             media_type="text/event-stream",
         )
 
-    if initial_delay_seconds > 0:
-        import asyncio
-        await asyncio.sleep(
-            min(initial_delay_seconds, state.settings.life_max_reply_delay_seconds)
-        )
     _llm_start = time.perf_counter()
     try:
         raw_assistant_text = await state.llm.complete_chat(
@@ -374,7 +376,8 @@ async def responses(
             retried = False
             if state.settings.sticker_reject_retry:
                 hint = build_sticker_retry_hint(stripped, valid_names)
-                retry_messages = list(messages) + [
+                retry_messages = [
+                    *messages,
                     {"role": "system", "content": hint},
                 ]
                 try:
@@ -768,15 +771,12 @@ async def _stream_response(
     conversation_id: str | None,
     user_text: str,
     image_shas: list[str],
-    initial_delay_seconds: int,
     trace_id: str,
     policy: PolicyHint,
     previous_response_id: str | None,
     decision: ResponseDecision,
 ) -> AsyncIterator[bytes]:
     """正常流式：把主模型 delta 翻译成 Responses 事件序列。"""
-    import asyncio
-
     created_at = int(time.time())
     message_id = _new_message_id()
     buffer: list[str] = []
@@ -819,11 +819,6 @@ async def _stream_response(
             "part": content_part,
         },
     )
-
-    if initial_delay_seconds > 0:
-        await asyncio.sleep(
-            min(initial_delay_seconds, state.settings.life_max_reply_delay_seconds)
-        )
 
     _stream_start = time.perf_counter()
     try:

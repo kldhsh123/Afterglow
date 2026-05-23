@@ -42,7 +42,9 @@ OpenAI 兼容聊天接口，也是第三方程序最应该接入的主接口。
 > 不管你传什么字符串，后端都会用 `.env` 配的模型。响应体里的 `model` 字段会返回实际使用的模型名。
 
 > **关于 `policy` 字段：** 响应体顶层附带非 OpenAI 字段 `policy`（含 `should_reply` / `reply_mode` /
-> `user_state` / `risk_level` / `reason`），让调用方识别本轮决策。OpenAI 官方 SDK 会忽略它，不影响兼容性。
+> `user_state` / `risk_level` / `reason` / `reply_delay_seconds` / `reply_delay_reason`），让调用方识别本轮决策。
+> `reply_delay_seconds` 是建议客户端延迟展示回复内容的秒数；后端不再为了拟人化延迟阻塞请求。
+> OpenAI 官方 SDK 会忽略它，不影响兼容性。流式 chat 首个 chunk 也会带 `policy`，方便客户端在内容到达前先拿到延迟。
 > 当 AI 主动选择不回复时（用户说"别说话"、决策层认为不应继续刺激用户等场景），
 > 响应会带 `finish_reason="silenced"` + `content="[silent]"`（sentinel 可通过 `SILENCE_RESPONSE_SENTINEL` 配置）+ `policy.should_reply=false`。
 > 严格 enum 校验的 OpenAI SDK 可在 `.env` 里把 `SILENCE_FINISH_REASON=stop` 退回标准协议。
@@ -84,7 +86,16 @@ OpenAI 兼容聊天接口，也是第三方程序最应该接入的主接口。
     }
   ],
   "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-  "trace_id": "..."
+  "trace_id": "...",
+  "policy": {
+    "should_reply": true,
+    "reply_mode": "calm",
+    "user_state": "normal",
+    "risk_level": "low",
+    "reason": "按真人历史风格自然短回。",
+    "reply_delay_seconds": 0,
+    "reply_delay_reason": ""
+  }
 }
 ```
 
@@ -218,7 +229,17 @@ event: response.created → event: response.in_progress
     "recent_timeline_summary": "..."
   },
   "relationship_memory": "...",
-  "trace_id": "..."
+  "trace_id": "...",
+  "policy": {
+    "should_reply": true,
+    "reply_mode": "calm",
+    "user_state": "normal",
+    "risk_level": "low",
+    "reason": "按真人历史风格自然短回。",
+    "reply_delay_seconds": 0,
+    "reply_delay_reason": ""
+  },
+  "silenced": false
 }
 ```
 
@@ -519,7 +540,7 @@ curl -F "file=@notes.pdf" \
 |---|---|---|
 | `app_name` / `app_slogan` / `app_timezone` | string | 应用元数据 |
 | `self_name` / `friend_name` / `relationship_type` / `persona_template` | string | 身份与关系 |
-| `chat_model` / `embedding_model` / `embedding_dim` / `embedding_input_mode` | mixed | 模型配置 |
+| `chat_model` / `embedding_model` / `embedding_dim` / `embedding_input_mode` / `embedding_batch_size` / `embedding_max_concurrency` / `embedding_max_requests_per_minute` | mixed | 模型配置 |
 | `session_gap_minutes` / `window_size` / `window_overlap` / `final_context_k` / `rrf_k` / `recency_half_life_days` | int/float | 切分与检索参数 |
 | `writeback_enabled` / `writeback_batch_turns` / `writeback_vectorize` | bool/int | 回写策略 |
 | `live_top_k` / `ai_generated_source_weight` / `ai_generated_long_term_enabled` | mixed | live 检索与来源权重 |

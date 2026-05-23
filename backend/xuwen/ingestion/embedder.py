@@ -6,6 +6,7 @@
 - 批处理（默认 batch_size=64）
 - 429 / 5xx 指数退避（tenacity）
 - 并发限流（asyncio.Semaphore）
+- 请求速率限制（可选，按 HTTP 请求数 / 分钟）
 - 输出维度强校验
 """
 
@@ -14,6 +15,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
+from collections import deque
 from collections.abc import Sequence
 from typing import Any
 
@@ -52,6 +55,38 @@ class _RetryableEmbeddingError(EmbeddingError):
     """
 
 
+class _AsyncSlidingWindowRateLimiter:
+    """简单滑动窗口限速器。"""
+
+    def __init__(self, max_requests: int, *, window_seconds: float = 60.0) -> None:
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self._timestamps: deque[float] = deque()
+        self._lock = asyncio.Lock()
+
+    async def acquire(self) -> None:
+        """等待直到当前窗口允许发起下一次 HTTP 请求。"""
+        if self.max_requests <= 0:
+            return
+
+        while True:
+            async with self._lock:
+                now = time.monotonic()
+                while (
+                    self._timestamps
+                    and now - self._timestamps[0] >= self.window_seconds
+                ):
+                    self._timestamps.popleft()
+
+                if len(self._timestamps) < self.max_requests:
+                    self._timestamps.append(now)
+                    return
+
+                wait_seconds = self.window_seconds - (now - self._timestamps[0])
+
+            await asyncio.sleep(max(wait_seconds, 0.0))
+
+
 class EmbeddingClient:
     """通用 Embedding API 客户端。
 
@@ -64,7 +99,7 @@ class EmbeddingClient:
         settings: Settings,
         *,
         client: httpx.AsyncClient | None = None,
-        concurrency: int = 4,
+        concurrency: int | None = None,
     ) -> None:
         self.settings = settings
         self._owned_client = client is None
@@ -76,7 +111,15 @@ class EmbeddingClient:
             "Authorization": f"Bearer {settings.embedding_api_key.get_secret_value()}",
             "Content-Type": "application/json",
         }
-        self._semaphore = asyncio.Semaphore(concurrency)
+        max_concurrency = (
+            concurrency
+            if concurrency is not None
+            else settings.embedding_max_concurrency
+        )
+        self._semaphore = asyncio.Semaphore(max(1, max_concurrency))
+        self._rate_limiter = _AsyncSlidingWindowRateLimiter(
+            settings.embedding_max_requests_per_minute,
+        )
 
     async def aclose(self) -> None:
         if self._owned_client:
@@ -187,8 +230,14 @@ class EmbeddingClient:
         }
         if self.settings.embedding_include_encoding_format:
             payload["encoding_format"] = "float"
+        if self.settings.embedding_send_dimensions:
+            # 显式告诉上游输出维度。支持 MRL 的服务（OpenAI text-embedding-3 /
+            # DashScope text-embedding-v3 / Qwen3-Embedding 网关）不发这个字段
+            # 会用上游默认值，常被降到 1024，导致维度校验失败。
+            payload["dimensions"] = self.settings.embedding_dim
 
         try:
+            await self._rate_limiter.acquire()
             resp = await self._client.post(self._url, headers=self._headers, json=payload)
         except httpx.HTTPError as e:
             # 网络错误：不带响应正文，避免敏感信息泄露

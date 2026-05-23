@@ -138,6 +138,10 @@ class Settings(BaseSettings):
     life_update_interval_minutes: int = 60
     # 生活状态可建议延迟回复；这里限制实际 sleep 上限，避免请求被模型拖太久。
     life_max_reply_delay_seconds: int = 45
+    # availability=sleeping 时的最小回复延迟兜底。
+    # 即使模型忘记给延迟，sleeping 也至少这个秒数（更像被叫醒迷糊回的节奏）。
+    # 设为 0 关闭兜底。
+    life_sleeping_min_reply_delay_seconds: int = 8
     # 主模型在回复中输出 <life-update>JSON</life-update> 标记块时，
     # 后端解析后直接 patch life 状态（零额外 API 调用），并从对外回复中剥离标记。
     # 关闭时仍兜底过滤标记块，避免前端看到。
@@ -193,9 +197,19 @@ class Settings(BaseSettings):
     #         single = 单条模式（input 是 string，一次只能一条），兼容 Gitee AI 等
     embedding_input_mode: Literal["array", "single"] = "array"
     # 单次请求最多包含的文本数；single 模式下强制为 1
-    embedding_batch_size: int = 64
+    embedding_batch_size: int = 25
+    # Embedding API 最大并发请求数。只限制同时在飞的 HTTP 请求，不等价于每分钟限速。
+    embedding_max_concurrency: int = 4
+    # Embedding API 每分钟最多发起多少个 HTTP 请求。0 = 不主动限速。
+    embedding_max_requests_per_minute: int = 0
     # 是否在请求体中带 encoding_format="float"，OpenAI 原生支持但部分网关会拒绝
-    embedding_include_encoding_format: bool = False
+    embedding_include_encoding_format: bool = True
+    # 是否在请求体中带 dimensions=EMBEDDING_DIM，告诉上游显式输出指定维度。
+    # 支持 MRL 的服务（OpenAI text-embedding-3 / DashScope text-embedding-v3 /
+    # Qwen3-Embedding 兼容网关等）必须发这个字段，否则会用上游默认（常被降到 1024）。
+    # 极少数老网关不识别该字段会 400；遇到这种情况关掉本开关并把 EMBEDDING_DIM
+    # 设成上游默认值即可。
+    embedding_send_dimensions: bool = True
     # 429 / 5xx / 网络错误的重试次数（含首次）。默认 8 = 首次 + 7 次重试
     embedding_retry_attempts: int = 8
     # 重试单次等待上限（秒）。指数退避从 1s 起步，翻倍但不超过此值
@@ -333,6 +347,20 @@ class Settings(BaseSettings):
     def _check_dim(cls, v: int) -> int:
         if v <= 0:
             raise ValueError("embedding_dim 必须为正整数")
+        return v
+
+    @field_validator("embedding_max_concurrency")
+    @classmethod
+    def _check_embedding_concurrency(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("embedding_max_concurrency 必须为正整数")
+        return v
+
+    @field_validator("embedding_max_requests_per_minute")
+    @classmethod
+    def _check_embedding_rate_limit(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("embedding_max_requests_per_minute 必须 >= 0")
         return v
 
     @field_validator("label_max_concurrency")

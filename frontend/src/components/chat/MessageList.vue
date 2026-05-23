@@ -1,21 +1,23 @@
 <script setup lang="ts">
-// 消息列表 + 自动滚动 + "已有新消息"按钮
+// 消息列表 + 自动滚动；"到底"按钮统一放在 HomeView 工具栏，本组件不再渲染浮动按钮
 import { computed, onMounted, ref, watch, nextTick } from 'vue'
 import { useChatStore } from '@/stores/chat'
 import { useAutoScroll } from '@/composables/useAutoScroll'
 import MessageBubble from './MessageBubble.vue'
 import TimeSeparator from './TimeSeparator.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
-import { ChevronDown } from 'lucide-vue-next'
 import type { ChatMessage } from '@/types/api'
 
 const chat = useChatStore()
-const { attach, schedule, jumpToBottom, userPaused } = useAutoScroll()
+const { attach, schedule, jumpToBottom } = useAutoScroll()
 const containerRef = ref<HTMLElement | null>(null)
 
 const emit = defineEmits<{ (e: 'pick-sample', text: string): void }>()
 
 const hasMessages = computed(() => chat.messages.length > 0)
+
+// 暴露给 HomeView 工具栏的"到底"按钮使用
+defineExpose({ jumpToBottom })
 
 // 判断是否要在消息之间插入时间分隔（间隔 > 30 分钟）
 function shouldShowSeparator(prev: ChatMessage | undefined, curr: ChatMessage): boolean {
@@ -57,18 +59,5 @@ watch(
         </template>
       </div>
     </div>
-
-    <button
-      v-if="userPaused && hasMessages"
-      class="absolute bottom-4 right-4 sm:right-8 px-3 py-1.5 rounded-full
-             bg-paper-soft dark:bg-night-bg-soft shadow-letter
-             border border-ink/5 dark:border-night-text/10
-             text-sm text-ink-soft dark:text-night-text-soft
-             flex items-center gap-1 hover:text-ink dark:hover:text-night-text"
-      @click="jumpToBottom"
-    >
-      <ChevronDown :size="16" />
-      回到底部
-    </button>
   </div>
 </template>

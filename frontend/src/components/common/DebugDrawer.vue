@@ -4,6 +4,7 @@ import { requestProactiveTopic } from '@/api/chat'
 import { getDebugConfig, getDebugStats } from '@/api/extra'
 import { searchMemory } from '@/api/memory'
 import { useChatStore } from '@/stores/chat'
+import { useSettingsStore } from '@/stores/settings'
 import type { MemorySearchResponse, MemorySource, ProactiveResponse } from '@/types/api'
 import { Activity, Copy, Database, MessageSquareText, RefreshCw, Search, X } from 'lucide-vue-next'
 
@@ -11,6 +12,7 @@ const props = defineProps<{ open: boolean }>()
 const emit = defineEmits<{ close: [] }>()
 
 const chat = useChatStore()
+const settings = useSettingsStore()
 
 const stats = ref<Record<string, unknown> | null>(null)
 const config = ref<Record<string, unknown> | null>(null)
@@ -429,6 +431,40 @@ const ModelChainList = defineComponent({
             </div>
             <div class="text-xs text-ink-soft dark:text-night-text-soft">
               state: {{ life.state_file || '-' }} · plan_by_model: {{ life.plan_decided_by_model ? 'yes' : 'no' }}
+            </div>
+            <div class="debug-metric space-y-2">
+              <div class="flex items-center justify-between gap-3">
+                <div>
+                  <div class="font-medium">本地强制回复延迟（调试）</div>
+                  <div class="text-xs text-ink-soft dark:text-night-text-soft">
+                    勾选后忽略后端 reply_delay_seconds，用下方秒数强制延迟；仅本地生效，不改后端决策。
+                  </div>
+                </div>
+                <label class="inline-flex items-center gap-2 text-xs whitespace-nowrap">
+                  <input
+                    type="checkbox"
+                    :checked="settings.debugForceReplyDelay"
+                    @change="(e) => (settings.debugForceReplyDelay = (e.target as HTMLInputElement).checked)"
+                  />
+                  启用覆盖
+                </label>
+              </div>
+              <div class="flex items-center gap-2">
+                <input
+                  type="number"
+                  min="0"
+                  max="120"
+                  step="1"
+                  class="debug-input w-28"
+                  :value="settings.debugReplyDelaySeconds"
+                  :disabled="!settings.debugForceReplyDelay"
+                  @input="(e) => {
+                    const v = Number((e.target as HTMLInputElement).value)
+                    settings.debugReplyDelaySeconds = Number.isFinite(v) ? Math.max(0, Math.min(120, v)) : 0
+                  }"
+                />
+                <span class="text-xs text-ink-soft dark:text-night-text-soft">秒（0-120，前端硬上限 120s）</span>
+              </div>
             </div>
             <details class="text-xs">
               <summary class="cursor-pointer text-ink-soft dark:text-night-text-soft">本轮/上一轮模型决策 current</summary>

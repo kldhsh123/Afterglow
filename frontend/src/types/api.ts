@@ -56,6 +56,8 @@ export interface ChatMessage {
   images?: string[]
   /** 后端 request id，用于日志追踪 */
   traceId?: string
+  /** AI 本轮选择沉默（不回复）；前端用灰色占位呈现 */
+  silenced?: boolean
 }
 
 export interface MemorySource {
@@ -101,11 +103,23 @@ export interface ChatCompletionRequest {
   conversation_id?: string
 }
 
+export interface PolicyHint {
+  should_reply: boolean
+  reply_mode: string
+  user_state: string
+  risk_level: string
+  reason: string
+  reply_delay_seconds: number
+  reply_delay_reason: string
+}
+
 export interface ProactiveResponse {
   message: string
   life: Record<string, string | number>
   relationship_memory: string
   trace_id?: string
+  policy?: PolicyHint | null
+  silenced?: boolean
 }
 
 export interface ProactiveRequest {
