@@ -9,7 +9,7 @@
 
 </div>
 
-[![Website](https://img.shields.io/badge/官网-afterglow.kldhsh.top-8B5CF6?style=flat-square)](https://afterglow.kldhsh.top/) [![License](https://img.shields.io/github/license/kldhsh123/Afterglow?style=flat-square)](https://github.com/kldhsh123/Afterglow/blob/main/LICENSE) [![Last Commit](https://img.shields.io/github/last-commit/kldhsh123/Afterglow?style=flat-square)](https://github.com/kldhsh123/Afterglow/commits/main) [![Release Name](https://img.shields.io/badge/dynamic/json?style=flat-square&label=Release&query=$.name&url=https%3A%2F%2Fapi.github.com%2Frepos%2Fkldhsh123%2FAfterglow%2Freleases%2Flatest&logo=github)](https://github.com/kldhsh123/Afterglow/releases/latest)
+[![聊天记录支持 QQ / 微信](https://img.shields.io/static/v1?label=聊天记录支持&message=QQ%20%2F%20微信&color=07C160&style=flat-square)](#-功能特性) [![Website](https://img.shields.io/badge/官网-afterglow.kldhsh.top-8B5CF6?style=flat-square)](https://afterglow.kldhsh.top/) [![License](https://img.shields.io/github/license/kldhsh123/Afterglow?style=flat-square)](https://github.com/kldhsh123/Afterglow/blob/main/LICENSE) [![Last Commit](https://img.shields.io/github/last-commit/kldhsh123/Afterglow?style=flat-square)](https://github.com/kldhsh123/Afterglow/commits/main) [![Release Name](https://img.shields.io/badge/dynamic/json?style=flat-square&label=Release&query=$.name&url=https%3A%2F%2Fapi.github.com%2Frepos%2Fkldhsh123%2FAfterglow%2Freleases%2Flatest&logo=github)](https://github.com/kldhsh123/Afterglow/releases/latest) 
 
 ---
 
