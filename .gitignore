@@ -34,3 +34,5 @@ dist/
 .DS_Store
 /backend/tests
 /website
+backend/.env copy
+/backend/.env-backups

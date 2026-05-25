@@ -1,0 +1,9 @@
+# 依赖与构建产物（构建产物在 ../xuwen/web_ui/static/，由 build 写入，但本目录不需要 ignore 它）
+node_modules
+.pnpm-store
+.cache
+dist
+*.log
+# TypeScript 增量编译缓存（build 时由 vue-tsc 生成，不应入库）
+tsconfig.tsbuildinfo
+*.tsbuildinfo

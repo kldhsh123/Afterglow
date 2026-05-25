@@ -154,4 +154,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     if resolved_settings.debug_endpoints_enabled:
         app.include_router(debug_route.router)
 
+    # 配置 WebUI（小白向导）：由 CONFIG_UI_ENABLED 开关挂载
+    # 走独立的鉴权 token 和 localhost-only 中间件，不影响主 API。
+    # 首次模式：检测到关键字段缺失时强制启用，让小白第一次也能进得去配置 UI。
+    from xuwen.web_ui.first_run import check_first_run
+
+    first_run = check_first_run(resolved_settings)
+    should_enable_config_ui = resolved_settings.config_ui_enabled or first_run.is_first_run
+
+    if should_enable_config_ui:
+        from xuwen.web_ui import create_config_app
+
+        config_app = create_config_app(
+            resolved_settings,
+            first_run=first_run,
+        )
+        app.mount(resolved_settings.config_ui_path_prefix, config_app)
+
     return app

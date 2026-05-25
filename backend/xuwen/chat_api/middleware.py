@@ -45,6 +45,19 @@ class ApiKeyGuard(BaseHTTPMiddleware):
         path = request.url.path
         if path in _OPEN_PATHS:
             return await call_next(request)
+        # 配置 UI 子应用有自己的独立鉴权（setup token + localhost-only），
+        # 主鉴权放行其前缀下的所有请求，避免双重拦截。
+        # 首次模式：即使 CONFIG_UI_ENABLED=false，关键字段缺失时也会自动挂载，所以这里同样放行。
+        from xuwen.web_ui.first_run import check_first_run
+
+        config_ui_active = (
+            self.settings.config_ui_enabled
+            or check_first_run(self.settings).is_first_run
+        )
+        if config_ui_active:
+            prefix = self.settings.config_ui_path_prefix.rstrip("/")
+            if path == prefix or path.startswith(prefix + "/"):
+                return await call_next(request)
         if api_key is None:
             if not self.settings.api_auth_required:
                 return await call_next(request)

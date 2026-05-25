@@ -35,6 +35,58 @@
 
 ## 快速开始
 
+有两种配置方式，**首次使用强烈推荐方式 A**（配置向导）。
+
+### 方式 A：配置向导（推荐）
+
+直接装依赖跑起来，**不需要先准备 `.env`**：
+
+```bash
+cd backend
+uv sync --extra dev
+uv run uvicorn xuwen.chat_api.app:create_app --factory --reload
+```
+
+后端启动时检测到关键配置不全（`SELF_UID` / `FRIEND_UID` / `OPENAI_API_KEY` / `EMBEDDING_API_KEY` / `XUWEN_API_KEY` 任一缺失），会**自动启用配置向导**，控制台打印：
+
+```
+========================================
+  检测到首次配置（缺少 ...）
+  已自动启用配置 UI（仅本次会话）
+
+  浏览器访问：http://127.0.0.1:8000/config/
+  访问 token（generated）：xxxxxxxxxxxx
+========================================
+```
+
+浏览器打开链接 + 粘 token，跟着 7 步走完（身份 → 关系 → 聊天 AI → 向量服务+打标 → 可选功能 → 导入聊天记录 → 设置 `XUWEN_API_KEY`）。向导自动完成 `.env` 写入、聊天记录导入、persona 卡片 + 作息画像生成。
+
+完成后 `Ctrl+C` 重启后端，向导自动关闭，进入正常聊天 API 服务模式。
+
+**单独跑配置 UI**（不启动主服务、不连 LanceDB，启动 < 1 秒）：
+
+```bash
+uv run python -m xuwen.web_ui            # 默认 127.0.0.1:8765
+uv run python -m xuwen.web_ui --port 9000
+```
+
+适合升级后改配置 / 临时改 key 的场景。
+
+如果想修改配置向导本身，源码在 `backend/web_ui_src/`，构建产物在 `backend/xuwen/web_ui/static/`：
+
+```bash
+cd backend/web_ui_src
+npm install
+npm run dev    # 开发模式 http://localhost:5174
+npm run build  # 重新生成 ../xuwen/web_ui/static/
+```
+
+构建产物随 git 提交，普通用户无需 Node.js。
+
+### 方式 B：手动配置 `.env` + CLI
+
+适合 Docker / CI / 完全脚本化的场景。
+
 ```bash
 # 1. 安装依赖（使用 uv）
 cd backend
@@ -78,7 +130,7 @@ cp .env.example .env
 #   LABEL_API_KEY=你的智谱或其它 OpenAI 兼容 key
 #   LABEL_MODEL=glm-4-flash
 #   LABEL_BATCH_SIZE=8
-#   LABEL_MAX_CONCURRENCY=15         # 账号并发上限 20 时建议先设 15
+#   LABEL_MAX_CONCURRENCY=19       # 账号并发上限 20 时建议先设 19
 #   LABEL_REQUEST_INTERVAL_SECONDS=0 # 遇到 429 再调成 0.2 / 0.5 / 1
 # 首次导入会在向量入库后同步打标并显示进度；中断或限流失败后可用 cli label 续跑。
 
@@ -226,7 +278,13 @@ xuwen/
 ├── ingestion/   # JSON 解析、清洗、PII 脱敏、切分、chunking、向量化
 ├── memory/      # LanceDB schema、CRUD、检索融合、回写
 ├── persona/     # 离线人格画像、prompt 模板（Jinja2）、PII 规则
-└── chat_api/    # FastAPI 服务（OpenAI 兼容）
+├── companion/   # 生活时间线、关系记忆、本轮互动决策层
+├── chat_api/    # FastAPI 服务（OpenAI 兼容）
+└── web_ui/      # 配置向导子应用 + 构建后的静态资源（首次模式自动挂载）
+
+web_ui_src/      # 配置向导前端源码（Vue + Vite），构建到 xuwen/web_ui/static/
+scripts/         # 离线脚本：analyze_persona、eval_retrieval、import_history
+tests/           # 单元 + 集成测试
 ```
 
 ## 设计文档
@@ -280,7 +338,7 @@ uv run python -m xuwen.ingestion.cli label
 如果账号并发上限是 20，建议：
 
 ```env
-LABEL_MAX_CONCURRENCY=15
+LABEL_MAX_CONCURRENCY=19
 LABEL_REQUEST_INTERVAL_SECONDS=0
 ```
 

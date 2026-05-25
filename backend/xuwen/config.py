@@ -226,6 +226,22 @@ class Settings(BaseSettings):
     api_auth_required: bool = True
     xuwen_api_key: SecretStr | None = None
 
+    # ----- 配置 WebUI（小白向导）-----
+    # 默认关闭。开启后会在主进程下挂载 /config 子应用，提供小白向导式配置 UI：
+    # 读写 .env、连通性测试、上传聊天记录并触发导入、查看导入进度等。
+    # 配置 UI 自带一个 setup token（首次启动时未配置 XUWEN_API_KEY 也能用），
+    # 该 token 仅用于鉴权配置 UI 的请求，不能访问 /v1 / /memory 等业务路由。
+    config_ui_enabled: bool = False
+    config_ui_path_prefix: str = "/config"
+    # 仅允许来自本机的请求访问配置 UI（基于 request.client.host 判断）。
+    # 默认 true：避免把配置面板暴露到公网；要远程访问请走 SSH 隧道或反代加 IP 白名单。
+    config_ui_localhost_only: bool = True
+    # 配置 UI 的临时访问 token。留空时进程启动会生成一次性随机 token 打到 stdout。
+    # 通过 .env 显式配置后会优先使用该值，重启不变。
+    config_ui_setup_token: SecretStr | None = None
+    # 上传聊天记录的暂存目录
+    config_ui_uploads_dir: Path = Path(".data/uploads")
+
     # ----- PII 脱敏 -----
     enable_pii_redaction: bool = True
     pii_rules_path: Path | None = None
@@ -333,6 +349,53 @@ class Settings(BaseSettings):
     label_mood_vocab: str = ""
 
     # ===== 校验 =====
+
+    @field_validator("config_ui_path_prefix")
+    @classmethod
+    def _check_config_ui_prefix(cls, v: str) -> str:
+        """禁止根 / 空前缀，并禁止跟主 API 业务路由前缀冲突。
+
+        若允许 `/` 或 ``，主鉴权中间件里 `path.startswith(prefix + "/")` 会对
+        所有路径成立，整个 /v1 / /memory 等业务路由都会被当作配置 UI 放行，
+        相当于关闭主鉴权。
+
+        若允许 `/v1` 等业务前缀，主鉴权同样会放行 `/v1/chat/completions`
+        这些注册更早的业务路由，请求最终命中业务 endpoint 时已经跳过了
+        XUWEN_API_KEY 校验。
+        """
+        # 主 API 已经注册的路由前缀；CONFIG_UI 不能跟它们撞
+        reserved = {
+            "/v1",
+            "/memory",
+            "/healthz",
+            "/readyz",
+            "/info",
+            "/debug",
+            "/images",
+            "/setup",
+            "/documents",
+            "/stickers",
+            "/companion",
+        }
+        if not v or not isinstance(v, str):
+            raise ValueError("CONFIG_UI_PATH_PREFIX 不能为空")
+        stripped = v.strip()
+        if stripped in ("", "/"):
+            raise ValueError("CONFIG_UI_PATH_PREFIX 不能是 / 或空（会绕过主 API 鉴权）")
+        if not stripped.startswith("/"):
+            raise ValueError("CONFIG_UI_PATH_PREFIX 必须以 / 开头，例如 /config")
+        normalized = stripped.rstrip("/") or stripped
+        # 不仅拒绝精确匹配，还要拒绝 reserved 的子路径：
+        # 如 /v1/chat 仍会让 path.startswith("/v1/chat/") 放行 /v1/chat/completions
+        # 这一类已注册的业务路由，依旧能绕过 XUWEN_API_KEY 校验
+        for r in reserved:
+            if normalized == r or normalized.startswith(r + "/"):
+                raise ValueError(
+                    f"CONFIG_UI_PATH_PREFIX 不能落在主 API 业务前缀 {r} 下"
+                    f"（当前值 {normalized} 会让该前缀的业务路由绕过 XUWEN_API_KEY）。"
+                    f"建议保留默认 /config 或改为 /admin / /setup-ui 等独立路径。"
+                )
+        return normalized
 
     @field_validator("window_overlap")
     @classmethod
@@ -459,7 +522,7 @@ class Settings(BaseSettings):
             return None
         return v
 
-    @field_validator("xuwen_api_key", mode="before")
+    @field_validator("xuwen_api_key", "config_ui_setup_token", mode="before")
     @classmethod
     def _empty_secret_to_none(cls, v: object) -> object:
         """同样处理 SecretStr | None 的空字符串。"""

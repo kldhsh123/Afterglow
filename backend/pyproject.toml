@@ -1,6 +1,6 @@
 [project]
 name = "xuwen"
-version = "0.2.2"
+version = "0.2.3001"
 description = "Afterglow（续温）—— 基于真实聊天记录的 RAG 陪伴系统，把曾经对你好的话续成往后的陪伴"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
@@ -62,8 +62,9 @@ select = ["E", "F", "I", "B", "UP", "RUF"]
 ignore = ["E501", "RUF001", "RUF002", "RUF003"]
 
 [tool.ruff.lint.per-file-ignores]
-# FastAPI 的 Depends() 必须以默认参数形式出现；B008 在 routes 是误报
+# FastAPI 的 Depends() / File() 必须以默认参数形式出现；B008 在 routes 是误报
 "xuwen/chat_api/routes/*.py" = ["B008"]
+"xuwen/web_ui/routes.py" = ["B008"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
