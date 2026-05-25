@@ -60,8 +60,7 @@ Afterglow/
 │   │   ├── chat_api/    # FastAPI（OpenAI 兼容）
 │   │   └── web_ui/      # 配置向导子应用 + 构建产物
 │   ├── web_ui_src/      # 配置向导前端源码（构建到 ../xuwen/web_ui/static/）
-│   ├── scripts/         # 离线脚本（import / analyze_persona / eval_retrieval）
-│   └── tests/           # pytest 套件，分 unit / integration
+│   └── scripts/         # 离线脚本（import / analyze_persona / eval_retrieval）
 ├── frontend/            # Vue 3 时光信笺主聊天 UI（测试调试用）
 ├── docs/                # API.md / DEVELOPMENT.md
 └── .github/             # Issue 模板 / FUNDING
@@ -155,7 +154,6 @@ git commit -m "feat(config-ui): ..."
 - 配置向导（`uvicorn ...` + 首次模式 + 浏览器 UI）
 - CLI（`uv run python -m xuwen.ingestion.cli import ...`）
 
-改 `importer.py` / `parser.py` / `cli.py` 时，请确认两条路径都还能跑。`pytest tests/integration/test_import_pipeline.py` 是底层 CLI 流程的回归保护。
 
 ### 5. 隐私数据脱敏不要回退
 
