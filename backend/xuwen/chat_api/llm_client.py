@@ -56,6 +56,7 @@ class LLMClient:
         timeout_seconds: float = 60.0,
         api_url: str | None = None,
         api_key: str | None = None,
+        max_retries: int = 3,
     ) -> None:
         self.settings = settings
         self._owned_client = client is None
@@ -67,6 +68,10 @@ class LLMClient:
             "/chat/completions",
         )
         resolved_key = api_key or settings.openai_api_key.get_secret_value()
+        # 重试次数：主聊天 LLM 默认 3（没有兜底，必须撑住短暂网络抖动）；
+        # rerank / query_rewrite / refine_decision / life 这些 fail-open 路径
+        # 应该传 max_retries=1，单次失败立刻退快路径，不要把延迟放大几倍。
+        self._max_retries = max(1, max_retries)
         self._headers = {
             "Authorization": f"Bearer {resolved_key}",
             "Content-Type": "application/json",
@@ -99,7 +104,7 @@ class LLMClient:
         """非流式：返回完整 assistant 文本。"""
         payload = self._build_payload(messages, params, model=model, stream=False)
         async for attempt in AsyncRetrying(
-            stop=stop_after_attempt(3),
+            stop=stop_after_attempt(self._max_retries),
             wait=wait_exponential(multiplier=1.0, min=1.0, max=10.0),
             retry=retry_if_exception_type((httpx.HTTPError, _RetryableLLMError)),
             reraise=True,
@@ -132,7 +137,7 @@ class LLMClient:
         payload = self._build_payload(messages, params, model=model, stream=True)
         # 重试只覆盖建立流的过程
         async for attempt in AsyncRetrying(
-            stop=stop_after_attempt(3),
+            stop=stop_after_attempt(self._max_retries),
             wait=wait_exponential(multiplier=1.0, min=1.0, max=10.0),
             retry=retry_if_exception_type((httpx.HTTPError, _RetryableLLMError)),
             reraise=True,

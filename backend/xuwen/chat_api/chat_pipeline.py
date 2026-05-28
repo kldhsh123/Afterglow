@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 
@@ -78,6 +79,9 @@ def extract_and_apply_life_marker(
     - enabled=False：仅剥离（兜底，避免前端看到内部协议）
 
     任何异常都吞掉，不影响主回复链路。
+
+    历史保留的同步版本：仍在测试代码和不需要异步的场景用。
+    主链路推荐用 extract_life_marker_async 把 apply 部分 fire-and-forget。
     """
     if not assistant_text:
         return assistant_text
@@ -90,6 +94,56 @@ def extract_and_apply_life_marker(
                 life.apply_marker_patch(raw, trigger="marker")
             except Exception:
                 logger.warning("life marker 应用失败，已忽略", exc_info=True)
+    # 剥离标记块（即使禁用也要剥，防止前端看到内部协议）
+    return _LIFE_MARKER_RE.sub("", assistant_text).strip()
+
+
+def extract_life_marker_async(
+    assistant_text: str,
+    life: LifeStateManager,
+    *,
+    enabled: bool,
+    apply_lock: asyncio.Lock,
+    pending_tasks: set[asyncio.Task[None]] | None = None,
+) -> str:
+    """异步版：同步剥离标记块给用户，apply 走 fire-and-forget 不阻塞主链路。
+
+    - 剥离 (_LIFE_MARKER_RE.sub) 仍同步，几 µs 级
+    - apply_marker_patch 内部是同步 disk write，用 asyncio.to_thread 扔线程池
+    - 多个并发 task 通过 apply_lock 序列化，避免 life state 文件竞态
+    - pending_tasks 用于 lifespan 关闭时 await，避免孤儿 task
+
+    任何异常都吞掉，不影响主回复链路。
+    """
+    if not assistant_text:
+        return assistant_text
+    matches = _LIFE_MARKER_RE.findall(assistant_text)
+    if not matches:
+        return assistant_text
+
+    if enabled:
+        async def _apply_async() -> None:
+            try:
+                async with apply_lock:
+                    for raw in matches:
+                        try:
+                            await asyncio.to_thread(
+                                life.apply_marker_patch, raw, trigger="marker"
+                            )
+                        except Exception:
+                            logger.warning(
+                                "life marker async apply 单条失败", exc_info=True
+                            )
+            except Exception:
+                logger.warning("life marker async apply 总失败", exc_info=True)
+
+        task = asyncio.create_task(_apply_async())
+        if pending_tasks is not None:
+            pending_tasks.add(task)
+            # done_callback 在任务完成（含异常/取消）时自动从集合移除，避免长期累积。
+            # 这是配合"强引用 set"必须做的清理；否则 set 会一直增长。
+            task.add_done_callback(pending_tasks.discard)
+
     # 剥离标记块（即使禁用也要剥，防止前端看到内部协议）
     return _LIFE_MARKER_RE.sub("", assistant_text).strip()
 

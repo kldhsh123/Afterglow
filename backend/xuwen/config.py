@@ -17,6 +17,9 @@ from xuwen.core.errors import ConfigError
 
 RelationshipType = Literal["friend", "lover", "family", "colleague", "custom"]
 WebSearchProvider = Literal["tavily", "searxng"]
+RerankMode = Literal["auto", "always", "never"]
+CrossRerankProtocol = Literal["jina", "dashscope"]
+ChunkingStrategy = Literal["fixed", "adaptive"]
 
 # 关系类型到自然语言描述的默认映射（仅在用户未自定义 RELATIONSHIP_DESCRIPTION 时使用）
 _RELATIONSHIP_DEFAULTS: dict[RelationshipType, str] = {
@@ -133,7 +136,7 @@ class Settings(BaseSettings):
     life_api_key: SecretStr = Field(default=SecretStr(""))
     life_model: str = ""
     life_temperature: float = 0.35
-    life_max_tokens: int = 320
+    life_max_tokens: int = 1500
     # 最长多久让 life 模型重新判断一次当前状态。0 = 只按 next_update_at / 用户打断触发。
     life_update_interval_minutes: int = 60
     # 生活状态可建议延迟回复；这里限制实际 sleep 上限，避免请求被模型拖太久。
@@ -219,6 +222,12 @@ class Settings(BaseSettings):
     lance_db_path: Path = Path(".data/lancedb")
     # LanceDB merge_insert 单批写入行数。导入大库时如果出现 spill IO 错误，可降到 64 / 32。
     lance_upsert_batch_size: int = 128
+    # 表行数低于此值时不建向量索引（暴力扫描更快）；导入完成后会调 ensure_vector_indices
+    # 检测每张表是否过了阈值。0 = 永远不自动建索引（只能手动 cli index 触发）。
+    # 实测 4096 维 (Qwen3-Embedding) 全表扫描的盈亏平衡点：~1000 行（暴力扫描 ~150ms，
+    # IVF_FLAT 索引 ~30ms）。把阈值压到 1000 让 dialogue_windows/response_pairs 这类
+    # 中小表也能走索引；更小的表（如 live_messages ~几十行）继续暴力扫描。
+    lance_index_min_rows: int = 1000
     persona_data_dir: Path = Path(".data/persona")
 
     # ----- 本地 API 守卫 -----
@@ -226,16 +235,51 @@ class Settings(BaseSettings):
     api_auth_required: bool = True
     xuwen_api_key: SecretStr | None = None
 
+    # ----- 配置 WebUI（小白向导）-----
+    # 默认关闭。开启后会在主进程下挂载 /config 子应用，提供小白向导式配置 UI：
+    # 读写 .env、连通性测试、上传聊天记录并触发导入、查看导入进度等。
+    # 配置 UI 自带一个 setup token（首次启动时未配置 XUWEN_API_KEY 也能用），
+    # 该 token 仅用于鉴权配置 UI 的请求，不能访问 /v1 / /memory 等业务路由。
+    config_ui_enabled: bool = False
+    config_ui_path_prefix: str = "/config"
+    # 仅允许来自本机的请求访问配置 UI（基于 request.client.host 判断）。
+    # 默认 true：避免把配置面板暴露到公网；要远程访问请走 SSH 隧道或反代加 IP 白名单。
+    config_ui_localhost_only: bool = True
+    # 配置 UI 的临时访问 token。留空时进程启动会生成一次性随机 token 打到 stdout。
+    # 通过 .env 显式配置后会优先使用该值，重启不变。
+    config_ui_setup_token: SecretStr | None = None
+    # 上传聊天记录的暂存目录
+    config_ui_uploads_dir: Path = Path(".data/uploads")
+
     # ----- PII 脱敏 -----
     enable_pii_redaction: bool = True
     pii_rules_path: Path | None = None
 
     # ----- 切分参数 -----
+    chunking_strategy: ChunkingStrategy = "fixed"
     session_gap_minutes: int = 30
     window_size: int = 12
     window_overlap: int = 3
     single_context_before: int = 6
     single_context_after: int = 2
+    single_context_max_chars: int = 600
+    adaptive_chunk_model_enabled: bool = False
+    adaptive_chunk_api_url: str = ""
+    adaptive_chunk_api_key: SecretStr = Field(default=SecretStr(""))
+    adaptive_chunk_model: str = ""
+    adaptive_chunk_temperature: float = 0.0
+    adaptive_chunk_max_tokens: int = 900
+    adaptive_chunk_max_messages_per_call: int = 80
+    adaptive_chunk_target_chars: int = 700
+    adaptive_chunk_max_chars: int = 1400
+    adaptive_chunk_min_turns: int = 3
+    adaptive_chunk_overlap_turns: int = 2
+    adaptive_chunk_soft_gap_minutes: int = 8
+    # 模型 adaptive 切分时的会话并发数。0 = 按 fallback 链推断：
+    #   - 复用打标模型（未配 ADAPTIVE_CHUNK_API_URL + 配了 LABEL_API_KEY）→ 取 LABEL_MAX_CONCURRENCY
+    #   - 否则用默认 4
+    # >0 时强制使用该值，覆盖 fallback。
+    adaptive_chunk_max_concurrency: int = 0
 
     # ----- 检索参数 -----
     response_pair_top_k: int = 24
@@ -244,6 +288,14 @@ class Settings(BaseSettings):
     live_top_k: int = 12
     final_context_k: int = 12
     rrf_k: int = 60
+    # 每路向量召回的 overfetch 倍数：实际 limit = top_k × retrieval_overfetch。
+    # 下游 _filter_xxx_rows 会丢弃 low_signal / echo / 无 friend 信号窗口（~20-40%），
+    # 跨 query rewrite variant 还要去重，retrieval_overfetch 是给这些损耗的余量。
+    # 默认 3 按"中库 + 可能开 query rewrite"留安全余量；按规模调：
+    # - 小库（< 10k 行，不开 query rewrite）：可降到 2，单次 vector_search 砍 30%
+    # - 中库（10k-100k）：保持 3
+    # - 大库（100k+ IVF_HNSW_SQ）：4-6，limit 大让 HNSW ef_search 更深，召回率提升 5-15%
+    retrieval_overfetch: int = 3
     recency_half_life_days: float = 30.0
     recency_max_boost: float = 0.15
     warmth_boost: float = 0.12
@@ -253,6 +305,47 @@ class Settings(BaseSettings):
     # false：ai_generated 只在同一 conversation_id 内参与语义检索；
     # true：允许 AI 生成回复跨会话长期累积并参与 live 语义检索。
     ai_generated_long_term_enabled: bool = False
+    # 可选：检索前用小模型把短句/口语 query 改写成更适合召回的多个查询。
+    query_rewrite_enabled: bool = False
+    query_rewrite_api_url: str = ""
+    query_rewrite_api_key: SecretStr = Field(default=SecretStr(""))
+    query_rewrite_model: str = ""
+    query_rewrite_temperature: float = 0.0
+    query_rewrite_max_tokens: int = 240
+    query_rewrite_max_variants: int = 3
+    # 可选：RRF 召回后调用小模型对候选记忆语义重排。
+    rerank_enabled: bool = False
+    rerank_mode: RerankMode = "auto"
+    rerank_api_url: str = ""
+    rerank_api_key: SecretStr = Field(default=SecretStr(""))
+    rerank_model: str = ""
+    rerank_temperature: float = 0.0
+    rerank_max_tokens: int = 1200
+    rerank_top_k: int = 28
+    rerank_min_candidates: int = 16
+    rerank_timeout_seconds: float = 30.0
+    rerank_weight: float = 0.55
+    rerank_max_same_session: int = 3
+
+    # ----- Cross-encoder reranker（可选，专用粗排模型）-----
+    # 设计：RRF 召回 → cross-encoder 粗排（28 砍到 16）→ LLM 精排（rerank）→ 注入 prompt。
+    # 与上面的 RERANK_*（LLM as-reranker）互补，不是替换关系：
+    #   - cross-encoder 擅长"语义相关性"，几十 ms 内对 50 个候选打分
+    #   - LLM 精排擅长"风格 / 证据 / response_pair 优先级"语义判断
+    # 二者都可独立开关：全关 = 纯 RRF；只开 cross = 纯检索精度；
+    # 只开 LLM = 现状；两个都开 = 两阶段，质量上限最高。
+    cross_rerank_enabled: bool = False
+    # jina：Jina / SiliconFlow / Cohere v2 / 自建 bge-reranker 服务都用这种
+    # dashscope：阿里 DashScope text-rerank 原生 API（不是 OpenAI 兼容端点）
+    cross_rerank_protocol: CrossRerankProtocol = "jina"
+    cross_rerank_api_url: str = ""
+    cross_rerank_api_key: SecretStr = Field(default=SecretStr(""))
+    cross_rerank_model: str = ""
+    # 从 RRF 池里拿多少候选给 cross-encoder 粗排（一般 32-64）
+    cross_rerank_input_k: int = 48
+    # 粗排后保留多少给 LLM 精排（应 >= FINAL_CONTEXT_K，否则精排没意义）
+    cross_rerank_top_n: int = 16
+    cross_rerank_timeout_seconds: float = 5.0
 
     # ----- 本轮互动决策小模型（默认关闭；留空复用 LIFE_* 配置）-----
     # 规则层会先给出稳定保守的判断；开启后，小模型只负责补充意图、语气和检索重点。
@@ -334,6 +427,53 @@ class Settings(BaseSettings):
 
     # ===== 校验 =====
 
+    @field_validator("config_ui_path_prefix")
+    @classmethod
+    def _check_config_ui_prefix(cls, v: str) -> str:
+        """禁止根 / 空前缀，并禁止跟主 API 业务路由前缀冲突。
+
+        若允许 `/` 或 ``，主鉴权中间件里 `path.startswith(prefix + "/")` 会对
+        所有路径成立，整个 /v1 / /memory 等业务路由都会被当作配置 UI 放行，
+        相当于关闭主鉴权。
+
+        若允许 `/v1` 等业务前缀，主鉴权同样会放行 `/v1/chat/completions`
+        这些注册更早的业务路由，请求最终命中业务 endpoint 时已经跳过了
+        XUWEN_API_KEY 校验。
+        """
+        # 主 API 已经注册的路由前缀；CONFIG_UI 不能跟它们撞
+        reserved = {
+            "/v1",
+            "/memory",
+            "/healthz",
+            "/readyz",
+            "/info",
+            "/debug",
+            "/images",
+            "/setup",
+            "/documents",
+            "/stickers",
+            "/companion",
+        }
+        if not v or not isinstance(v, str):
+            raise ValueError("CONFIG_UI_PATH_PREFIX 不能为空")
+        stripped = v.strip()
+        if stripped in ("", "/"):
+            raise ValueError("CONFIG_UI_PATH_PREFIX 不能是 / 或空（会绕过主 API 鉴权）")
+        if not stripped.startswith("/"):
+            raise ValueError("CONFIG_UI_PATH_PREFIX 必须以 / 开头，例如 /config")
+        normalized = stripped.rstrip("/") or stripped
+        # 不仅拒绝精确匹配，还要拒绝 reserved 的子路径：
+        # 如 /v1/chat 仍会让 path.startswith("/v1/chat/") 放行 /v1/chat/completions
+        # 这一类已注册的业务路由，依旧能绕过 XUWEN_API_KEY 校验
+        for r in reserved:
+            if normalized == r or normalized.startswith(r + "/"):
+                raise ValueError(
+                    f"CONFIG_UI_PATH_PREFIX 不能落在主 API 业务前缀 {r} 下"
+                    f"（当前值 {normalized} 会让该前缀的业务路由绕过 XUWEN_API_KEY）。"
+                    f"建议保留默认 /config 或改为 /admin / /setup-ui 等独立路径。"
+                )
+        return normalized
+
     @field_validator("window_overlap")
     @classmethod
     def _check_overlap(cls, v: int, info: object) -> int:
@@ -375,6 +515,63 @@ class Settings(BaseSettings):
     def _check_label_interval(cls, v: float) -> float:
         if v < 0:
             raise ValueError("label_request_interval_seconds 必须 >= 0")
+        return v
+
+    @field_validator(
+        "query_rewrite_temperature",
+        "rerank_temperature",
+        "adaptive_chunk_temperature",
+    )
+    @classmethod
+    def _check_small_model_temperature(cls, v: float) -> float:
+        if not 0 <= v <= 2:
+            raise ValueError("小模型 temperature 必须在 0 到 2 之间")
+        return v
+
+    @field_validator("rerank_weight")
+    @classmethod
+    def _check_rerank_weight(cls, v: float) -> float:
+        if not 0 <= v <= 1:
+            raise ValueError("rerank_weight 必须在 0 到 1 之间")
+        return v
+
+    @field_validator(
+        "single_context_max_chars",
+        "adaptive_chunk_max_tokens",
+        "adaptive_chunk_max_messages_per_call",
+        "adaptive_chunk_target_chars",
+        "adaptive_chunk_max_chars",
+        "adaptive_chunk_min_turns",
+        "adaptive_chunk_overlap_turns",
+        "adaptive_chunk_soft_gap_minutes",
+        "adaptive_chunk_max_concurrency",
+        "query_rewrite_max_tokens",
+        "query_rewrite_max_variants",
+        "rerank_max_tokens",
+        "rerank_top_k",
+        "rerank_min_candidates",
+        "rerank_max_same_session",
+        "cross_rerank_input_k",
+        "cross_rerank_top_n",
+    )
+    @classmethod
+    def _check_positive_tuning_ints(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("调优整数参数必须 >= 0")
+        return v
+
+    @field_validator("rerank_timeout_seconds")
+    @classmethod
+    def _check_rerank_timeout(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError("rerank_timeout_seconds 必须 > 0")
+        return v
+
+    @field_validator("cross_rerank_timeout_seconds")
+    @classmethod
+    def _check_cross_rerank_timeout(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError("cross_rerank_timeout_seconds 必须 > 0")
         return v
 
     @field_validator("web_search_max_results")
@@ -459,7 +656,7 @@ class Settings(BaseSettings):
             return None
         return v
 
-    @field_validator("xuwen_api_key", mode="before")
+    @field_validator("xuwen_api_key", "config_ui_setup_token", mode="before")
     @classmethod
     def _empty_secret_to_none(cls, v: object) -> object:
         """同样处理 SecretStr | None 的空字符串。"""
@@ -493,6 +690,8 @@ class Settings(BaseSettings):
     def _check_window(self) -> Settings:
         if self.window_overlap >= self.window_size:
             raise ValueError("window_overlap 必须严格小于 window_size")
+        if self.adaptive_chunk_max_chars < self.adaptive_chunk_target_chars:
+            raise ValueError("adaptive_chunk_max_chars 必须 >= adaptive_chunk_target_chars")
         return self
 
     @model_validator(mode="after")
@@ -558,6 +757,94 @@ class Settings(BaseSettings):
     def resolved_response_policy_model(self) -> str:
         """互动决策小模型名；留空则复用 LIFE_MODEL，LIFE_MODEL 也空再复用 CHAT_MODEL。"""
         return self.response_policy_model or self.resolved_life_model
+
+    @property
+    def resolved_query_rewrite_api_url(self) -> str:
+        """query 改写模型 endpoint；留空则优先复用打标模型。"""
+        if self.query_rewrite_api_url:
+            return self.query_rewrite_api_url
+        if self.label_api_key.get_secret_value():
+            return self.label_api_url
+        return self.resolved_response_policy_api_url
+
+    @property
+    def resolved_query_rewrite_api_key(self) -> SecretStr:
+        """query 改写模型 key；留空则优先复用打标模型。"""
+        if self.query_rewrite_api_key.get_secret_value():
+            return self.query_rewrite_api_key
+        if self.label_api_key.get_secret_value():
+            return self.label_api_key
+        return self.resolved_response_policy_api_key
+
+    @property
+    def resolved_query_rewrite_model(self) -> str:
+        """query 改写模型名；留空则优先复用打标模型。"""
+        if self.query_rewrite_model:
+            return self.query_rewrite_model
+        if self.label_api_key.get_secret_value():
+            return self.label_model
+        return self.resolved_response_policy_model
+
+    @property
+    def resolved_rerank_api_url(self) -> str:
+        """rerank 模型 endpoint；留空则复用互动决策/生活/主模型链路。"""
+        return self.rerank_api_url or self.resolved_response_policy_api_url
+
+    @property
+    def resolved_rerank_api_key(self) -> SecretStr:
+        """rerank 模型 key；留空则复用互动决策/生活/主模型链路。"""
+        if self.rerank_api_key.get_secret_value():
+            return self.rerank_api_key
+        return self.resolved_response_policy_api_key
+
+    @property
+    def resolved_rerank_model(self) -> str:
+        """rerank 模型名；留空则复用互动决策/生活/主模型链路。"""
+        return self.rerank_model or self.resolved_response_policy_model
+
+    @property
+    def resolved_adaptive_chunk_api_url(self) -> str:
+        """自适应切分模型 endpoint；优先复用打标模型，再回退到生活/主模型。"""
+        if self.adaptive_chunk_api_url:
+            return self.adaptive_chunk_api_url
+        if self.label_api_key.get_secret_value():
+            return self.label_api_url
+        return self.resolved_life_api_url
+
+    @property
+    def resolved_adaptive_chunk_api_key(self) -> SecretStr:
+        """自适应切分模型 key；优先复用打标模型，再回退到生活/主模型。"""
+        if self.adaptive_chunk_api_key.get_secret_value():
+            return self.adaptive_chunk_api_key
+        if self.label_api_key.get_secret_value():
+            return self.label_api_key
+        return self.resolved_life_api_key
+
+    @property
+    def resolved_adaptive_chunk_model(self) -> str:
+        """自适应切分模型名；优先复用打标模型，再回退到生活/主模型。"""
+        if self.adaptive_chunk_model:
+            return self.adaptive_chunk_model
+        if self.label_api_key.get_secret_value():
+            return self.label_model
+        return self.resolved_life_model
+
+    @property
+    def resolved_adaptive_chunk_max_concurrency(self) -> int:
+        """自适应切分会话并发上限。
+
+        - 显式配置 > 0：直接使用
+        - 否则若复用打标模型（未配 ADAPTIVE_CHUNK_API_URL + 配了 LABEL_API_KEY）→ 跟 LABEL_MAX_CONCURRENCY 走
+        - 否则取默认 4（适配大多数 OpenAI 兼容服务）
+        """
+        if self.adaptive_chunk_max_concurrency > 0:
+            return self.adaptive_chunk_max_concurrency
+        if (
+            not self.adaptive_chunk_api_url
+            and self.label_api_key.get_secret_value()
+        ):
+            return self.label_max_concurrency
+        return 4
 
     @property
     def all_self_names(self) -> list[str]:

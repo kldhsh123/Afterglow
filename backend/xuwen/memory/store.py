@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 from collections import deque
 from collections.abc import Iterable
@@ -46,6 +47,14 @@ logger = logging.getLogger(__name__)
 # 一次 merge_insert 的默认最大行数，避免 1w 条 ×4096 维一次性入内存
 _UPSERT_BATCH_SIZE = 128
 _DB_PERF_LAST_LIMIT = 80
+
+# 需要建向量索引的表（relationship_memories 一般很小，跳过）
+_INDEXABLE_VECTOR_TABLES = (
+    TABLE_FRIEND_MESSAGES,
+    TABLE_DIALOGUE_WINDOWS,
+    TABLE_RESPONSE_PAIRS,
+    TABLE_LIVE_MESSAGES,
+)
 
 
 @dataclass(slots=True, frozen=True)
@@ -109,6 +118,16 @@ class MemoryStore:
         self._db: DBConnection | None = None
         self._write_lock = asyncio.Lock()
         self._db_perf: deque[DbPerfRecord] = deque(maxlen=_DB_PERF_LAST_LIMIT)
+        # 缓存 Table 句柄：LanceDB open_table 会读 manifest，每次开销 5-20ms。
+        # 5 路并行 search × 多 query variants 场景下，每秒 reopen 数十次很浪费。
+        # 写操作（merge_insert / update）走同一句柄会自动看到新 manifest version。
+        self._table_handles: dict[str, Table] = {}
+        # 缓存每张表"除 vector 之外"的列名：search 时 select(cols) 可以避免把
+        # 4096 维向量拉回反序列化（一次 128 行 × 4096 × 4B = 2MB Arrow data，
+        # 而 retriever 拿到后立刻 metadata = {k:v for k,v in row.items() if k!='vector'} 丢掉）。
+        self._non_vector_cols: dict[str, list[str]] = {}
+        # 缓存每张表的 nprobes：按 IVF partition 数 sqrt 选择。0 = 走默认或表无 IVF 索引。
+        self._nprobes_cache: dict[str, int] = {}
 
     # ------------------------------------------------------------------
     # 连接 / 建表
@@ -145,6 +164,104 @@ class MemoryStore:
                 TABLE_RELATIONSHIP_MEMORIES,
                 schema=relationship_memories_schema(dim),
             )
+
+    async def ensure_vector_indices(
+        self,
+        *,
+        min_rows: int | None = None,
+        index_type: str | None = None,
+        force: bool = False,
+    ) -> dict[str, str]:
+        """对向量表建索引以加速检索。
+
+        - 表行数 < min_rows 时跳过（暴力扫描在极小数据集上更快）
+        - 已存在 vector 索引时跳过（idempotent，新增数据会增量覆盖到索引）
+        - 单表失败不抛异常，只记录到返回 report；其它表继续
+
+        索引类型按行数自动分层（可被 index_type 参数 override）：
+        - < 50k 行 → **IVF_FLAT**：精确无损，中小库友好；不需要 PQ 那种 65k+ 训练集
+        - 50k ~ 500k 行 → **IVF_PQ**：8-bit PQ 量化，磁盘 ~5x 压缩，召回率 95%+
+        - >= 500k 行 → **IVF_HNSW_SQ**：HNSW 图索引在百万级以上召回率优于 IVF_PQ
+
+        index_type 显式传值时优先使用，可选：'IVF_FLAT' / 'IVF_PQ' / 'IVF_HNSW_SQ'。
+        过去版本默认 IVF_PQ，在 < 65k 行时 KMeans 大量空 cluster，索引质量差。
+
+        force=True 时即使已有索引也强制重建（用于从旧 IVF_PQ 切换到新分层策略）。
+        """
+        threshold = min_rows if min_rows is not None else self.settings.lance_index_min_rows
+        db = self._require_db()
+        dim = self.settings.embedding_dim
+        report: dict[str, str] = {}
+        for table_name in _INDEXABLE_VECTOR_TABLES:
+            try:
+                tbl = db.open_table(table_name)
+            except FileNotFoundError:
+                report[table_name] = "not_found"
+                continue
+            try:
+                rows = int(tbl.count_rows())
+            except Exception as e:
+                report[table_name] = f"count_error: {type(e).__name__}"
+                continue
+            if rows < threshold:
+                report[table_name] = f"skip_small ({rows} rows < {threshold})"
+                continue
+            if _has_vector_index(tbl) and not force:
+                report[table_name] = f"already_indexed ({rows} rows)"
+                continue
+            chosen_type = (index_type or _auto_index_type(rows)).upper()
+            num_partitions = _choose_num_partitions(rows)
+            kwargs: dict[str, Any] = {
+                "metric": "cosine",
+                "num_partitions": num_partitions,
+                "vector_column_name": "vector",
+                "index_type": chosen_type,
+                "replace": True,
+            }
+            extra_info = ""
+            if chosen_type == "IVF_PQ":
+                # PQ 在 65k+ 才训练得稳；num_sub_vectors 必须整除 dim
+                sub = _choose_num_sub_vectors(dim)
+                kwargs["num_sub_vectors"] = sub
+                extra_info = f", sub_vectors={sub}"
+            elif chosen_type in ("IVF_HNSW_SQ", "IVF_HNSW_PQ"):
+                # HNSW 默认 m=20, ef_construction=300，参数交给 LanceDB 兜底
+                pass
+            start = time.perf_counter()
+            try:
+                await asyncio.to_thread(tbl.create_index, **kwargs)
+                elapsed = round((time.perf_counter() - start) * 1000, 1)
+                report[table_name] = (
+                    f"built ({rows} rows, {chosen_type}, "
+                    f"partitions={num_partitions}{extra_info}, {elapsed}ms)"
+                )
+            except Exception as e:
+                report[table_name] = f"error: {type(e).__name__}: {e}"
+        return report
+
+    async def optimize_all_tables(self) -> dict[str, str]:
+        """对所有表跑 table.optimize()，把新写入数据并入索引并清理旧版本。
+
+        建议定期（每天/每周）跑一次：
+        - 把 writeback 增量数据并入向量索引（保持查询走索引而不是暴力扫描兜底）
+        - 压缩旧版本文件，释放磁盘空间
+        """
+        db = self._require_db()
+        report: dict[str, str] = {}
+        for table_name in (*_INDEXABLE_VECTOR_TABLES, TABLE_RELATIONSHIP_MEMORIES):
+            try:
+                tbl = db.open_table(table_name)
+            except FileNotFoundError:
+                report[table_name] = "not_found"
+                continue
+            start = time.perf_counter()
+            try:
+                await asyncio.to_thread(tbl.optimize)
+                elapsed = round((time.perf_counter() - start) * 1000, 1)
+                report[table_name] = f"optimized ({elapsed}ms)"
+            except Exception as e:
+                report[table_name] = f"error: {type(e).__name__}: {e}"
+        return report
 
     # ------------------------------------------------------------------
     # 写入
@@ -421,7 +538,11 @@ class MemoryStore:
         *,
         extra_filter: str | None = None,
     ) -> list[dict[str, Any]]:
-        return self._vector_search(TABLE_FRIEND_MESSAGES, vector, top_k, extra_filter)
+        # _vector_search 是同步阻塞调用（LanceDB sync API），用 to_thread 让事件循环
+        # 真正能并发多路 search_*。否则即便 asyncio.gather 也会被 GIL 串行化。
+        return await asyncio.to_thread(
+            self._vector_search, TABLE_FRIEND_MESSAGES, vector, top_k, extra_filter
+        )
 
     async def search_windows(
         self,
@@ -430,7 +551,9 @@ class MemoryStore:
         *,
         extra_filter: str | None = None,
     ) -> list[dict[str, Any]]:
-        return self._vector_search(TABLE_DIALOGUE_WINDOWS, vector, top_k, extra_filter)
+        return await asyncio.to_thread(
+            self._vector_search, TABLE_DIALOGUE_WINDOWS, vector, top_k, extra_filter
+        )
 
     async def search_response_pairs(
         self,
@@ -439,14 +562,18 @@ class MemoryStore:
         *,
         extra_filter: str | None = None,
     ) -> list[dict[str, Any]]:
-        return self._vector_search(TABLE_RESPONSE_PAIRS, vector, top_k, extra_filter)
+        return await asyncio.to_thread(
+            self._vector_search, TABLE_RESPONSE_PAIRS, vector, top_k, extra_filter
+        )
 
     async def search_relationship_memories(
         self,
         vector: list[float],
         top_k: int,
     ) -> list[dict[str, Any]]:
-        return self._vector_search(TABLE_RELATIONSHIP_MEMORIES, vector, top_k, None)
+        return await asyncio.to_thread(
+            self._vector_search, TABLE_RELATIONSHIP_MEMORIES, vector, top_k, None
+        )
 
     async def search_live(
         self,
@@ -460,7 +587,9 @@ class MemoryStore:
         默认通过 extra_filter 排除跨会话的 ai_generated（让 AI 自我历史不污染语义检索）。
         retriever 会根据 settings.ai_generated_long_term_enabled 决定具体 filter。
         """
-        return self._vector_search(TABLE_LIVE_MESSAGES, vector, top_k, extra_filter)
+        return await asyncio.to_thread(
+            self._vector_search, TABLE_LIVE_MESSAGES, vector, top_k, extra_filter
+        )
 
     async def cleanup_ai_generated(
         self,
@@ -602,7 +731,35 @@ class MemoryStore:
         return self._db
 
     def _table(self, name: str) -> Table:
-        return self._require_db().open_table(name)
+        cached = self._table_handles.get(name)
+        if cached is not None:
+            return cached
+        tbl = self._require_db().open_table(name)
+        self._table_handles[name] = tbl
+        return tbl
+
+    def _non_vector_columns(self, name: str, tbl: Table) -> list[str]:
+        """获取 `name` 表除 vector 外的所有列名（带 LRU 缓存）。
+
+        在 search().select(cols) 中使用，避免回拉 4096 维向量。
+        schema 静态结构由 ensure_tables 保证，进程内只取一次。
+
+        显式追加 `_distance`：当前 LanceDB 会自动给 select 结果补上 _distance
+        （仅打 deprecation warning），未来版本会要求调用方显式声明，否则
+        retriever 拿不到距离 → `_row_to_scored` fallback base_score=1.0 →
+        向量检索排序失效。提前显式列出来既消警告又兼容未来。
+        """
+        cached = self._non_vector_cols.get(name)
+        if cached is not None:
+            return cached
+        try:
+            cols = [f.name for f in tbl.schema if f.name != "vector"]
+            cols.append("_distance")
+        except Exception:
+            # schema 异常时返回空 list → 不做 select，回退到全字段（行为不变）
+            cols = []
+        self._non_vector_cols[name] = cols
+        return cols
 
     def _safe_count(self, db: DBConnection, name: str) -> int:
         """统计行数。
@@ -610,7 +767,7 @@ class MemoryStore:
         表不存在视为 0；其它异常记录 warning 后返回 0，避免静默掩盖数据库损坏。
         """
         try:
-            return int(db.open_table(name).count_rows())
+            return int(self._table(name).count_rows())
         except FileNotFoundError:
             return 0
         except Exception as e:
@@ -631,7 +788,29 @@ class MemoryStore:
             cond = "deleted = false"
             if extra_filter:
                 cond = f"({cond}) AND ({extra_filter})"
-            q = q.where(cond)
+            # prefilter=True：deleted/extra_filter 在向量距离计算 *之前* 剪枝。
+            # 对 brute-force 路径能直接减少需要计算的行数；对 IVF_FLAT 索引也能
+            # 跳过空 partition。默认 post-filter 会先做完所有距离计算再过滤，
+            # 在我们这种"软删除占比可能高、还有跨会话 source 过滤"场景下浪费。
+            q = q.where(cond, prefilter=True)
+            # 排除 vector 列：4096 维 × top_k 反序列化是单次 search 的最大成本之一。
+            # retriever._row_to_scored 拿到后立刻丢掉 vector 列，回拉是纯浪费。
+            cols = self._non_vector_columns(table, tbl)
+            if cols:
+                q = q.select(cols)
+            # nprobes 控制：LanceDB 默认 nprobes=20，对我们 4-19 partition 的小库
+            # 等价于扫全部 partition（IVF_FLAT brute force）。按 sqrt(partitions)
+            # 做有界的 nprobes，召回率约 85-95%（足够给下游 RRF + 可选 rerank 用）。
+            nprobes = self._nprobes_cache.get(table)
+            if nprobes is None:
+                nprobes = _choose_nprobes(tbl)
+                self._nprobes_cache[table] = nprobes
+            if nprobes > 0:
+                try:
+                    q = q.nprobes(nprobes)
+                except Exception:
+                    # 表无 IVF 索引（< min_rows 走暴力）时 nprobes 调用会报错，忽略
+                    pass
             arrow_tbl = q.to_arrow()
             rows = cast(list[dict[str, Any]], arrow_tbl.to_pylist())
             self._record_db_perf(
@@ -823,6 +1002,94 @@ class MemoryStore:
             raise StoreError(
                 f"向量维度不匹配：期望 {self.settings.embedding_dim}，实际 {len(vec)}"
             )
+
+
+def _has_vector_index(tbl: Table) -> bool:
+    """检查表是否已有覆盖 vector 列的索引。"""
+    try:
+        indices = list(tbl.list_indices())
+    except Exception:
+        return False
+    for idx in indices:
+        cols = getattr(idx, "columns", None) or []
+        if "vector" in cols:
+            return True
+    return False
+
+
+def _choose_num_sub_vectors(dim: int) -> int:
+    """num_sub_vectors 必须整除 dim。优先选 32-64 之间最大的整除值。
+
+    更多 sub_vectors → 索引更精确但更大；更少 → 压缩比更高但精度损失更多。
+    """
+    for candidate in (64, 48, 32, 24, 16, 12, 8, 4, 2, 1):
+        if dim % candidate == 0:
+            return candidate
+    return 1
+
+
+def _choose_num_partitions(rows: int) -> int:
+    """num_partitions 取 sqrt(N) 和 N/256 的较小值。
+
+    - **sqrt(N)** 是 LanceDB 大库经验值（百万级以上 partition 足够分散）。
+    - **N/256** 是 KMeans 稳定下界 —— 每个 partition 至少要有 ~256 个向量才能
+      训练出靠谱的质心；否则大量 cluster 为空（实测 2733 行 + 52 partition →
+      24/52 空 cluster，召回率受损）。
+    - 下限 4：partition < 4 不如纯暴力扫描。
+    - 上限 4096：LanceDB 内部限制。
+
+    实测：
+    - 1146 行 → min(33, 4) = 4 partitions
+    - 2733 行 → min(52, 10) = 10
+    - 4917 行 → min(70, 19) = 19
+    - 50k 行 → min(223, 195) = 195
+    - 500k 行 → min(707, 1953) = 707（此时 sqrt 主导）
+    """
+    sqrt_n = int(math.sqrt(max(1, rows)))
+    kmeans_safe = max(1, rows // 256)
+    return max(4, min(4096, sqrt_n, kmeans_safe))
+
+
+def _choose_nprobes(tbl: Table) -> int:
+    """根据表 IVF partition 数推算合理的 nprobes。
+
+    LanceDB 默认 nprobes=20，对 < 20 partition 的小库 = 扫全部 = IVF_FLAT brute force。
+    取 sqrt(partitions) + 1 作为 nprobes，召回率经验值 85-95%（足够给下游 RRF 用）。
+
+    返回 0 表示表没有 IVF 索引，caller 应跳过 nprobes 设置（让 LanceDB 走暴力路径）。
+    """
+    if not _has_vector_index(tbl):
+        return 0
+    try:
+        rows = int(tbl.count_rows())
+    except Exception:
+        return 0
+    if rows <= 0:
+        return 0
+    partitions = _choose_num_partitions(rows)
+    # 下限 1（至少扫 1 个 partition）、上限 partitions（再多没意义）
+    return max(1, min(partitions, int(math.sqrt(partitions)) + 1))
+
+
+def _auto_index_type(rows: int) -> str:
+    """根据表行数自动选索引类型。
+
+    LanceDB 不同索引类型在不同规模下表现差异巨大：
+
+    - **< 50k 行 → IVF_FLAT**：精确无损（不做向量量化），中小库 KMeans 训练稳定。
+      4096 维下 50k 行约占 800MB，仍可全内存驻留；走索引比暴力扫描快 10-50x。
+    - **50k - 500k 行 → IVF_PQ**：8-bit PQ 量化，磁盘 ~5x 压缩，召回率 95%+。
+      此规模下 KMeans 已能训练出 65k+ 有效 cluster，量化误差可接受。
+    - **>= 500k 行 → IVF_HNSW_SQ**：HNSW 图索引在百万级以上召回率显著优于 IVF_PQ。
+      构建慢（10-30 分钟级），查询快、召回稳定，适合长期不变的大库。
+
+    用户在 CLI 加 --index-type 可手动覆盖（如想给小库强制建 IVF_PQ 测召回率）。
+    """
+    if rows < 50_000:
+        return "IVF_FLAT"
+    if rows < 500_000:
+        return "IVF_PQ"
+    return "IVF_HNSW_SQ"
 
 
 def _list_table_names(db: DBConnection) -> list[str]:

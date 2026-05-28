@@ -1,0 +1,85 @@
+name: build-image
+
+# 触发条件：
+#   - push 到 main / docker-dev：构建 + 推 edge tag（验证 CI 流程，不抢 latest）
+#   - 推 git tag v*：正式发布，按 semver 自动衍生 0.2.3 / 0.2 / latest
+#   - 手动触发：从 VERSION 文件读版本号 + 推 latest
+# 不用任何额外 secret，GITHUB_TOKEN 自动可用
+on:
+  push:
+    branches: [main, docker-dev]
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      push_latest:
+        description: '是否同时推 latest tag'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  packages: write   # 写 GHCR 必需
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ghcr.io/${{ github.repository_owner }}/afterglow
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 读 VERSION 文件，给 workflow_dispatch 当版本号
+      - name: Read VERSION
+        id: ver
+        run: echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # 自动生成镜像 tag：
+      #   - git tag v0.2.3 → 0.2.3, 0.2, latest
+      #   - push 到 main / docker-dev → edge, <branch>-<sha7>
+      #   - workflow_dispatch → 用 VERSION 文件值 + latest（可关闭）
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=ref,event=branch,prefix=
+            type=sha,prefix={{branch}}-,format=short,enable=${{ github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/') }}
+            type=raw,value=edge,enable=${{ github.ref == 'refs/heads/main' }}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern=latest,enable=${{ startsWith(github.ref, 'refs/tags/') }}
+            type=raw,value=${{ steps.ver.outputs.version }},enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=raw,value=latest,enable=${{ github.event_name == 'workflow_dispatch' && inputs.push_latest }}
+
+      # 构建并推送多架构镜像；BuildKit 缓存写到 GitHub Actions cache
+      - name: Build & Push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/backend.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            PYTHON_VERSION=3.12
+            UV_VERSION=0.5

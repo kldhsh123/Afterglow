@@ -5,7 +5,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import asyncio
+from dataclasses import dataclass, field
 
 from xuwen.chat_api.llm_client import LLMClient
 from xuwen.chat_api.responses_store import ResponsesStore
@@ -39,6 +40,13 @@ class AppState:
     relationship_memory: RelationshipMemoryManager
     responses_store: ResponsesStore
     update_checker: UpdateChecker
+    # 串行化所有 life.apply_marker_patch 的 fire-and-forget task，避免并发写同一份 life state 文件。
+    # asyncio.Lock 必须在 event loop 启动后创建，所以 lifespan 里再赋值；field(default=None) 占位。
+    life_apply_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    # 追踪 fire-and-forget 的 marker apply task。
+    # 必须是强引用 set —— asyncio.create_task 的返回值如果只被 weakref 持有，event loop
+    # 不会保证 task 一定跑完，GC 可能在中途丢掉它。done_callback 在任务完成时自动从集合移除。
+    pending_life_tasks: set[asyncio.Task[None]] = field(default_factory=set)
     web_search: WebSearchClient | None = None
     web_fetch: WebFetchClient | None = None
 

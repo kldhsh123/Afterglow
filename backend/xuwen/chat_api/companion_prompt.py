@@ -7,6 +7,7 @@ from xuwen.companion.life import LifeSnapshot
 from xuwen.config import Settings
 from xuwen.core.models import RetrievalResult, ScoredChunk
 from xuwen.persona.card import load_persona_card
+from xuwen.persona.prompt import ChatMessage
 from xuwen.persona.style_profile import (
     load_style_profile,
     render_random_burst_block,
@@ -102,6 +103,37 @@ def render_life_memory_context(
         seen.add(line)
         if len(lines) >= max_items:
             break
+    if not lines:
+        return ""
+    return "\n".join(lines)
+
+
+def render_life_memory_context_from_recent(
+    recent: list[ChatMessage],
+    settings: Settings,
+    *,
+    max_items: int = 8,
+) -> str:
+    """用最近几轮对话渲染 life 模型的 memory_context。
+
+    与 render_life_memory_context（基于 retrieved）的区别：
+    - 不依赖向量检索结果，可以和 retrieve 并发执行
+    - 内容是真实最近对话，对"AI 当前该是什么状态"判断同样有效
+    - 缺失的只是"与当前 query 语义相似的历史片段"，但 life 决策核心信号
+      （时间/作息/上一次状态/用户输入）都不在那里
+    """
+    if not recent:
+        return ""
+    self_name = settings.self_name or "用户"
+    friend_name = settings.friend_name or "TA"
+    lines: list[str] = []
+    # 取最近 max_items 条，按时间序展示
+    for msg in recent[-max_items:]:
+        text = (msg.content or "").strip()
+        if not text:
+            continue
+        speaker = self_name if msg.role == "user" else friend_name
+        lines.append(f"- {speaker}: {_short(text, 140)}")
     if not lines:
         return ""
     return "\n".join(lines)

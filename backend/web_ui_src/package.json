@@ -1,0 +1,25 @@
+{
+  "name": "afterglow-config-ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Afterglow 后端自带的配置向导。构建产物输出到 ../xuwen/web_ui/static/，由后端 serve。",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "vue": "^3.5.13",
+    "lucide-vue-next": "^0.469.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.1",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "typescript": "~5.7.2",
+    "vite": "^6.0.7",
+    "vue-tsc": "^2.2.0"
+  }
+}

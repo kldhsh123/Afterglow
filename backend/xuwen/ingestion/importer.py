@@ -19,6 +19,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from xuwen.chat_api.llm_client import LLMClient
 from xuwen.config import Settings
 from xuwen.core.errors import IngestionError
 from xuwen.core.models import (
@@ -28,6 +29,7 @@ from xuwen.core.models import (
     ImportReport,
     ResponsePairChunk,
 )
+from xuwen.ingestion.adaptive_chunker import build_adaptive_windows
 from xuwen.ingestion.chunker import (
     build_friend_chunks,
     build_response_pair_chunks,
@@ -44,7 +46,6 @@ from xuwen.memory.schema import (
 )
 from xuwen.memory.store import MemoryStore
 
-
 # 单路 upsert 流水线深度：embed 一批后异步丢后台 upsert，最多积压这么多个未完成
 # task。LanceDB 写锁让真正在执行的始终只有 1 个，剩下的排队，主要影响内存中暂存
 # 的 embeddings 数量。4 × 100 条 × 4096 维 ≈ 6 MB / track，整体可控。
@@ -59,18 +60,37 @@ async def import_history(
     embedder: EmbeddingClient | None = None,
     plugin_name: str | None = None,
     label_progress_cb: Callable[[int, int], None] | None = None,
+    chunk_progress_cb: Callable[[int, int], None] | None = None,
+    split_progress_cb: Callable[[int, int], None] | None = None,
+    stage_cb: Callable[[str], None] | None = None,
     update_circadian: bool = True,
 ) -> ImportReport:
     """从导出 JSON 文件导入到 LanceDB。
 
     plugin_name 强制使用某个 plugin；不传则按 plugin 注册顺序自动 match。
     label_progress_cb 透传给打标阶段，用于 CLI 显示进度（done, total）。
+    chunk_progress_cb(done, total)：三路 chunk 入库的合并进度。
+        total = friend + window + response_pair 的总 chunk 数；
+        done 单调递增（每路独立计数后汇总），用于 UI 显示文件内部细化进度。
+    split_progress_cb(done, total)：adaptive 切分阶段每完成一个 session 回调一次，
+        用于 UI 让进度数字在 split 阶段也动起来。
+    stage_cb(stage_msg)：每个内部阶段（解析/清洗/切分/向量化等）切换时回调一次，
+        UI 用于展示当前正在做的事，避免大库时长时间卡在某个百分比上没有具体文案。
     update_circadian=False 时跳过画像生成，留给多文件批量导入的调用方在最末一次或
     跑完所有文件后单独触发，避免中间文件覆盖最终画像。
     """
     settings.require_identity()
 
+    def _stage(msg: str) -> None:
+        if stage_cb is not None:
+            try:
+                stage_cb(msg)
+            except Exception:
+                # stage 回调失败不能影响导入主链路
+                pass
+
     start = time.perf_counter()
+    _stage("正在解析消息")
     payload = load_qq_json(json_path)
     raw_count = len(payload.get("messages") or [])
 
@@ -78,14 +98,57 @@ async def import_history(
     parsed = parse_messages(payload, settings, plugin_name=plugin_name)
 
     # 2) clean
+    _stage(f"正在清洗与去重 {len(parsed)} 条消息")
     cleaner = Cleaner(settings)
     cleaned = cleaner.clean_many(parsed)
 
     # 3) split
+    _stage("正在切分会话")
     sessions = split_sessions(cleaned, settings)
-    windows = build_windows(sessions, settings)
+    adaptive_llm: LLMClient | None = None
+    try:
+        if settings.chunking_strategy == "adaptive":
+            if settings.adaptive_chunk_model_enabled:
+                _stage(f"正在调用小模型切分话题边界（{len(sessions)} 个会话）")
+                adaptive_llm = LLMClient(
+                    settings,
+                    api_url=settings.resolved_adaptive_chunk_api_url,
+                    api_key=settings.resolved_adaptive_chunk_api_key.get_secret_value(),
+                )
+            else:
+                _stage(f"正在用启发式 adaptive 切分窗口（{len(sessions)} 个会话）")
+
+            def _on_split_progress(done: int, total: int) -> None:
+                # 模型切分时一个会话内部可能有多次小模型调用，串行执行；
+                # 每完成一个会话才回调一次，及时把进度推给前端
+                if settings.adaptive_chunk_model_enabled:
+                    _stage(f"正在调用小模型切分话题边界 {done}/{total} 个会话")
+                else:
+                    _stage(f"启发式 adaptive 切分 {done}/{total} 个会话")
+                # 同时通过 split_progress_cb 让 UI 进度数字也动起来
+                if split_progress_cb is not None:
+                    try:
+                        split_progress_cb(done, total)
+                    except Exception:
+                        pass
+
+            windows = await build_adaptive_windows(
+                sessions,
+                settings,
+                llm=adaptive_llm,
+                model=settings.resolved_adaptive_chunk_model,
+                progress_cb=_on_split_progress,
+                max_concurrency=settings.resolved_adaptive_chunk_max_concurrency,
+            )
+        else:
+            _stage(f"正在切分窗口（{len(sessions)} 个会话）")
+            windows = build_windows(sessions, settings)
+    finally:
+        if adaptive_llm is not None:
+            await adaptive_llm.aclose()
 
     # 4) chunk —— 直接基于 sessions，确保 friend chunk 的上下文不跨 session
+    _stage("正在构建 chunks")
     friend_chunks = build_friend_chunks(sessions, settings)
     window_chunks = build_window_chunks(windows, settings)
     response_pair_chunks = build_response_pair_chunks(sessions, settings)
@@ -140,6 +203,27 @@ async def import_history(
             settings.embedding_batch_size,
             settings.embedding_batch_size * max(1, settings.embedding_max_concurrency),
         )
+        # 三路独立累加各自 done，汇总后通过 chunk_progress_cb 报告整体进度。
+        # total 是三路 chunk 总数（去重前），_embed_and_upsert_track 内部
+        # 用的是 chunks_by_id 去重后的数；微小偏差可以接受。
+        done_per_track = [0, 0, 0]
+        total_all = (
+            len(bundle.friend_chunks)
+            + len(bundle.window_chunks)
+            + len(bundle.response_pair_chunks)
+        )
+        _stage(f"开始向量化（共 {total_all} 个 chunk，首批可能略慢）")
+
+        def _make_track_cb(track_idx: int) -> Callable[[int, int], None] | None:
+            if chunk_progress_cb is None:
+                return None
+
+            def _cb(done: int, _total: int) -> None:
+                done_per_track[track_idx] = done
+                chunk_progress_cb(sum(done_per_track), total_all)
+
+            return _cb
+
         friend_stats, window_stats, pair_stats = await asyncio.gather(
             _embed_and_upsert_track(
                 embedder=embedder,
@@ -149,6 +233,7 @@ async def import_history(
                 table=TABLE_FRIEND_MESSAGES,
                 upsert_fn=store.upsert_friend_chunks,
                 batch_size=upsert_batch,
+                progress_cb=_make_track_cb(0),
             ),
             _embed_and_upsert_track(
                 embedder=embedder,
@@ -158,6 +243,7 @@ async def import_history(
                 table=TABLE_DIALOGUE_WINDOWS,
                 upsert_fn=store.upsert_window_chunks,
                 batch_size=upsert_batch,
+                progress_cb=_make_track_cb(1),
             ),
             _embed_and_upsert_track(
                 embedder=embedder,
@@ -167,6 +253,7 @@ async def import_history(
                 table=TABLE_RESPONSE_PAIRS,
                 upsert_fn=store.upsert_response_pair_chunks,
                 batch_size=upsert_batch,
+                progress_cb=_make_track_cb(2),
             ),
         )
     finally:
@@ -268,6 +355,7 @@ async def _embed_and_upsert_track(
     table: str,
     upsert_fn: Callable[[list[Any], dict[str, list[float]]], Any],
     batch_size: int,
+    progress_cb: Callable[[int, int], None] | None = None,
 ) -> dict[str, int]:
     """一路 chunk 的"查库去重 → 分批 embed → 异步 upsert"流程。
 
@@ -275,6 +363,9 @@ async def _embed_and_upsert_track(
     upsert 在后台 task 中跑。Semaphore 限制 in-flight upsert 数量，
     避免高数据量场景下 task 堆积爆内存。LanceDB store 内部有 _write_lock，
     所有后台 upsert 仍会串行执行写入。
+
+    progress_cb(done, total)：每批 embed 完成后回调一次，让上层显示细化进度。
+    done = 跳过（已存）+ 已 embed 的数量；total = chunks 总数。
 
     返回 {total, skipped, embedded, upserted}：
     - total：本次 chunker 产出的 chunk 总数
@@ -287,6 +378,8 @@ async def _embed_and_upsert_track(
     """
     stats = {"total": len(chunks), "skipped": 0, "embedded": 0, "upserted": 0}
     if not chunks:
+        if progress_cb is not None:
+            progress_cb(0, 0)
         return stats
 
     # 1) 库去重：跳过 chunk_id 已存在的（续跑场景下避免重复 embed）
@@ -294,12 +387,13 @@ async def _embed_and_upsert_track(
     existing = await store.existing_ids(table, list(chunks_by_id.keys()))
     pending = [c for cid, c in chunks_by_id.items() if cid not in existing]
     stats["skipped"] = len(existing)
+    total_unique = len(chunks_by_id)
+    if progress_cb is not None:
+        # 已 skip 的算已完成
+        progress_cb(stats["skipped"], total_unique)
 
     # 2) 分批 embed + 异步 upsert（流水线化）
     bs = max(1, batch_size)
-    # 同一时刻允许在飞的 upsert task 上限。LanceDB 内部 _write_lock 串行所有写入，
-    # 所以这里控制的主要是"内存中暂存的 embeddings 字典数量"。
-    # 4 个 × 100 条 × 4096 维 ≈ 6 MB / track，整体内存压力可控。
     sem = asyncio.Semaphore(_UPSERT_INFLIGHT_LIMIT)
     upsert_tasks: list[asyncio.Task[int]] = []
 
@@ -324,6 +418,8 @@ async def _embed_and_upsert_track(
                 c.chunk_id: vec for c, vec in zip(batch, vectors, strict=True)
             }
             stats["embedded"] += len(embeddings)
+            if progress_cb is not None:
+                progress_cb(stats["skipped"] + stats["embedded"], total_unique)
             # 拿一个 slot；slot 满时阻塞 embed loop，防止 task 堆积爆内存
             await sem.acquire()
             upsert_tasks.append(
