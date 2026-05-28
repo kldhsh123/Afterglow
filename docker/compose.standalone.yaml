@@ -1,0 +1,58 @@
+# ============================================================
+# Afterglow（续温）—— 最终用户独立部署模板
+#
+# 用法：
+#   1) 在宿主机任意位置创建一个空目录作为你的 Afterglow 数据目录
+#        mkdir -p ~/afterglow && cd ~/afterglow
+#   2) 把这份文件复制为 ~/afterglow/compose.yaml
+#   3) docker compose up -d
+#   4) docker compose logs backend | grep -iE "token|/config/"
+#      → 复制日志里的 setup token，浏览器打开 http://localhost:8000/config/
+#      → 跟着 7 步配置向导走完
+#
+# 容器会自动检测到挂载目录是空的，进入首次配置模式；向导写入直接落到
+# 你这个目录里的 .env，重启即生效。导入聊天记录、LanceDB 向量库、persona
+# 卡片都保存在同一目录下的 .data/ 子目录里。
+#
+# 不需要克隆 Afterglow 源码仓库。
+# ============================================================
+
+name: afterglow
+
+services:
+  backend:
+    # 镜像版本：与 Afterglow 项目 VERSION 文件保持一致；
+    # 通过 GitHub Actions 自动构建并发布到 GHCR，支持 amd64/arm64 双架构。
+    # 拉取：docker compose pull   (公开包，无需 login)
+    # 想用具体版本：image: ghcr.io/kldhsh123/afterglow:0.2.3
+    image: ghcr.io/kldhsh123/afterglow:latest
+    container_name: afterglow-backend
+
+    environment:
+      # 阻止 import 走宿主机源码副本，强制走镜像 venv
+      PYTHONSAFEPATH: "1"
+
+    # 把当前目录（你的 Afterglow 工作目录）挂进容器；
+    # 应用启动后会在这里读写 .env 和 .data/
+    volumes:
+      - .:/host-backend
+    working_dir: /host-backend
+
+    # 宿主机端口：左侧改成你想暴露的端口，右侧 8000 不要动
+    ports:
+      - "8000:8000"
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"

@@ -743,12 +743,18 @@ class MemoryStore:
 
         在 search().select(cols) 中使用，避免回拉 4096 维向量。
         schema 静态结构由 ensure_tables 保证，进程内只取一次。
+
+        显式追加 `_distance`：当前 LanceDB 会自动给 select 结果补上 _distance
+        （仅打 deprecation warning），未来版本会要求调用方显式声明，否则
+        retriever 拿不到距离 → `_row_to_scored` fallback base_score=1.0 →
+        向量检索排序失效。提前显式列出来既消警告又兼容未来。
         """
         cached = self._non_vector_cols.get(name)
         if cached is not None:
             return cached
         try:
             cols = [f.name for f in tbl.schema if f.name != "vector"]
+            cols.append("_distance")
         except Exception:
             # schema 异常时返回空 list → 不做 select，回退到全字段（行为不变）
             cols = []

@@ -1,0 +1,64 @@
+# ============================================================
+# Docker build context 过滤
+# 目标：构建上下文尽可能小，且**绝不**把 .env / .data / 缓存进镜像
+# ============================================================
+
+# Git / IDE / CI
+.git
+.github
+.idea
+.vscode
+.claude
+.agents
+.codex
+.gitattributes
+.gitignore
+
+# 通用缓存
+**/__pycache__
+**/*.py[cod]
+**/*.so
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+**/.coverage
+**/htmlcov
+
+# Python venv（绝不能拷进镜像）
+**/.venv
+**/venv
+**/ENV
+
+# Node / 前端产物（后端镜像不需要前端，全部排除）
+frontend/
+**/node_modules
+**/dist
+**/.vite
+
+# 后端运行时数据与机密（必须通过 volume / env_file 注入）
+# 用 .env* 通配避免依赖反斜杠转义（覆盖 .env / .env copy / .env-backups/ 等）
+# 注意：.env.example 是模板，构建时需要拷进镜像（见 Dockerfile），
+# 这里精确排除而非通配，避免误伤
+backend/.data
+backend/.env
+backend/.env\ copy
+backend/.env-backups
+
+# 测试 / 文档 / 网站 / 离线开发缓存
+backend/tests
+docs/
+website/
+开发缓存/
+
+# 日志与临时
+*.log
+*.swp
+.DS_Store
+
+# Docker 自身资产（仅 entrypoint.sh 需要拷进镜像，其余排除）
+docker/*
+!docker/entrypoint.sh
+compose.yaml
+.env.docker
+.env.docker.example
+.dockerignore

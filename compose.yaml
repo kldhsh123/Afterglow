@@ -1,0 +1,54 @@
+# ============================================================
+# Afterglow（续温）容器编排 —— 开发者用
+#
+# 这份 compose 默认挂载仓库内 ./backend，方便开发：
+#   - 与源码部署共享 .env、.data
+#   - 可直接 docker compose build 重建镜像
+#
+# 最终用户应该用 docker/compose.standalone.yaml 模板，
+# 把它复制到自己的工作目录后改一行配置即可，不需要克隆仓库。
+#
+# 关键设计点（详细 why 见 docker/entrypoint.sh 头注释）：
+#   1) 不用 env_file，避免环境变量优先级覆盖向导写入
+#   2) 挂目录而非单文件 .env，规避 os.replace EBUSY
+#   3) PYTHONSAFEPATH=1 阻止 import 走宿主机 xuwen 源码副本
+# ============================================================
+
+name: afterglow
+
+services:
+  backend:
+    container_name: ${BACKEND_CONTAINER_NAME:-afterglow-backend}
+    image: afterglow:${AFTERGLOW_VERSION:-latest}
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+      args:
+        PYTHON_VERSION: "3.12"
+        UV_VERSION: "0.5"
+
+    environment:
+      PYTHONSAFEPATH: "1"
+
+    # 挂载路径可通过 .env.docker 的 AFTERGLOW_DATA_DIR 覆盖。
+    # 默认指向仓库内 ./backend，源码部署 / 容器部署完全共享配置与数据。
+    volumes:
+      - ${AFTERGLOW_DATA_DIR:-./backend}:/host-backend
+    working_dir: /host-backend
+
+    ports:
+      - "${AFTERGLOW_HOST_PORT:-8000}:8000"
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
