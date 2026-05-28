@@ -91,12 +91,18 @@ fi
 
 # ------------------------------------------------------------
 # (3) 预创建 .data 子目录
+# 注意：本脚本此刻仍以 root 跑，mkdir 出来的目录默认 root:root 0755。
+# WSL drvfs 因 mount 强制 0777 / 自动 uid 暴露暂时掩盖了问题，
+# 但在 Linux 原生 bind mount 上，afterglow 用户会写不进这些目录
+# → LanceDB/persona/uploads 全部 EACCES。必须把所有权交回挂载目录的 uid。
 # ------------------------------------------------------------
 mkdir -p "$DATA_ROOT/.data/lancedb" \
          "$DATA_ROOT/.data/persona" \
          "$DATA_ROOT/.data/stickers" \
          "$DATA_ROOT/.data/images" \
          "$DATA_ROOT/.data/uploads"
+# drvfs / 9P 等文件系统可能拒绝 chown；失败不致命，挂载层会保底
+chown -R "$MOUNT_UID:$MOUNT_GID" "$DATA_ROOT/.data" 2>/dev/null || true
 
 # 切到 afterglow 跑应用
 exec runuser -u "$RUN_USER" -- "$@"
