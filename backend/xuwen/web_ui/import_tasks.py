@@ -241,7 +241,10 @@ class _FileProgressState:
     chunk_total: int = 0
     label_done: int = 0
     label_total: int = 0
-    phase: str = "embed"  # embed → upsert_wait → label
+    # pre_embed → embed → upsert_wait → label
+    phase: str = "pre_embed"
+    # _on_stage 收到的最近一次前置阶段文案，用于心跳保留 stage 不被回退成 base_stage
+    pre_embed_msg: str = ""
 
 
 async def _process_one_file(
@@ -269,6 +272,11 @@ async def _process_one_file(
     embed_fraction = 0.65 if settings.labeling_enabled else 1.0
     file_embed_end = (
         file_start_progress + (file_end_progress - file_start_progress) * embed_fraction
+    )
+    # adaptive 切分阶段（pre_embed）占文件区间最前 8%，让进度数字在 split 阶段也动起来
+    split_progress_end = min(
+        file_start_progress + (file_embed_end - file_start_progress) * 0.08,
+        file_embed_end - 0.005,
     )
     mgr.update(task_id, stage=base_stage, progress=file_start_progress)
 
@@ -302,6 +310,30 @@ async def _process_one_file(
         stage = f"{base_stage} · 打标中 {done}/{total_labels} 条"
         mgr.update(task_id, progress=file_progress, stage=stage)
 
+    def _on_stage(msg: str) -> None:
+        """importer 内部阶段切换的回调。
+
+        embed 阶段会被 _on_chunk 覆盖 stage，所以这里报告的是 parse/clean/split/chunk
+        等"还没进入向量化的早期阶段"的当前动作。state.phase 也跟着标记，
+        让 heartbeat 知道当前不在向量化里，文案不要回退成 base_stage。
+        """
+        state.phase = "pre_embed"
+        state.pre_embed_msg = msg
+        mgr.update(task_id, stage=f"{base_stage} · {msg}")
+
+    def _on_split(done: int, total_sessions: int) -> None:
+        """adaptive 切分进度回调，让 UI 进度数字在 split 阶段也动起来。
+
+        progress 在 [file_start_progress, split_progress_end] 区间线性递增。
+        stage 由 _on_stage 负责更新（importer 内已经先调了 _stage 再调 split cb）。
+        """
+        if total_sessions <= 0:
+            return
+        progress = file_start_progress + (
+            split_progress_end - file_start_progress
+        ) * (done / total_sessions)
+        mgr.update(task_id, progress=progress)
+
     def _stage_for_heartbeat() -> str:
         if state.phase == "label" and state.label_total > 0:
             return f"{base_stage} · 打标中 {state.label_done}/{state.label_total} 条"
@@ -309,6 +341,9 @@ async def _process_one_file(
             return f"{base_stage} · 向量化完成，正在写入数据库…"
         if state.chunk_total > 0:
             return f"{base_stage} · 向量化中 {state.chunk_done}/{state.chunk_total} 条"
+        if state.phase == "pre_embed" and state.pre_embed_msg:
+            # 前置阶段（解析/清洗/切分等）：保留 _on_stage 最近的文案，避免被心跳覆盖回 base_stage
+            return f"{base_stage} · {state.pre_embed_msg}"
         return base_stage
 
     hb_start = time.time()
@@ -332,6 +367,8 @@ async def _process_one_file(
             update_circadian=False,
             chunk_progress_cb=_on_chunk,
             label_progress_cb=_on_label,
+            split_progress_cb=_on_split,
+            stage_cb=_on_stage,
         )
     finally:
         hb.cancel()

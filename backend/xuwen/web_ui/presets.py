@@ -1,12 +1,13 @@
 """服务商预设：选一个预设 → 自动填好 base_url + 默认模型 + 申请入口链接。
 
-预设按用途分类：聊天 LLM / Embedding / 打标 LLM / 视觉 LLM。
-所有预设都是 OpenAI 兼容接口。"用户自定义"留作兜底，由前端开放任意输入。
+预设按用途分类：聊天 LLM / Embedding / 打标 LLM / 视觉 LLM /
+LLM 重排 / Cross-encoder 重排。所有 OpenAI 兼容接口的预设结构一致；
+cross-rerank 因为有 protocol 维度，用 extra 承载。
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -17,6 +18,9 @@ class Preset:
     default_model: str
     apply_url: str  # 申请 API key 的入口
     hint: str  # 一句话提示
+    # 额外字段：cross-rerank 用 {"protocol": "jina|dashscope"}；其它分类暂不用。
+    # 设计为 dict 是为了让前端不用为新协议字段升级类型；后端能加任何 string→string 元数据。
+    extra: dict[str, str] = field(default_factory=dict)
 
 
 # 聊天 LLM 预设
@@ -111,6 +115,93 @@ LABEL_PRESETS: list[Preset] = [
         default_model="",
         apply_url="",
         hint="任意支持 OpenAI /chat/completions 协议的小模型服务",
+    ),
+]
+
+
+# LLM-as-reranker 预设：要求指令跟随好，主流便宜小模型都行
+RERANKER_PRESETS: list[Preset] = [
+    Preset(
+        id="zhipu-flash",
+        label="智谱 GLM-4-Flash（推荐，免费额度）",
+        base_url="https://open.bigmodel.cn/api/paas/v4",
+        default_model="glm-4-flash",
+        apply_url="https://www.bigmodel.cn/usercenter/proj-mgmt/apikeys",
+        hint="便宜稳定，指令跟随对 JSON 输出友好",
+    ),
+    Preset(
+        id="dashscope-turbo",
+        label="阿里 Qwen-Turbo",
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        default_model="qwen-turbo",
+        apply_url="https://bailian.console.aliyun.com/?apiKey=1",
+        hint="如果 embedding 已用 DashScope 可以复用 key",
+    ),
+    Preset(
+        id="reuse-label",
+        label="复用打标模型（最省配置）",
+        base_url="",
+        default_model="",
+        apply_url="",
+        hint="留空 RERANK_API_URL/KEY/MODEL 后端会自动复用 LABEL_*/LIFE_*/主 LLM",
+    ),
+    Preset(
+        id="custom",
+        label="自定义中转站 / OpenAI 兼容接口",
+        base_url="https://your-relay.example.com/v1",
+        default_model="",
+        apply_url="",
+        hint="任意 OpenAI 兼容小模型服务",
+    ),
+]
+
+
+# Cross-encoder 专用 reranker 预设：协议二选一（jina-style 或 dashscope）
+CROSS_RERANKER_PRESETS: list[Preset] = [
+    Preset(
+        id="dashscope-gte",
+        label="阿里 DashScope gte-rerank（推荐，中文好）",
+        base_url="https://dashscope.aliyuncs.com/api/v1",
+        default_model="gte-rerank-v2",
+        apply_url="https://bailian.console.aliyun.com/?apiKey=1",
+        hint="如果 embedding 已用 DashScope 可以复用 key；走 dashscope 原生协议",
+        extra={"protocol": "dashscope"},
+    ),
+    Preset(
+        id="siliconflow-bge",
+        label="SiliconFlow bge-reranker-v2-m3（国内托管开源）",
+        base_url="https://api.siliconflow.cn/v1",
+        default_model="BAAI/bge-reranker-v2-m3",
+        apply_url="https://cloud.siliconflow.cn/account/ak",
+        hint="按 token 计费，注册有免费额度；走 jina 兼容协议",
+        extra={"protocol": "jina"},
+    ),
+    Preset(
+        id="jina-v2",
+        label="Jina Reranker v2",
+        base_url="https://api.jina.ai/v1",
+        default_model="jina-reranker-v2-base-multilingual",
+        apply_url="https://jina.ai/api-dashboard/key-manager",
+        hint="国际服务，注册有免费额度，国内访问可能需要代理",
+        extra={"protocol": "jina"},
+    ),
+    Preset(
+        id="cohere",
+        label="Cohere Rerank v3",
+        base_url="https://api.cohere.com/v2",
+        default_model="rerank-multilingual-v3.0",
+        apply_url="https://dashboard.cohere.com/api-keys",
+        hint="国际服务，按千次计费，国内访问需要代理",
+        extra={"protocol": "jina"},
+    ),
+    Preset(
+        id="custom",
+        label="自定义（本地 bge / 私有 reranker 服务）",
+        base_url="http://127.0.0.1:8080/v1",
+        default_model="BAAI/bge-reranker-v2-m3",
+        apply_url="",
+        hint="任意暴露 jina-style /rerank 或 DashScope text-rerank 协议的服务",
+        extra={"protocol": "jina"},
     ),
 ]
 

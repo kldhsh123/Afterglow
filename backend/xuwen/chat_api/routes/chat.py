@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -18,7 +19,7 @@ from xuwen.chat_api.chat_pipeline import (
     build_sticker_retry_hint,
     effective_reply_delay_seconds,
     effective_silence_sentinel,
-    extract_and_apply_life_marker,
+    extract_life_marker_async,
     fallback_for_rejected_sticker,
     is_ai_silence_signal,
     looks_like_sticker_only_intent,
@@ -26,7 +27,7 @@ from xuwen.chat_api.chat_pipeline import (
 from xuwen.chat_api.companion_prompt import (
     build_persona_card_with_companion_context,
     empty_retrieval_result,
-    render_life_memory_context,
+    render_life_memory_context_from_recent,
 )
 from xuwen.chat_api.image_store import ImageError, save_data_url
 from xuwen.chat_api.llm_client import GenerationParams
@@ -119,42 +120,115 @@ async def chat_completions(
 
     retrieval_query = current_user_text if current_user_text else "（用户发了一张图片）"
     _retrieval_start = time.perf_counter()
-    try:
-        retrieved = await state.retriever.retrieve(
-            RetrievalQuery(
-                query_text=retrieval_query,
-                conversation_id=req.conversation_id,
+
+    async def _retrieve_with_metrics() -> Any:
+        try:
+            result = await state.retriever.retrieve(
+                RetrievalQuery(
+                    query_text=retrieval_query,
+                    conversation_id=req.conversation_id,
+                )
             )
-        )
-        state.metrics.record(
-            "retrieval",
-            (time.perf_counter() - _retrieval_start) * 1000,
-            detail=f"final={len(retrieved.fused)}",
-        )
-    except RetrievalError as e:
-        logger.warning("检索失败，降级到无 RAG 模式：%s", e.message)
-        state.metrics.record(
-            "retrieval",
-            (time.perf_counter() - _retrieval_start) * 1000,
-            error=type(e).__name__,
-        )
-        retrieved = empty_retrieval_result()
+            state.metrics.record(
+                "retrieval",
+                (time.perf_counter() - _retrieval_start) * 1000,
+                detail=f"final={len(result.fused)}",
+            )
+            return result
+        except RetrievalError as e:
+            logger.warning("检索失败，降级到无 RAG 模式：%s", e.message)
+            state.metrics.record(
+                "retrieval",
+                (time.perf_counter() - _retrieval_start) * 1000,
+                error=type(e).__name__,
+            )
+            return empty_retrieval_result()
+
+    async def _web_search_or_skip() -> str:
+        web_should_search = should_search_web(current_user_text)
+        if state.web_search is None or not web_should_search:
+            _record_web_search_skipped(
+                state,
+                trace_id=trace_id,
+                query=current_user_text,
+                should_search=web_should_search,
+            )
+            return ""
+        try:
+            results = await state.web_search.search(
+                current_user_text,
+                trace_id=trace_id,
+                metrics=state.metrics,
+            )
+            return render_web_context(results)
+        except Exception:
+            logger.warning("web_search 调用失败", exc_info=True)
+            return ""
+
+    async def _resolve_urls_or_skip() -> list[str]:
+        if state.web_fetch is None:
+            return []
+        try:
+            return await resolve_fetch_urls(
+                current_user_text,
+                llm=state.life_llm,
+                model=state.settings.resolved_life_model,
+                limit=state.settings.web_fetch_max_urls,
+                trace_id=trace_id,
+                metrics=state.metrics,
+            )
+        except Exception:
+            logger.warning("resolve_fetch_urls 失败", exc_info=True)
+            return []
+
+    # life 进 Layer A 并发：memory_context 改用 recent（不依赖 retrieved），
+    # relationship_context 同步读 markdown 文件（几 ms 不阻塞），让 life 也能塞进 gather。
+    # 慢路径时 life 模型看不到"相似历史片段"，但 circadian + 上次状态 + recent + 用户输入
+    # 仍是 life 决策的核心信号，影响很小；多数轮走快路径（缓存早退）则几乎零成本。
+    life_markdown = state.relationship_memory.load_markdown()
+
+    async def _life_in_parallel():
+        async with state.life_apply_lock:
+            return await state.life.decide_for_turn(
+                llm=state.life_llm,
+                model=state.settings.resolved_life_model,
+                current_user_text=current_user_text,
+                recent=recent,
+                relationship_context=life_markdown,
+                memory_context=render_life_memory_context_from_recent(recent, state.settings),
+                trigger="chat",
+                trace_id=trace_id,
+                metrics=state.metrics,
+            )
+
+    # Layer A：只放"无论是否回复都需要"的预决策任务（检索 / 关系记忆 / life）。
+    # Web Search / URL Resolve 涉及外部 API 调用 + 用户隐私文本外发，必须等 decision
+    # 确认 should_reply=True 才能启动；否则用户说"别回我"也会触发搜索调用（隐私 + 费用泄漏）。
+    retrieved, relationship_block, life = await asyncio.gather(
+        _retrieve_with_metrics(),
+        state.relationship_memory.render_context(retrieval_query),
+        _life_in_parallel(),
+    )
 
     # 模型名固定使用后端配置的 CHAT_MODEL；req.model 接受但忽略
     model_name = state.settings.chat_model
 
-    relationship_block = await state.relationship_memory.render_context(retrieval_query)
-    life = await state.life.decide_for_turn(
-        llm=state.life_llm,
-        model=state.settings.resolved_life_model,
-        current_user_text=current_user_text,
-        recent=recent,
-        relationship_context=relationship_block,
-        memory_context=render_life_memory_context(retrieved, state.settings),
-        trigger="chat",
-        trace_id=trace_id,
-        metrics=state.metrics,
-    )
+    # fetch_many 依赖 fetch_urls；定义函数体，等 silence 决策确认后再启动
+    async def _fetch_many_or_skip(urls: list[str]) -> str:
+        if not urls or state.web_fetch is None:
+            _record_web_fetch_skipped(state, trace_id=trace_id, urls=urls)
+            return ""
+        try:
+            url_results = await state.web_fetch.fetch_many(
+                urls,
+                trace_id=trace_id,
+                metrics=state.metrics,
+            )
+            return render_url_context(url_results)
+        except Exception:
+            logger.warning("fetch_many 失败", exc_info=True)
+            return ""
+
     response_decision = decide_response_policy(
         current_user_text=current_user_text,
         has_images=bool(images_in_last),
@@ -198,7 +272,7 @@ async def chat_completions(
         reply_delay_reason=life.reply_delay_reason,
     )
 
-    # silence 短路
+    # silence 短路：放在 web/url 调用之前，避免用户说"别说话"还把消息发到搜索 / URL 解析端
     if not response_decision.should_reply:
         if req.conversation_id and (current_user_text or image_shas):
             await state.writeback.enqueue_turn(
@@ -241,6 +315,14 @@ async def chat_completions(
             policy=policy_hint,
         )
 
+    # Layer B：decision 确认要回复后才并发跑 Web Search + URL Resolve。
+    # fetch_many 依赖 fetch_urls，依旧 fire-and-forget 让它在 prompt 组装 / LLM 调用前完成。
+    web_context, fetch_urls = await asyncio.gather(
+        _web_search_or_skip(),
+        _resolve_urls_or_skip(),
+    )
+    fetch_many_task: asyncio.Task[str] = asyncio.create_task(_fetch_many_or_skip(fetch_urls))
+
     persona_card = build_persona_card_with_companion_context(
         settings=state.settings,
         life=life,
@@ -250,43 +332,8 @@ async def chat_completions(
             silence_sentinel=effective_silence_sentinel(state.settings),
         ),
     )
-    web_context = ""
-    web_should_search = should_search_web(current_user_text)
-    if state.web_search is not None and web_should_search:
-        web_results = await state.web_search.search(
-            current_user_text,
-            trace_id=trace_id,
-            metrics=state.metrics,
-        )
-        web_context = render_web_context(web_results)
-    else:
-        _record_web_search_skipped(
-            state,
-            trace_id=trace_id,
-            query=current_user_text,
-            should_search=web_should_search,
-        )
-
-    url_context = ""
-    urls: list[str] = []
-    if state.web_fetch is not None:
-        urls = await resolve_fetch_urls(
-            current_user_text,
-            llm=state.life_llm,
-            model=state.settings.resolved_life_model,
-            limit=state.settings.web_fetch_max_urls,
-            trace_id=trace_id,
-            metrics=state.metrics,
-        )
-        if urls:
-            url_results = await state.web_fetch.fetch_many(
-                urls,
-                trace_id=trace_id,
-                metrics=state.metrics,
-            )
-            url_context = render_url_context(url_results)
-    if not urls:
-        _record_web_fetch_skipped(state, trace_id=trace_id, urls=urls)
+    # 等 Layer B 起的 fetch_many 跑完。如果 prompt 组装已盖住 fetch RTT，这里 await 接近 0ms。
+    url_context = await fetch_many_task
 
     messages = build_chat_messages(
         settings=state.settings,
@@ -354,10 +401,12 @@ async def chat_completions(
             metrics=state.metrics,
         )
         # 先解析 + 应用 life-update 标记块（顺手剥离），再走通用 sanitize
-        stripped = extract_and_apply_life_marker(
+        stripped = extract_life_marker_async(
             raw_assistant_text,
             state.life,
             enabled=state.settings.life_marker_update_enabled,
+            apply_lock=state.life_apply_lock,
+            pending_tasks=state.pending_life_tasks,
         )
         valid_names = available_sticker_names(state.settings)
         assistant_text = sanitize_assistant_text(
@@ -400,10 +449,12 @@ async def chat_completions(
                         stage="chat.complete.sticker_retry",
                         metrics=state.metrics,
                     )
-                    retry_stripped = extract_and_apply_life_marker(
+                    retry_stripped = extract_life_marker_async(
                         retry_raw,
                         state.life,
                         enabled=state.settings.life_marker_update_enabled,
+                        apply_lock=state.life_apply_lock,
+                        pending_tasks=state.pending_life_tasks,
                     )
                     retry_text = sanitize_assistant_text(
                         retry_stripped,
@@ -663,10 +714,12 @@ async def _stream_response(
 
     # 流结束后用累积的完整 raw 文本跑 life-update 标记块解析（apply 即可，
     # 不影响已发出 chunk —— 标记块已在 sanitize 流程里被剥离）。
-    extract_and_apply_life_marker(
+    extract_life_marker_async(
         raw_full,
         state.life,
         enabled=state.settings.life_marker_update_enabled,
+        apply_lock=state.life_apply_lock,
+        pending_tasks=state.pending_life_tasks,
     )
 
     assistant_text = "" if ai_silenced else full_text

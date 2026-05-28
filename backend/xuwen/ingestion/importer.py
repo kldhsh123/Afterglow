@@ -19,6 +19,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from xuwen.chat_api.llm_client import LLMClient
 from xuwen.config import Settings
 from xuwen.core.errors import IngestionError
 from xuwen.core.models import (
@@ -28,6 +29,7 @@ from xuwen.core.models import (
     ImportReport,
     ResponsePairChunk,
 )
+from xuwen.ingestion.adaptive_chunker import build_adaptive_windows
 from xuwen.ingestion.chunker import (
     build_friend_chunks,
     build_response_pair_chunks,
@@ -59,6 +61,8 @@ async def import_history(
     plugin_name: str | None = None,
     label_progress_cb: Callable[[int, int], None] | None = None,
     chunk_progress_cb: Callable[[int, int], None] | None = None,
+    split_progress_cb: Callable[[int, int], None] | None = None,
+    stage_cb: Callable[[str], None] | None = None,
     update_circadian: bool = True,
 ) -> ImportReport:
     """从导出 JSON 文件导入到 LanceDB。
@@ -68,12 +72,25 @@ async def import_history(
     chunk_progress_cb(done, total)：三路 chunk 入库的合并进度。
         total = friend + window + response_pair 的总 chunk 数；
         done 单调递增（每路独立计数后汇总），用于 UI 显示文件内部细化进度。
+    split_progress_cb(done, total)：adaptive 切分阶段每完成一个 session 回调一次，
+        用于 UI 让进度数字在 split 阶段也动起来。
+    stage_cb(stage_msg)：每个内部阶段（解析/清洗/切分/向量化等）切换时回调一次，
+        UI 用于展示当前正在做的事，避免大库时长时间卡在某个百分比上没有具体文案。
     update_circadian=False 时跳过画像生成，留给多文件批量导入的调用方在最末一次或
     跑完所有文件后单独触发，避免中间文件覆盖最终画像。
     """
     settings.require_identity()
 
+    def _stage(msg: str) -> None:
+        if stage_cb is not None:
+            try:
+                stage_cb(msg)
+            except Exception:
+                # stage 回调失败不能影响导入主链路
+                pass
+
     start = time.perf_counter()
+    _stage("正在解析消息")
     payload = load_qq_json(json_path)
     raw_count = len(payload.get("messages") or [])
 
@@ -81,14 +98,57 @@ async def import_history(
     parsed = parse_messages(payload, settings, plugin_name=plugin_name)
 
     # 2) clean
+    _stage(f"正在清洗与去重 {len(parsed)} 条消息")
     cleaner = Cleaner(settings)
     cleaned = cleaner.clean_many(parsed)
 
     # 3) split
+    _stage("正在切分会话")
     sessions = split_sessions(cleaned, settings)
-    windows = build_windows(sessions, settings)
+    adaptive_llm: LLMClient | None = None
+    try:
+        if settings.chunking_strategy == "adaptive":
+            if settings.adaptive_chunk_model_enabled:
+                _stage(f"正在调用小模型切分话题边界（{len(sessions)} 个会话）")
+                adaptive_llm = LLMClient(
+                    settings,
+                    api_url=settings.resolved_adaptive_chunk_api_url,
+                    api_key=settings.resolved_adaptive_chunk_api_key.get_secret_value(),
+                )
+            else:
+                _stage(f"正在用启发式 adaptive 切分窗口（{len(sessions)} 个会话）")
+
+            def _on_split_progress(done: int, total: int) -> None:
+                # 模型切分时一个会话内部可能有多次小模型调用，串行执行；
+                # 每完成一个会话才回调一次，及时把进度推给前端
+                if settings.adaptive_chunk_model_enabled:
+                    _stage(f"正在调用小模型切分话题边界 {done}/{total} 个会话")
+                else:
+                    _stage(f"启发式 adaptive 切分 {done}/{total} 个会话")
+                # 同时通过 split_progress_cb 让 UI 进度数字也动起来
+                if split_progress_cb is not None:
+                    try:
+                        split_progress_cb(done, total)
+                    except Exception:
+                        pass
+
+            windows = await build_adaptive_windows(
+                sessions,
+                settings,
+                llm=adaptive_llm,
+                model=settings.resolved_adaptive_chunk_model,
+                progress_cb=_on_split_progress,
+                max_concurrency=settings.resolved_adaptive_chunk_max_concurrency,
+            )
+        else:
+            _stage(f"正在切分窗口（{len(sessions)} 个会话）")
+            windows = build_windows(sessions, settings)
+    finally:
+        if adaptive_llm is not None:
+            await adaptive_llm.aclose()
 
     # 4) chunk —— 直接基于 sessions，确保 friend chunk 的上下文不跨 session
+    _stage("正在构建 chunks")
     friend_chunks = build_friend_chunks(sessions, settings)
     window_chunks = build_window_chunks(windows, settings)
     response_pair_chunks = build_response_pair_chunks(sessions, settings)
@@ -152,6 +212,7 @@ async def import_history(
             + len(bundle.window_chunks)
             + len(bundle.response_pair_chunks)
         )
+        _stage(f"开始向量化（共 {total_all} 个 chunk，首批可能略慢）")
 
         def _make_track_cb(track_idx: int) -> Callable[[int, int], None] | None:
             if chunk_progress_cb is None:

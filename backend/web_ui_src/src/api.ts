@@ -98,12 +98,16 @@ export interface Preset {
   default_model: string
   apply_url: string
   hint: string
+  // cross-rerank 用 {protocol: "jina"|"dashscope"}；其它分类目前为空对象
+  extra?: Record<string, string>
 }
 
 export interface PresetsResponse {
   chat: Preset[]
   embedding: Preset[]
   label: Preset[]
+  reranker: Preset[]
+  cross_reranker: Preset[]
 }
 
 export interface TestResult {

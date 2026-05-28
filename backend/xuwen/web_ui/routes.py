@@ -35,8 +35,10 @@ from xuwen.web_ui.import_tasks import (
 from xuwen.web_ui.inspect_file import inspect_chat_file
 from xuwen.web_ui.presets import (
     CHAT_PRESETS,
+    CROSS_RERANKER_PRESETS,
     EMBEDDING_PRESETS,
     LABEL_PRESETS,
+    RERANKER_PRESETS,
     Preset,
 )
 from xuwen.web_ui.schema import FieldMeta, build_schema
@@ -253,6 +255,7 @@ def _preset_to_dict(p: Preset) -> dict[str, Any]:
         "default_model": p.default_model,
         "apply_url": p.apply_url,
         "hint": p.hint,
+        "extra": dict(p.extra),
     }
 
 
@@ -262,6 +265,8 @@ def get_presets() -> dict[str, Any]:
         "chat": [_preset_to_dict(p) for p in CHAT_PRESETS],
         "embedding": [_preset_to_dict(p) for p in EMBEDDING_PRESETS],
         "label": [_preset_to_dict(p) for p in LABEL_PRESETS],
+        "reranker": [_preset_to_dict(p) for p in RERANKER_PRESETS],
+        "cross_reranker": [_preset_to_dict(p) for p in CROSS_RERANKER_PRESETS],
     }
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 
@@ -79,39 +80,48 @@ async def proactive(
         if part
     )
     _retrieval_start = time.perf_counter()
-    try:
-        retrieved = await state.retriever.retrieve(
-            RetrievalQuery(
-                query_text=retrieval_query,
-                conversation_id=req.conversation_id,
-            )
-        )
-        state.metrics.record(
-            "companion.retrieval",
-            (time.perf_counter() - _retrieval_start) * 1000,
-            detail=f"final={len(retrieved.fused)}",
-        )
-    except RetrievalError as e:
-        logger.warning("主动话题检索失败，降级到无 RAG 模式：%s", e.message)
-        state.metrics.record(
-            "companion.retrieval",
-            (time.perf_counter() - _retrieval_start) * 1000,
-            error=type(e).__name__,
-        )
-        retrieved = empty_retrieval_result()
 
-    relationship_context = await state.relationship_memory.render_context(retrieval_query)
-    life = await state.life.decide_for_turn(
-        llm=state.life_llm,
-        model=state.settings.resolved_life_model,
-        current_user_text=_proactive_context_text(req),
-        recent=[],
-        relationship_context=relationship_context,
-        memory_context=render_life_memory_context(retrieved, state.settings),
-        trigger=f"proactive:{req.reason}",
-        trace_id=trace_id,
-        metrics=state.metrics,
+    async def _retrieve_with_metrics():
+        try:
+            result = await state.retriever.retrieve(
+                RetrievalQuery(
+                    query_text=retrieval_query,
+                    conversation_id=req.conversation_id,
+                )
+            )
+            state.metrics.record(
+                "companion.retrieval",
+                (time.perf_counter() - _retrieval_start) * 1000,
+                detail=f"final={len(result.fused)}",
+            )
+            return result
+        except RetrievalError as e:
+            logger.warning("主动话题检索失败，降级到无 RAG 模式：%s", e.message)
+            state.metrics.record(
+                "companion.retrieval",
+                (time.perf_counter() - _retrieval_start) * 1000,
+                error=type(e).__name__,
+            )
+            return empty_retrieval_result()
+
+    # retrieve 与 relationship_memory.render_context 互相独立，并发省一次 embedding+lance RTT
+    retrieved, relationship_context = await asyncio.gather(
+        _retrieve_with_metrics(),
+        state.relationship_memory.render_context(retrieval_query),
     )
+
+    async with state.life_apply_lock:
+        life = await state.life.decide_for_turn(
+            llm=state.life_llm,
+            model=state.settings.resolved_life_model,
+            current_user_text=_proactive_context_text(req),
+            recent=[],
+            relationship_context=relationship_context,
+            memory_context=render_life_memory_context(retrieved, state.settings),
+            trigger=f"proactive:{req.reason}",
+            trace_id=trace_id,
+            metrics=state.metrics,
+        )
     response_decision = decide_response_policy(
         current_user_text=_proactive_context_text(req),
         has_images=False,

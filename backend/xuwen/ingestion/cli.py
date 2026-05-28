@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import shutil
 import sys
 from pathlib import Path
 
@@ -21,6 +22,11 @@ from rich.table import Table
 from xuwen.config import Settings, get_settings
 from xuwen.ingestion.embedder import EmbeddingClient
 from xuwen.ingestion.importer import import_history
+from xuwen.memory.schema import (
+    TABLE_DIALOGUE_WINDOWS,
+    TABLE_FRIEND_MESSAGES,
+    TABLE_RESPONSE_PAIRS,
+)
 from xuwen.memory.store import MemoryStore
 
 console = Console()
@@ -58,6 +64,14 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="可选：强制使用某个 plugin（如 qqexporter_v5 / wechat_weflow）。不指定则自动识别。",
     )
+    p_import.add_argument(
+        "--rebuild-tables",
+        default="",
+        help=(
+            "导入前重建指定索引表，逗号分隔：friend,window,pair,all。"
+            "切到 CHUNKING_STRATEGY=adaptive 并希望旧数据也生效时，建议用 window,friend。"
+        ),
+    )
 
     sub.add_parser("stats", help="显示向量库当前统计")
     sub.add_parser("plugins", help="列出所有内置导入 plugin")
@@ -67,6 +81,34 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=100000,
         help="本次最多处理多少条（默认 10 万，等于全标）",
+    )
+    p_index = sub.add_parser(
+        "index",
+        help="对向量表建索引以加速检索（已建过的表跳过；按行数自动分层选索引类型）",
+    )
+    p_index.add_argument(
+        "--min-rows",
+        type=int,
+        default=None,
+        help="表行数低于此值不建索引；默认读 LANCE_INDEX_MIN_ROWS",
+    )
+    p_index.add_argument(
+        "--index-type",
+        choices=["auto", "IVF_FLAT", "IVF_PQ", "IVF_HNSW_SQ", "IVF_HNSW_PQ"],
+        default="auto",
+        help=(
+            "索引类型：auto(默认，按行数分层)/IVF_FLAT(<50k 精确)/IVF_PQ(50k-500k 量化)"
+            "/IVF_HNSW_SQ(>=500k 大库)；显式指定会覆盖自动选择"
+        ),
+    )
+    p_index.add_argument(
+        "--force",
+        action="store_true",
+        help="即使已建过索引也强制重建（用于从旧 IVF_PQ 切到新分层；replace 现有索引）",
+    )
+    sub.add_parser(
+        "optimize",
+        help="对所有向量表跑 table.optimize()：把新写入数据并入索引、清理旧版本",
     )
     return parser
 
@@ -155,6 +197,15 @@ async def _run_import(args: argparse.Namespace) -> int:
 
     # 多文件场景：CLI 拥有 store + embedder，循环里复用同一份；
     # 单文件场景也走这条路径，省一次 connect/disconnect。
+    rebuild_tables = _parse_rebuild_tables(args.rebuild_tables)
+    if rebuild_tables:
+        console.print(
+            "[yellow]重建索引表：[/]"
+            + ", ".join(rebuild_tables)
+            + "（旧表数据会被删除后按本次导入重新生成）"
+        )
+        _delete_lancedb_table_dirs(settings, rebuild_tables)
+
     store = MemoryStore(settings)
     await store.connect()
     store.ensure_tables()
@@ -191,6 +242,21 @@ async def _run_import(args: argparse.Namespace) -> int:
             "[yellow]提示：[/]作息画像 (circadian_profile.json) 仅基于最后一个文件计算，"
             "建议把数据量最大或最具代表性的对话放在最后一位。"
         )
+
+    # 导入完成后自动尝试建索引：仅在表行数过阈值时才真正动手，否则跳过
+    if settings.lance_index_min_rows > 0:
+        store_for_index = MemoryStore(settings)
+        await store_for_index.connect()
+        store_for_index.ensure_tables()
+        index_report = await store_for_index.ensure_vector_indices()
+        built = [t for t, s in index_report.items() if s.startswith("built")]
+        if built:
+            console.print(
+                f"[dim]·[/] 已自动为 {len(built)} 张表建立向量索引："
+                + ", ".join(built)
+            )
+        # 其它状态（skip_small / already_indexed / error）不喧宾夺主，cli index 子命令可详查
+
     return 0
 
 
@@ -333,6 +399,47 @@ def _run_plugins(_args: argparse.Namespace) -> int:
     return 0
 
 
+def _parse_rebuild_tables(raw: str) -> list[str]:
+    if not raw.strip():
+        return []
+    mapping = {
+        "friend": TABLE_FRIEND_MESSAGES,
+        "friends": TABLE_FRIEND_MESSAGES,
+        "friend_messages": TABLE_FRIEND_MESSAGES,
+        "window": TABLE_DIALOGUE_WINDOWS,
+        "windows": TABLE_DIALOGUE_WINDOWS,
+        "dialogue_windows": TABLE_DIALOGUE_WINDOWS,
+        "pair": TABLE_RESPONSE_PAIRS,
+        "pairs": TABLE_RESPONSE_PAIRS,
+        "response_pairs": TABLE_RESPONSE_PAIRS,
+    }
+    items = [item.strip().lower() for item in raw.split(",") if item.strip()]
+    if "all" in items:
+        return [TABLE_FRIEND_MESSAGES, TABLE_DIALOGUE_WINDOWS, TABLE_RESPONSE_PAIRS]
+    out: list[str] = []
+    for item in items:
+        table = mapping.get(item)
+        if table is None:
+            raise SystemExit(f"未知 --rebuild-tables 值：{item}")
+        if table not in out:
+            out.append(table)
+    return out
+
+
+def _delete_lancedb_table_dirs(settings: Settings, tables: list[str]) -> None:
+    """Delete LanceDB table directories before connecting.
+
+    LanceDB's drop_table can block on some local file-system combinations. For
+    the offline CLI rebuild path, deleting the selected table directories before
+    opening the DB is simpler and lets ensure_tables recreate them immediately.
+    """
+    db_path = Path(settings.lance_db_path)
+    for table in tables:
+        table_dir = db_path / f"{table}.lance"
+        if table_dir.exists():
+            shutil.rmtree(table_dir)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -344,8 +451,44 @@ def main(argv: list[str] | None = None) -> int:
         return _run_plugins(args)
     if args.cmd == "label":
         return asyncio.run(_run_label(args))
+    if args.cmd == "index":
+        return asyncio.run(_run_index(args))
+    if args.cmd == "optimize":
+        return asyncio.run(_run_optimize(args))
     parser.print_help()
     return 1
+
+
+async def _run_index(args: argparse.Namespace) -> int:
+    settings = get_settings()
+    store = MemoryStore(settings)
+    await store.connect()
+    store.ensure_tables()
+    # auto = 让 store 内部按行数自动分层选；显式值则强制覆盖
+    index_type = None if args.index_type == "auto" else args.index_type
+    label = index_type or "auto(按行数分层)"
+    force_label = "，强制重建" if args.force else ""
+    console.print(f"[bold]建立向量索引（{label}{force_label}）...[/]")
+    report = await store.ensure_vector_indices(
+        min_rows=args.min_rows,
+        index_type=index_type,
+        force=args.force,
+    )
+    for table, status in report.items():
+        console.print(f"  {table}: {status}")
+    return 0
+
+
+async def _run_optimize(_args: argparse.Namespace) -> int:
+    settings = get_settings()
+    store = MemoryStore(settings)
+    await store.connect()
+    store.ensure_tables()
+    console.print("[bold]优化所有表（合并增量到索引 + 清理旧版本）...[/]")
+    report = await store.optimize_all_tables()
+    for table, status in report.items():
+        console.print(f"  {table}: {status}")
+    return 0
 
 
 if __name__ == "__main__":  # pragma: no cover

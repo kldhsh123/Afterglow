@@ -918,7 +918,7 @@ wheels = [
 
 [[package]]
 name = "xuwen"
-version = "0.2.3001"
+version = "0.2.3002"
 source = { editable = "." }
 dependencies = [
     { name = "aiofiles" },

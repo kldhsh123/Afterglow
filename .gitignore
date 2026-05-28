@@ -36,3 +36,5 @@ dist/
 /website
 backend/.env copy
 /backend/.env-backups
+backend/scripts/diag_life.py
+backend/scripts/diag_rerank.py

@@ -14,7 +14,7 @@ import {
 } from './api'
 
 const step = ref(0)
-const totalSteps = 7
+const totalSteps = 8
 
 // ---- token ----
 const tokenInput = ref(getToken())
@@ -68,12 +68,34 @@ const form = reactive({
   WEB_SEARCH_BASE_URL: 'https://api.tavily.com',
   WEB_SEARCH_API_KEY: '',
   WEB_FETCH_ENABLED: true,
+  // 检索增强（可选）：query 改写 + cross-encoder 粗排
+  // LLM 精排（RERANK_*）已从向导移除——实测对 glm-4-flash 这类弱小模型是负优化
+  // （单次 15-20s，区分度反不如 cross-encoder）。高级用户仍可在 .env 手动开启。
+  QUERY_REWRITE_ENABLED: false,
+  // Cross-encoder 粗排（与 RERANK_* 互补，不是替换；两个都开 = 两阶段质量最高）
+  CROSS_RERANK_ENABLED: false,
+  CROSS_RERANK_PROTOCOL: 'jina' as 'jina' | 'dashscope',
+  CROSS_RERANK_API_URL: '',
+  CROSS_RERANK_API_KEY: '',
+  CROSS_RERANK_MODEL: '',
+  // 切分策略（影响"下一次导入"如何把聊天记录切成 chunks；对已入库 chunks 无影响）
+  CHUNKING_STRATEGY: 'fixed' as 'fixed' | 'adaptive',
+  ADAPTIVE_CHUNK_MODEL_ENABLED: false,
+  // 复用打标 / 复用 rerank 模型：留空 ADAPTIVE_CHUNK_API_* 让后端 fallback
+  ADAPTIVE_CHUNK_REUSE_LABEL: true,
+  ADAPTIVE_CHUNK_API_URL: '',
+  ADAPTIVE_CHUNK_API_KEY: '',
+  ADAPTIVE_CHUNK_MODEL: '',
+  // 0 = 跟随 fallback（复用打标时 = LABEL_MAX_CONCURRENCY，否则 = 4）；>0 强制覆盖
+  ADAPTIVE_CHUNK_MAX_CONCURRENCY: 0,
   XUWEN_API_KEY: '',
 })
 
 const chatPresets = shallowRef<Preset[]>([])
 const embPresets = shallowRef<Preset[]>([])
 const labelPresets = shallowRef<Preset[]>([])
+const rerankerPresets = shallowRef<Preset[]>([])
+const crossRerankerPresets = shallowRef<Preset[]>([])
 
 const chatTest = ref<TestResult | null>(null)
 const chatTesting = ref(false)
@@ -159,6 +181,8 @@ async function checkToken() {
     chatPresets.value = presetsData.chat
     embPresets.value = presetsData.embedding
     labelPresets.value = presetsData.label
+    rerankerPresets.value = presetsData.reranker
+    crossRerankerPresets.value = presetsData.cross_reranker
     step.value = 1
     // token 校验成功后才尝试恢复未完成的导入任务，
     // 否则用旧 token 调 /import/* 会 401，且用户没机会更新 token。
@@ -179,16 +203,16 @@ async function tryResumeUnfinishedImport() {
     importTask.value = t
     if (['done', 'failed', 'cancelled'].includes(t.status)) {
       persistImportTask(null)
-      if (!form.XUWEN_API_KEY) step.value = 7
+      if (!form.XUWEN_API_KEY) step.value = 8
     } else {
-      step.value = 6
+      step.value = 7
       subscribeTask(storedId)
     }
   } catch {
     // 任务在后端找不到（最常见原因：后端重启）。底层 chunk_id 去重支持续传。
     persistImportTask(null)
     if (uploadedFiles.value.length) {
-      step.value = 6
+      step.value = 7
       resumeHint.value = (
         '检测到上次有未完成的导入任务，后端可能已被重启。'
         + '已处理的聊天记录都保留在了向量库中，'
@@ -208,13 +232,16 @@ async function loadExistingValues() {
     'WEB_ACCESS_ENABLED',
     'WEB_FETCH_ENABLED',
     'RESPONSE_POLICY_MODEL_ENABLED',
+    'QUERY_REWRITE_ENABLED',
+    'CROSS_RERANK_ENABLED',
+    'ADAPTIVE_CHUNK_MODEL_ENABLED',
   ])
   try {
     const data = await api.values()
     for (const [k, v] of Object.entries(data.values)) {
       if (!v.set || v.value === undefined || v.value === null) continue
       if (!(k in form)) continue
-      if (k === 'EMBEDDING_DIM' || k === 'LABEL_MAX_CONCURRENCY') {
+      if (k === 'EMBEDDING_DIM' || k === 'LABEL_MAX_CONCURRENCY' || k === 'ADAPTIVE_CHUNK_MAX_CONCURRENCY') {
         ;(form as any)[k] = parseInt(v.value, 10) || (form as any)[k]
       } else if (BOOL_FIELDS.has(k)) {
         ;(form as any)[k] = v.value === 'true' || v.value === '1'
@@ -286,6 +313,35 @@ function applyLabelPreset(p: Preset) {
   form.LABEL_MODEL = p.default_model
   labelTest.value = null
 }
+function applyCrossRerankerPreset(p: Preset) {
+  form.CROSS_RERANK_API_URL = p.base_url
+  form.CROSS_RERANK_MODEL = p.default_model
+  // protocol 从 preset.extra 取（dashscope-gte 是 dashscope，其它都是 jina）
+  const proto = p.extra?.protocol === 'dashscope' ? 'dashscope' : 'jina'
+  form.CROSS_RERANK_PROTOCOL = proto
+}
+function applyAdaptiveChunkPreset(p: Preset) {
+  // "复用打标" 预设：清空独立 ADAPTIVE_CHUNK_API_*，后端按 LABEL→LIFE→主 LLM 顺序 fallback
+  if (p.id === 'reuse-label') {
+    form.ADAPTIVE_CHUNK_REUSE_LABEL = true
+    form.ADAPTIVE_CHUNK_API_URL = ''
+    form.ADAPTIVE_CHUNK_API_KEY = ''
+    form.ADAPTIVE_CHUNK_MODEL = ''
+    return
+  }
+  form.ADAPTIVE_CHUNK_REUSE_LABEL = false
+  form.ADAPTIVE_CHUNK_API_URL = p.base_url
+  form.ADAPTIVE_CHUNK_MODEL = p.default_model
+}
+
+// 切分策略只能在"启动导入前 / 上一轮导入已经结束"时修改。
+// importer 启动时已经读完 Settings.CHUNKING_STRATEGY/ADAPTIVE_CHUNK_*；
+// 在跑期间改设置不会影响当前任务，反而误导用户以为生效，所以整体锁定。
+const chunkingStrategyLocked = computed<boolean>(() => {
+  const st = importTask.value?.status
+  if (!st) return false
+  return ['pending', 'parsing', 'importing', 'labeling', 'persona'].includes(st)
+})
 
 // ---- tests ----
 async function testChat() {
@@ -447,6 +503,14 @@ function isPickedAsSelf(c: IdentityCandidate): boolean {
 function isPickedAsFriend(c: IdentityCandidate): boolean {
   return _splitUids('FRIEND_UID').includes(c.uid)
 }
+
+// 未被分配到 self/friend 任何一边的候选 UID。导入时这些 UID 会被当陌生人忽略，
+// 跨平台账号场景下用户容易漏选（QQ + 微信 4 个候选只点了 2 个），需要明显提示。
+const unassignedCandidates = computed<IdentityCandidate[]>(() => {
+  return inspectCandidates.value.filter(
+    c => !isPickedAsSelf(c) && !isPickedAsFriend(c),
+  )
+})
 
 // ---- import flow ----
 function removeUploaded(idx: number) {
@@ -617,6 +681,34 @@ async function saveConfig(opts: { silent?: boolean } = {}): Promise<boolean> {
       // 整体关掉联网搜索 → 清空相关 key
       values.WEB_SEARCH_API_KEY = ''
     }
+    // 检索增强（可选）
+    putBool('QUERY_REWRITE_ENABLED', form.QUERY_REWRITE_ENABLED)
+    putBool('CROSS_RERANK_ENABLED', form.CROSS_RERANK_ENABLED)
+    if (form.CROSS_RERANK_ENABLED) {
+      putStr('CROSS_RERANK_PROTOCOL', form.CROSS_RERANK_PROTOCOL)
+      putStr('CROSS_RERANK_API_URL', form.CROSS_RERANK_API_URL)
+      putStr('CROSS_RERANK_API_KEY', form.CROSS_RERANK_API_KEY)
+      putStr('CROSS_RERANK_MODEL', form.CROSS_RERANK_MODEL)
+    }
+    // 切分策略
+    putStr('CHUNKING_STRATEGY', form.CHUNKING_STRATEGY)
+    putBool('ADAPTIVE_CHUNK_MODEL_ENABLED', form.ADAPTIVE_CHUNK_MODEL_ENABLED)
+    if (form.CHUNKING_STRATEGY === 'adaptive' && form.ADAPTIVE_CHUNK_MODEL_ENABLED) {
+      // 复用打标：清空独立 ADAPTIVE_CHUNK_API_* 让后端走 LABEL→LIFE→主 LLM fallback
+      if (form.ADAPTIVE_CHUNK_REUSE_LABEL && form.LABELING_ENABLED && form.LABEL_API_URL) {
+        values.ADAPTIVE_CHUNK_API_URL = ''
+        values.ADAPTIVE_CHUNK_API_KEY = ''
+        values.ADAPTIVE_CHUNK_MODEL = ''
+      } else {
+        putStr('ADAPTIVE_CHUNK_API_URL', form.ADAPTIVE_CHUNK_API_URL)
+        putStr('ADAPTIVE_CHUNK_API_KEY', form.ADAPTIVE_CHUNK_API_KEY)
+        putStr('ADAPTIVE_CHUNK_MODEL', form.ADAPTIVE_CHUNK_MODEL)
+      }
+      // 并发：0 = 跟随 fallback，>0 强制覆盖
+      if (form.ADAPTIVE_CHUNK_MAX_CONCURRENCY >= 0) {
+        values.ADAPTIVE_CHUNK_MAX_CONCURRENCY = String(form.ADAPTIVE_CHUNK_MAX_CONCURRENCY)
+      }
+    }
     putStr('XUWEN_API_KEY', form.XUWEN_API_KEY)
 
     // 没有任何字段要写 → 跳过请求（避免空 PUT 触发不必要的备份）
@@ -670,6 +762,23 @@ const canNext = computed(() => {
       return true
     }
     case 6: {
+      // 检索增强：全留空 = 跳过这步（用默认 RRF）。开了 cross-rerank 就要求关键字段齐全。
+      if (form.CROSS_RERANK_ENABLED) {
+        if (!form.CROSS_RERANK_API_URL || !form.CROSS_RERANK_API_KEY || !form.CROSS_RERANK_MODEL) {
+          return false
+        }
+      }
+      return true
+    }
+    case 7: {
+      // 切分策略：勾了 adaptive + 模型版 + 非复用打标 → 三件套必填
+      if (form.CHUNKING_STRATEGY === 'adaptive'
+          && form.ADAPTIVE_CHUNK_MODEL_ENABLED
+          && !form.ADAPTIVE_CHUNK_REUSE_LABEL) {
+        if (!form.ADAPTIVE_CHUNK_API_URL || !form.ADAPTIVE_CHUNK_API_KEY || !form.ADAPTIVE_CHUNK_MODEL) {
+          return false
+        }
+      }
       // 完成或没文件可跳过 → 直接放行；失败/取消时也允许进入下一步（用户已经看到错误，自己决定）
       const st = importTask.value?.status
       if (st === 'done') return true
@@ -915,13 +1024,17 @@ onMounted(async () => {
 
               <!-- 候选列表 -->
               <div v-if="inspectCandidates.length" class="space-y-2 pt-1">
-                <div class="text-xs text-ink-soft dark:text-night-text-soft">
-                  识别到 {{ inspectCandidates.length }} 个候选身份，点按钮分配到对应字段（支持多 UID 累加）：
+                <div class="text-xs text-ink-soft dark:text-night-text-soft leading-relaxed">
+                  识别到 <b>{{ inspectCandidates.length }}</b> 个候选身份。
+                  <b>跨平台账号</b>（同时导入 QQ 和微信、或多个小号）时，把对方的所有 UID 都点"设为朋友"，
+                  你的所有 UID 都点"设为我"——支持多次累加。<b>未分配的 UID 在导入时会被当作陌生人忽略</b>。
                 </div>
                 <div v-for="c in inspectCandidates" :key="c.uid"
                   class="flex items-center gap-3 p-2.5 rounded-lg
-                         bg-paper-soft dark:bg-night-bg-soft
-                         border border-ink/5 dark:border-night-text/10">
+                         border transition-colors"
+                  :class="(isPickedAsSelf(c) || isPickedAsFriend(c))
+                    ? 'bg-paper-soft dark:bg-night-bg-soft border-ink/5 dark:border-night-text/10'
+                    : 'bg-warning/5 border-warning/30 dark:bg-warning/10'">
                   <UserCircle2 :size="20" class="text-ink-soft dark:text-night-text-soft" />
                   <div class="flex-1 min-w-0">
                     <div class="text-sm font-medium truncate">{{ c.name }}</div>
@@ -943,6 +1056,13 @@ onMounted(async () => {
                       : 'border-ink/10 dark:border-night-text/10 hover:bg-paper-shade dark:hover:bg-night-bg-soft'">
                     设为朋友
                   </button>
+                </div>
+                <div v-if="unassignedCandidates.length > 0"
+                  class="rounded-lg px-3.5 py-2.5 text-xs leading-relaxed
+                         bg-warning/10 border border-warning/30 text-warning">
+                  ⚠️ 还有 <b>{{ unassignedCandidates.length }}</b> 个候选 UID 未分配：
+                  <span class="font-mono">{{ unassignedCandidates.map(c => c.uid).join('、') }}</span>。
+                  如果是你或对方的另一个账号，记得点"设为我 / 设为朋友"。
                 </div>
               </div>
             </div>
@@ -1518,14 +1638,224 @@ onMounted(async () => {
             </div>
           </div>
 
-          <!-- step 6: 导入 -->
+          <!-- step 6: 检索增强（可选） -->
           <div v-else-if="step === 6" class="space-y-5">
+            <div>
+              <h2 class="text-lg font-medium">检索增强（可选）</h2>
+              <p class="mt-1 text-sm text-ink-soft dark:text-night-text-soft leading-relaxed">
+                让 AI 在调聊天模型之前，先精准找到"相关的历史聊天片段"做参考。两项都可单独开关，
+                也都可以跳过这一步（用默认 RRF 检索）。配置不齐时后端会自动降级，不会让聊天炸掉。
+              </p>
+            </div>
+
+            <!-- query rewrite -->
+            <div class="rounded-xl border border-ink/10 dark:border-night-text/10 p-4 space-y-3">
+              <label class="flex items-start gap-3 cursor-pointer">
+                <input v-model="form.QUERY_REWRITE_ENABLED" type="checkbox"
+                  class="mt-1 w-4 h-4 accent-accent dark:accent-night-accent" />
+                <div class="flex-1">
+                  <div class="text-sm font-medium">Query 改写</div>
+                  <div class="text-xs text-ink-soft dark:text-night-text-soft mt-0.5 leading-relaxed">
+                    用户输入"在吗 / 想你了 / 好累"这类短句时，让小模型先改写成 1-3 个检索友好的查询。
+                    模型直接复用打标 / 互动决策 / 生活时间线模型，无需额外配置。
+                  </div>
+                </div>
+              </label>
+            </div>
+
+            <!-- Cross-encoder 粗排 -->
+            <div class="rounded-xl border border-ink/10 dark:border-night-text/10 p-4 space-y-3">
+              <label class="flex items-start gap-3 cursor-pointer">
+                <input v-model="form.CROSS_RERANK_ENABLED" type="checkbox"
+                  class="mt-1 w-4 h-4 accent-accent dark:accent-night-accent" />
+                <div class="flex-1">
+                  <div class="text-sm font-medium">Cross-encoder 粗排（更精准的召回）</div>
+                  <div class="text-xs text-ink-soft dark:text-night-text-soft mt-0.5 leading-relaxed">
+                    专用 reranker 模型，在 LLM 精排之前先按"相关性"砍掉一半噪声候选。
+                    跟上面的 LLM 精排是<b>互补</b>不是替换：两个都开 = 两阶段质量最高。
+                  </div>
+                </div>
+              </label>
+              <div v-if="form.CROSS_RERANK_ENABLED" class="ml-7 space-y-3">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <button v-for="p in crossRerankerPresets" :key="p.id" type="button"
+                    @click="applyCrossRerankerPreset(p)"
+                    :class="['text-left px-3 py-2 rounded-lg border text-xs',
+                             form.CROSS_RERANK_API_URL === p.base_url
+                               ? 'border-accent bg-accent/5 dark:border-night-accent dark:bg-night-accent/10'
+                               : 'border-ink/10 dark:border-night-text/10 hover:border-ink/30']">
+                    <div class="font-medium">{{ p.label }}</div>
+                    <div class="text-ink-soft dark:text-night-text-soft mt-0.5">{{ p.hint }}</div>
+                  </button>
+                </div>
+
+                <div class="text-xs text-ink-soft dark:text-night-text-soft">
+                  当前协议：<span class="font-mono">{{ form.CROSS_RERANK_PROTOCOL }}</span>
+                  <span v-if="form.CROSS_RERANK_PROTOCOL === 'dashscope'">（阿里 DashScope text-rerank 原生 API）</span>
+                  <span v-else>（Jina / Cohere / SiliconFlow / 自建 bge-reranker 兼容协议）</span>
+                </div>
+
+                <label class="block">
+                  <span class="text-sm">接口地址</span>
+                  <input v-model="form.CROSS_RERANK_API_URL"
+                    class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
+                           border border-ink/10 dark:border-night-text/10 outline-none
+                           focus:ring-2 focus:ring-accent-soft font-mono text-sm" />
+                </label>
+                <label class="block">
+                  <span class="text-sm">密钥</span>
+                  <input v-model="form.CROSS_RERANK_API_KEY" type="password"
+                    class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
+                           border border-ink/10 dark:border-night-text/10 outline-none
+                           focus:ring-2 focus:ring-accent-soft font-mono text-sm" />
+                </label>
+                <label class="block">
+                  <span class="text-sm">模型名</span>
+                  <input v-model="form.CROSS_RERANK_MODEL"
+                    placeholder="例如 gte-rerank-v2 / BAAI/bge-reranker-v2-m3"
+                    class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
+                           border border-ink/10 dark:border-night-text/10 outline-none
+                           focus:ring-2 focus:ring-accent-soft font-mono text-sm" />
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <!-- step 7: 导入 -->
+          <div v-else-if="step === 7" class="space-y-5">
             <div>
               <h2 class="text-lg font-medium">导入聊天记录</h2>
               <p class="mt-1 text-sm text-ink-soft dark:text-night-text-soft">
                 确认下方文件无误后开始导入。如果暂时不想导入也可以跳过，稍后从设置页再来。
                 若需要增减文件，请返回步骤 1 重新识别身份。
               </p>
+            </div>
+
+            <!-- 切分策略（影响下一次导入；对已入库 chunks 无效） -->
+            <div class="rounded-xl border border-ink/10 dark:border-night-text/10 p-4 space-y-3"
+              :class="{ 'opacity-60 pointer-events-none': chunkingStrategyLocked }">
+              <div>
+                <div class="text-sm font-medium flex items-center gap-2">
+                  切分策略
+                  <span v-if="chunkingStrategyLocked"
+                    class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs
+                           bg-warning/15 border border-warning/30 text-warning">
+                    🔒 导入进行中，无法修改
+                  </span>
+                </div>
+                <div class="text-xs text-ink-soft dark:text-night-text-soft mt-0.5 leading-relaxed">
+                  决定聊天记录怎么切成片段入库。仅影响<b>下一次导入</b>，对已入库的 chunks 无效。
+                  <span v-if="chunkingStrategyLocked" class="text-warning">
+                    导入开始时设置已写入 .env，更改对本次任务不会生效；等待导入结束后可重新调整。
+                  </span>
+                </div>
+              </div>
+              <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <button type="button" :disabled="chunkingStrategyLocked"
+                  @click="() => { form.CHUNKING_STRATEGY = 'fixed'; form.ADAPTIVE_CHUNK_MODEL_ENABLED = false }"
+                  :class="['text-left px-3 py-2 rounded-lg border text-xs disabled:cursor-not-allowed',
+                           form.CHUNKING_STRATEGY === 'fixed'
+                             ? 'border-accent bg-accent/5 dark:border-night-accent dark:bg-night-accent/10'
+                             : 'border-ink/10 dark:border-night-text/10 hover:border-ink/30']">
+                  <div class="font-medium">固定窗口（默认）</div>
+                  <div class="text-ink-soft dark:text-night-text-soft mt-0.5">
+                    每 12 条消息一窗，3 条重叠。简单稳定。
+                  </div>
+                </button>
+                <button type="button" :disabled="chunkingStrategyLocked"
+                  @click="() => { form.CHUNKING_STRATEGY = 'adaptive'; form.ADAPTIVE_CHUNK_MODEL_ENABLED = false }"
+                  :class="['text-left px-3 py-2 rounded-lg border text-xs disabled:cursor-not-allowed',
+                           form.CHUNKING_STRATEGY === 'adaptive' && !form.ADAPTIVE_CHUNK_MODEL_ENABLED
+                             ? 'border-accent bg-accent/5 dark:border-night-accent dark:bg-night-accent/10'
+                             : 'border-ink/10 dark:border-night-text/10 hover:border-ink/30']">
+                  <div class="font-medium">启发式 adaptive</div>
+                  <div class="text-ink-soft dark:text-night-text-soft mt-0.5">
+                    按字符预算 + 时间间隔 + 话题转折词切分。不调模型，免费。
+                  </div>
+                </button>
+                <button type="button" :disabled="chunkingStrategyLocked"
+                  @click="() => { form.CHUNKING_STRATEGY = 'adaptive'; form.ADAPTIVE_CHUNK_MODEL_ENABLED = true }"
+                  :class="['text-left px-3 py-2 rounded-lg border text-xs disabled:cursor-not-allowed',
+                           form.CHUNKING_STRATEGY === 'adaptive' && form.ADAPTIVE_CHUNK_MODEL_ENABLED
+                             ? 'border-accent bg-accent/5 dark:border-night-accent dark:bg-night-accent/10'
+                             : 'border-ink/10 dark:border-night-text/10 hover:border-ink/30']">
+                  <div class="font-medium">模型 adaptive（最准）</div>
+                  <div class="text-ink-soft dark:text-night-text-soft mt-0.5">
+                    小模型返回话题边界，启发式做兜底。导入会多花一些 token。
+                  </div>
+                </button>
+              </div>
+
+              <!-- 仅模型 adaptive 展开三件套配置；启发式 / fixed 不需要 -->
+              <div v-if="form.CHUNKING_STRATEGY === 'adaptive' && form.ADAPTIVE_CHUNK_MODEL_ENABLED"
+                class="ml-1 space-y-3 pt-2 border-t border-ink/5 dark:border-night-text/5">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <button v-for="p in rerankerPresets" :key="p.id" type="button"
+                    :disabled="chunkingStrategyLocked"
+                    @click="applyAdaptiveChunkPreset(p)"
+                    :class="['text-left px-3 py-2 rounded-lg border text-xs disabled:cursor-not-allowed',
+                             (p.id === 'reuse-label' && form.ADAPTIVE_CHUNK_REUSE_LABEL)
+                               || (p.id !== 'reuse-label' && !form.ADAPTIVE_CHUNK_REUSE_LABEL && form.ADAPTIVE_CHUNK_API_URL === p.base_url)
+                               ? 'border-accent bg-accent/5 dark:border-night-accent dark:bg-night-accent/10'
+                               : 'border-ink/10 dark:border-night-text/10 hover:border-ink/30']">
+                    <div class="font-medium">{{ p.label }}</div>
+                    <div class="text-ink-soft dark:text-night-text-soft mt-0.5">{{ p.hint }}</div>
+                  </button>
+                </div>
+                <div v-if="!form.ADAPTIVE_CHUNK_REUSE_LABEL" class="space-y-3">
+                  <label class="block">
+                    <span class="text-sm">接口地址</span>
+                    <input v-model="form.ADAPTIVE_CHUNK_API_URL" :disabled="chunkingStrategyLocked"
+                      class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
+                             border border-ink/10 dark:border-night-text/10 outline-none
+                             focus:ring-2 focus:ring-accent-soft font-mono text-sm
+                             disabled:cursor-not-allowed" />
+                  </label>
+                  <label class="block">
+                    <span class="text-sm">密钥</span>
+                    <input v-model="form.ADAPTIVE_CHUNK_API_KEY" type="password"
+                      :disabled="chunkingStrategyLocked"
+                      class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
+                             border border-ink/10 dark:border-night-text/10 outline-none
+                             focus:ring-2 focus:ring-accent-soft font-mono text-sm
+                             disabled:cursor-not-allowed" />
+                  </label>
+                  <label class="block">
+                    <span class="text-sm">模型名</span>
+                    <input v-model="form.ADAPTIVE_CHUNK_MODEL" :disabled="chunkingStrategyLocked"
+                      class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
+                             border border-ink/10 dark:border-night-text/10 outline-none
+                             focus:ring-2 focus:ring-accent-soft font-mono text-sm
+                             disabled:cursor-not-allowed" />
+                  </label>
+                </div>
+
+                <!-- 会话级并发：影响切分速度的关键。复用打标时留 0 跟随 LABEL_MAX_CONCURRENCY -->
+                <label class="block">
+                  <span class="text-sm flex items-center gap-2">
+                    会话级并发上限
+                    <span v-if="form.ADAPTIVE_CHUNK_REUSE_LABEL && form.LABELING_ENABLED"
+                      class="text-xs text-ink-soft dark:text-night-text-soft">
+                      （留 0 跟随打标并发：{{ form.LABEL_MAX_CONCURRENCY }}）
+                    </span>
+                    <span v-else
+                      class="text-xs text-ink-soft dark:text-night-text-soft">
+                      （留 0 用默认 4）
+                    </span>
+                  </span>
+                  <input v-model.number="form.ADAPTIVE_CHUNK_MAX_CONCURRENCY"
+                    type="number" min="0" max="50" step="1"
+                    :disabled="chunkingStrategyLocked"
+                    class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
+                           border border-ink/10 dark:border-night-text/10 outline-none
+                           focus:ring-2 focus:ring-accent-soft font-mono text-sm
+                           disabled:cursor-not-allowed" />
+                  <span class="text-xs text-ink-soft dark:text-night-text-soft mt-1 block leading-relaxed">
+                    34 个会话 × 串行 3 秒/次 ≈ 100 秒；调到 10 并发 ≈ 10 秒。
+                    超过上游服务的并发额度会触发 429，按账号实际上限调（GLM-4-Flash 免费账号 ~19）。
+                  </span>
+                </label>
+              </div>
             </div>
 
             <template v-if="!importTask">
@@ -1633,8 +1963,8 @@ onMounted(async () => {
             </div>
           </div>
 
-          <!-- step 7: 设置访问密码 -->
-          <div v-else-if="step === 7" class="space-y-5">
+          <!-- step 8: 设置访问密码 -->
+          <div v-else-if="step === 8" class="space-y-5">
             <div>
               <h2 class="text-lg font-medium">设置访问密码（XUWEN_API_KEY）</h2>
               <p class="mt-1 text-sm text-ink-soft dark:text-night-text-soft">
@@ -1683,7 +2013,7 @@ onMounted(async () => {
             :disabled="step <= 1" @click="prev">
             <ArrowLeft :size="14" /> 上一步
           </button>
-          <button v-if="step === 6 && (!importTask || ['failed', 'cancelled'].includes(importTask.status))"
+          <button v-if="step === 7 && (!importTask || ['failed', 'cancelled'].includes(importTask.status))"
             class="text-xs text-ink-soft dark:text-night-text-soft hover:text-ink dark:hover:text-night-text"
             @click="next">
             暂时跳过，稍后导入

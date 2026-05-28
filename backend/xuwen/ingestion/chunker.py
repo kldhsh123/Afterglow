@@ -61,8 +61,11 @@ def build_friend_chunks(
             if not _is_chunkable(m):
                 continue
 
-            before = msgs[max(0, idx - settings.single_context_before) : idx]
-            after = msgs[idx + 1 : idx + 1 + settings.single_context_after]
+            if settings.chunking_strategy == "adaptive":
+                before, after = _adaptive_context_for_message(msgs, idx, settings)
+            else:
+                before = msgs[max(0, idx - settings.single_context_before) : idx]
+                after = msgs[idx + 1 : idx + 1 + settings.single_context_after]
             snippet = _render_dialogue([*before, m, *after], settings)
             context_before = _render_dialogue(before, settings)
             context_after = _render_dialogue(after, settings)
@@ -156,8 +159,8 @@ def build_response_pair_chunks(
             context_before = msgs[max(0, idx - settings.single_context_before) : idx]
             context_after = msgs[j : j + settings.single_context_after]
             pair_msgs = [*context_before, *user_msgs, *friend_msgs, *context_after]
-            user_text = "\n".join(m.text.strip() for m in user_msgs if m.text.strip())
-            friend_reply = "\n".join(m.text.strip() for m in friend_msgs if m.text.strip())
+            user_text = "\n\n".join(m.text.strip() for m in user_msgs if m.text.strip())
+            friend_reply = "\n\n".join(m.text.strip() for m in friend_msgs if m.text.strip())
             if not user_text or not friend_reply:
                 idx = j
                 continue
@@ -247,6 +250,40 @@ def _render_dialogue(messages: Sequence[NormalizedMessage], settings: Settings) 
             continue
         out_lines.append(f"{speaker}: {text}")
     return "\n".join(out_lines)
+
+
+def _adaptive_context_for_message(
+    messages: Sequence[NormalizedMessage],
+    idx: int,
+    settings: Settings,
+) -> tuple[list[NormalizedMessage], list[NormalizedMessage]]:
+    """Collect context by character budget for adaptive chunking."""
+    budget = max(0, settings.single_context_max_chars)
+    if budget <= 0:
+        before = list(messages[max(0, idx - settings.single_context_before) : idx])
+        after = list(messages[idx + 1 : idx + 1 + settings.single_context_after])
+        return before, after
+
+    before_rev: list[NormalizedMessage] = []
+    used = 0
+    for m in reversed(messages[:idx]):
+        cost = len(m.text.strip())
+        if used and used + cost > budget:
+            break
+        before_rev.append(m)
+        used += cost
+
+    after: list[NormalizedMessage] = []
+    used = 0
+    after_budget = max(1, budget // 2)
+    for m in messages[idx + 1 :]:
+        cost = len(m.text.strip())
+        if used and used + cost > after_budget:
+            break
+        after.append(m)
+        used += cost
+
+    return list(reversed(before_rev)), after
 
 
 def _speaker_label(m: NormalizedMessage, settings: Settings) -> str:

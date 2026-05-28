@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from dataclasses import dataclass
@@ -23,11 +24,12 @@ from xuwen.core.errors import RetrievalError
 from xuwen.core.models import RetrievalQuery, RetrievalResult, ScoredChunk
 from xuwen.core.time import now_ms, recency_weight
 from xuwen.ingestion.embedder import EmbeddingClient
+from xuwen.memory.cross_reranker import CrossReranker
+from xuwen.memory.reranker import QueryRewriter, SemanticReranker
 from xuwen.memory.store import MemoryStore
 
 logger = logging.getLogger(__name__)
 
-_RETRIEVAL_OVERFETCH = 4
 _PLACEHOLDER_TOKEN_RE = re.compile(
     r"\[(图片|语音|视频|文件|表情|动画表情|撤回|系统消息)\]|\[\[[^\]]+\]\]"
 )
@@ -61,19 +63,32 @@ class HybridRetriever:
         settings: Settings,
         store: MemoryStore,
         embedder: EmbeddingClient,
+        query_rewriter: QueryRewriter | None = None,
+        reranker: SemanticReranker | None = None,
+        cross_reranker: CrossReranker | None = None,
     ) -> None:
         self.settings = settings
         self.store = store
         self.embedder = embedder
+        self.query_rewriter = query_rewriter
+        self.reranker = reranker
+        self.cross_reranker = cross_reranker
 
     async def retrieve(self, query: RetrievalQuery) -> RetrievalResult:
         """执行混合检索并返回融合结果。"""
         if not query.query_text.strip():
             raise RetrievalError("query_text 不能为空")
 
-        # 1) 把查询文本向量化
+        # 1) query 改写（可选）+ 向量化。第一个永远是原始 query。
+        query_texts = [query.query_text]
+        if self.query_rewriter is not None:
+            query_texts = await self.query_rewriter.rewrite(query.query_text)
+        query_texts = _dedupe_query_texts(query_texts)
         try:
-            vector = await self.embedder.embed_one(query.query_text)
+            if len(query_texts) == 1:
+                vectors = [await self.embedder.embed_one(query_texts[0])]
+            else:
+                vectors = await self.embedder.embed_texts(query_texts)
         except Exception as e:
             # 把 embedder 的失败包装成 RetrievalError，方便上层统一处理
             raise RetrievalError(f"查询向量化失败：{type(e).__name__}") from e
@@ -84,46 +99,69 @@ class HybridRetriever:
         final_k = query.final_k or self.settings.final_context_k
         now = query.now_ms or now_ms()
 
-        # 2) 三路召回
-        pair_rows = _filter_response_pair_rows(
-            await self.store.search_response_pairs(
-                vector,
-                top_k_pair * _RETRIEVAL_OVERFETCH,
-            ),
-            limit=top_k_pair,
+        # 2) 五路召回：以前是串行 await，现在 asyncio.gather 真并发（store.search_* 用了 to_thread）。
+        #    store 的 _vector_search 是同步 LanceDB 调用，靠线程池让多路真正并行执行。
+        live_top_k = self.settings.live_top_k
+        live_filter = _compute_live_filter(query, self.settings)
+        # overfetch 从 settings 读，便于大库用户调高（默认 2 适配 < 10k 行）
+        overfetch = max(1, self.settings.retrieval_overfetch)
+
+        pair_raw_task = _search_variants(
+            self.store.search_response_pairs,
+            vectors,
+            top_k_pair * overfetch,
         )
+        friend_raw_task = _search_variants(
+            self.store.search_friend,
+            vectors,
+            top_k_friend * overfetch,
+        )
+        window_raw_task = _search_variants(
+            self.store.search_windows,
+            vectors,
+            top_k_window * overfetch,
+        )
+        live_semantic_task = _search_variants(
+            self.store.search_live,
+            vectors,
+            live_top_k * overfetch,
+            extra_filter=live_filter,
+        )
+        # recent_live 不依赖 query vector，但跟其它四路同根（只依赖 conversation_id），可一起并发
+        recent_live_task: Any
+        if query.conversation_id:
+            recent_live_task = self.store.recent_live(query.conversation_id, limit=20)
+        else:
+            recent_live_task = _noop_rows()
+
+        (
+            pair_raw,
+            friend_raw,
+            window_raw,
+            live_semantic_raw,
+            recent_live_raw,
+        ) = await asyncio.gather(
+            pair_raw_task,
+            friend_raw_task,
+            window_raw_task,
+            live_semantic_task,
+            recent_live_task,
+        )
+
+        pair_rows = _filter_response_pair_rows(pair_raw, limit=top_k_pair)
         friend_rows = _filter_friend_rows(
-            await self.store.search_friend(
-                vector,
-                top_k_friend * _RETRIEVAL_OVERFETCH,
-            ),
+            friend_raw,
             query_text=query.query_text,
             limit=top_k_friend,
         )
         window_rows = _filter_window_rows(
-            await self.store.search_windows(
-                vector,
-                top_k_window * _RETRIEVAL_OVERFETCH,
-            ),
+            window_raw,
             friend_names=self.settings.all_friend_names or ["TA"],
             limit=top_k_window,
         )
-        # live 层语义召回：跨会话排除 ai_generated（除非 long_term_enabled）
-        live_top_k = self.settings.live_top_k
-        live_filter = _compute_live_filter(query, self.settings)
-        live_semantic_rows = await self.store.search_live(
-            vector,
-            live_top_k * _RETRIEVAL_OVERFETCH,
-            extra_filter=live_filter,
-        )
-        live_rows: list[dict[str, Any]] = []
-        if query.conversation_id:
-            live_rows = _filter_live_rows(
-                await self.store.recent_live(query.conversation_id, limit=20),
-                limit=20,
-            )
+        live_rows: list[dict[str, Any]] = _filter_live_rows(recent_live_raw, limit=20)
         # 把语义召回的 live 行合并到 live_rows（保证 fused 也能命中 live）
-        live_semantic = _filter_live_rows(live_semantic_rows, limit=live_top_k)
+        live_semantic = _filter_live_rows(live_semantic_raw, limit=live_top_k)
         seen_ids = {r.get("id") for r in live_rows}
         for r in live_semantic:
             if r.get("id") not in seen_ids:
@@ -145,16 +183,40 @@ class HybridRetriever:
             _row_to_scored(r, rank=i + 1, kind="live") for i, r in enumerate(live_rows)
         ]
 
-        # 4) RRF 融合 + boost
-        fused = _fuse(
+        # 4) RRF 融合 + boost；按下游需要的最大候选数保留池子。
+        final_pool_k = final_k
+        if self.cross_reranker is not None and self.settings.cross_rerank_enabled:
+            final_pool_k = max(final_pool_k, self.settings.cross_rerank_input_k)
+        if self.reranker is not None:
+            final_pool_k = max(final_pool_k, self.reranker.candidate_limit(final_k))
+        fused_pool = _fuse(
             response_pairs=response_pairs,
             friend_examples=friend_examples,
             dialogue_windows=dialogue_windows,
             recent_live=recent_live,
             settings=self.settings,
             now_ms=now,
-            final_k=final_k,
+            final_k=final_pool_k,
         )
+
+        # 5) Cross-encoder 粗排（可选）：48 → 16，砍掉纯噪声候选给 LLM 精排
+        candidates_for_rerank = fused_pool
+        if self.cross_reranker is not None and self.settings.cross_rerank_enabled:
+            candidates_for_rerank = await self.cross_reranker.rerank(
+                query_text=query.query_text,
+                candidates=fused_pool,
+                top_n=self.settings.cross_rerank_top_n,
+            )
+
+        # 6) LLM 语义精排（可选）：在 cross 粗排后的候选里做"风格证据"判断
+        if self.reranker is not None:
+            fused = await self.reranker.rerank(
+                query_text=query.query_text,
+                candidates=candidates_for_rerank,
+                final_k=final_k,
+            )
+        else:
+            fused = candidates_for_rerank[:final_k]
 
         return RetrievalResult(
             friend_examples=[*response_pairs[:4], *friend_examples],
@@ -168,6 +230,85 @@ class HybridRetriever:
 # ---------------------------------------------------------------------------
 # 内部
 # ---------------------------------------------------------------------------
+
+
+async def _search_variants(
+    search_fn: Any,
+    vectors: list[list[float]],
+    top_k: int,
+    *,
+    extra_filter: str | None = None,
+) -> list[dict[str, Any]]:
+    """Run vector search for one or more query variants and merge by row id."""
+    if not vectors:
+        return []
+    tasks = [
+        search_fn(vector, top_k, extra_filter=extra_filter)
+        for vector in vectors
+    ]
+    results = await asyncio.gather(*tasks)
+    return _merge_variant_rows(results)
+
+
+async def _noop_rows() -> list[dict[str, Any]]:
+    """gather 占位：没有 conversation_id 时的 recent_live 替代。"""
+    return []
+
+
+def _merge_variant_rows(result_sets: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {}
+    for variant_idx, rows in enumerate(result_sets):
+        for rank, row in enumerate(rows, 1):
+            row_id = str(row.get("id") or "")
+            if not row_id:
+                continue
+            existing = merged.get(row_id)
+            if existing is None:
+                copied = dict(row)
+                copied["query_variant_hits"] = [variant_idx]
+                copied["query_variant_best_rank"] = rank
+                merged[row_id] = copied
+                continue
+            best_rank = min(
+                int(existing.get("query_variant_best_rank") or rank),
+                rank,
+            )
+            hits = list(existing.get("query_variant_hits") or [])
+            if variant_idx not in hits:
+                hits.append(variant_idx)
+            existing["query_variant_hits"] = hits
+            existing["query_variant_best_rank"] = best_rank
+            old_distance = existing.get("_distance")
+            new_distance = row.get("_distance")
+            if (
+                isinstance(old_distance, (int, float))
+                and isinstance(new_distance, (int, float))
+                and new_distance < old_distance
+            ):
+                for key, value in row.items():
+                    existing[key] = value
+                existing["query_variant_hits"] = hits
+                existing["query_variant_best_rank"] = best_rank
+    # 按 best_rank（任一 variant 内的最小排名）升序输出，让 variant-only 命中也有机会
+    # 进入后续 top_k 截断；原先按"原 query 在前、追加 variant"顺序会让 query_rewrite 的
+    # 命中实质被截掉，等于该功能没生效。同 rank 用 distance 兜底。
+    def _sort_key(row: dict[str, Any]) -> tuple[int, float]:
+        rank = int(row.get("query_variant_best_rank") or 999_999)
+        distance = row.get("_distance")
+        dist_val = float(distance) if isinstance(distance, (int, float)) else 999_999.0
+        return (rank, dist_val)
+
+    return sorted(merged.values(), key=_sort_key)
+
+
+def _dedupe_query_texts(texts: list[str]) -> list[str]:
+    out: list[str] = []
+    for raw in texts:
+        text = " ".join(str(raw or "").split()).strip()
+        if not text or text in out:
+            continue
+        out.append(text)
+    return out or [""]
 
 
 def _filter_friend_rows(

@@ -49,6 +49,23 @@ OpenAI 兼容聊天接口，也是第三方程序最应该接入的主接口。
 > 响应会带 `finish_reason="silenced"` + `content="[silent]"`（sentinel 可通过 `SILENCE_RESPONSE_SENTINEL` 配置）+ `policy.should_reply=false`。
 > 严格 enum 校验的 OpenAI SDK 可在 `.env` 里把 `SILENCE_FINISH_REASON=stop` 退回标准协议。
 
+> **关于多条消息分条（QQ / 微信式"连续发好几条"）：** Afterglow 通过 persona 模板约束主模型把
+> "本轮想分多条发出去的内容"用**双换行 `\n\n` 作为分条分隔符**写在同一个 assistant message 里，
+> 而**不是**返回多个 choices 或多次 API 调用 —— 这样才能保持 OpenAI 协议 1:1 兼容。
+> 单换行 `\n` 仍然是同一条消息内的换行（用于诗、列表、代码等），不构成分条。
+>
+> **调用方需要自行处理这件事**：
+> - **想还原 QQ/微信"分多条气泡"效果**：按 `\n\n` split content，每段当独立消息渲染，
+>   段与段之间加 1.5-3 秒随机延迟（模拟人打字的节奏，不要瞬间全部 push）。建议每段渲染前
+>   先校验当前会话还没被切走，避免延迟期间用户切走会话后老内容污染新会话。
+>   `frontend/src/stores/chat.ts` 的 `finishAssistantMessage` 是一个可参考的实现。
+> - **不需要分条效果（CLI / 单气泡 UI / 第三方机器人转发）**：直接把整段 content 渲染出去即可，
+>   `\n\n` 在 markdown 渲染器里本就是段落分隔，体验不会比单段差。
+> - **流式 SSE**：`\n\n` 可能跨多个 delta chunk 出现（主模型逐 token 输出），客户端应该
+>   先把所有 delta 拼起来、流结束后再 split，**不要**在每个 delta 内做 split（会把"段中间"误判成分条）。
+> - `policy.reply_delay_seconds` 是**整条回复**展示前的延迟（拟人化"看了一会儿才回"），
+>   与上面"段间延迟"是两层不同的延迟，互不冲突；客户端先等 `reply_delay_seconds` 再开始逐段播放。
+
 > **关于 life 状态自更新（`LIFE_MARKER_UPDATE_ENABLED=true`，默认开）：**
 > 主模型在回复末尾可输出隐藏标记块 `<life-update>{"current_activity": "...", "recent_meal": "...", "mood": "...", "availability": "..."}</life-update>`，
 > 后端解析后**直接** patch AI 的生活时间线（不调小模型，零额外 API 调用），并从对外回复里**剥离**这个块用户看不到。
@@ -189,6 +206,11 @@ event: response.created → event: response.in_progress
 **沉默响应：** 走完整事件序列，`output_text.delta` 只发一次（值为 `SILENCE_RESPONSE_SENTINEL`，
 默认 `"[silent]"`），`status` 为 `completed`；调用方应靠顶层 `policy.should_reply == false`
 或 `output_text == sentinel` 识别。
+
+**多条消息分条：** 与 `/v1/chat/completions` 同样的语义 —— 主模型用 `\n\n` 在同一段
+`output_text` 内表示"想分多条发出去"。流式时 `\n\n` 可能跨多个 `output_text.delta`，
+客户端应先拼接完整 `output_text` 再 split，按段渲染并加 1.5-3s 段间延迟以模拟分条节奏。
+详见上面 `/v1/chat/completions` 的"多条消息分条"小节。
 
 **previous_response_id 串接：** 第二次请求带上上次返回的 `id`，后端会沿用上次的
 `conversation_id` 自动接上对话。重启进程后缓存丢失，此时建议改用显式 `conversation_id`。

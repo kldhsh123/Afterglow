@@ -1,6 +1,6 @@
 {
   "name": "afterglow-frontend",
-  "version": "0.2.2",
+  "version": "0.2.3002",
   "private": true,
   "license": "AGPL-3.0-or-later",
   "description": "续温（Afterglow）前端 —— 时光信笺风格的 Vue 3 单页应用",

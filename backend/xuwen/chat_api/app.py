@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -35,6 +36,8 @@ from xuwen.config import Settings, get_settings
 from xuwen.core.metrics import MetricsRecorder
 from xuwen.core.update_check import UpdateChecker
 from xuwen.ingestion.embedder import EmbeddingClient
+from xuwen.memory.cross_reranker import CrossReranker
+from xuwen.memory.reranker import QueryRewriter, SemanticReranker
 from xuwen.memory.retriever import HybridRetriever
 from xuwen.memory.store import MemoryStore
 from xuwen.memory.writer import WritebackQueue
@@ -55,17 +58,73 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         embedder = EmbeddingClient(resolved_settings)
         llm = LLMClient(resolved_settings)
+        # life / response_policy / query_rewrite / rerank 都是 fail-open 设计：
+        # 单次失败立刻退快路径（缓存 / 规则层 / 原 query / RRF 顺序），重试无意义只会放大延迟。
+        # 主聊天 llm 保留默认 max_retries=3，因为它没有兜底。
         life_llm = LLMClient(
             resolved_settings,
             api_url=resolved_settings.resolved_life_api_url,
             api_key=resolved_settings.resolved_life_api_key.get_secret_value(),
+            max_retries=1,
         )
         response_policy_llm = LLMClient(
             resolved_settings,
             api_url=resolved_settings.resolved_response_policy_api_url,
             api_key=resolved_settings.resolved_response_policy_api_key.get_secret_value(),
+            max_retries=1,
         )
-        retriever = HybridRetriever(resolved_settings, store=store, embedder=embedder)
+        extra_llms: list[LLMClient] = []
+        query_rewriter = None
+        if resolved_settings.query_rewrite_enabled:
+            query_rewrite_llm = LLMClient(
+                resolved_settings,
+                api_url=resolved_settings.resolved_query_rewrite_api_url,
+                api_key=resolved_settings.resolved_query_rewrite_api_key.get_secret_value(),
+                timeout_seconds=resolved_settings.rerank_timeout_seconds,
+                max_retries=1,
+            )
+            extra_llms.append(query_rewrite_llm)
+            query_rewriter = QueryRewriter(resolved_settings, query_rewrite_llm)
+
+        semantic_reranker = None
+        if (
+            resolved_settings.rerank_enabled
+            and resolved_settings.rerank_mode != "never"
+        ):
+            rerank_llm = LLMClient(
+                resolved_settings,
+                api_url=resolved_settings.resolved_rerank_api_url,
+                api_key=resolved_settings.resolved_rerank_api_key.get_secret_value(),
+                timeout_seconds=resolved_settings.rerank_timeout_seconds,
+                max_retries=1,
+            )
+            extra_llms.append(rerank_llm)
+            semantic_reranker = SemanticReranker(resolved_settings, rerank_llm)
+
+        cross_reranker = None
+        if resolved_settings.cross_rerank_enabled:
+            if (
+                not resolved_settings.cross_rerank_api_url
+                or not resolved_settings.cross_rerank_api_key.get_secret_value()
+                or not resolved_settings.cross_rerank_model
+            ):
+                # 启用了但没配齐三件套：忽略 + 警告，主链路继续走 RRF + 可选 LLM 精排
+                import logging as _logging
+
+                _logging.getLogger(__name__).warning(
+                    "CROSS_RERANK_ENABLED=true 但 URL/KEY/MODEL 未配齐，已忽略 cross-encoder 粗排"
+                )
+            else:
+                cross_reranker = CrossReranker(resolved_settings)
+
+        retriever = HybridRetriever(
+            resolved_settings,
+            store=store,
+            embedder=embedder,
+            query_rewriter=query_rewriter,
+            reranker=semantic_reranker,
+            cross_reranker=cross_reranker,
+        )
         writeback = WritebackQueue(resolved_settings, store=store, embedder=embedder)
         await writeback.start()
         metrics = MetricsRecorder(capacity=resolved_settings.metrics_capacity)
@@ -124,10 +183,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             await update_checker.stop()
             await writeback.stop(drain=True)
+            # 等剩余的 life marker fire-and-forget task 完成，避免进程退出时丢失最后几次 marker
+            pending = [t for t in state.pending_life_tasks if not t.done()]
+            if pending:
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(*pending, return_exceptions=True),
+                        timeout=5.0,
+                    )
+                except TimeoutError:
+                    # 5s 内还没跑完的就放弃，避免阻塞 shutdown 太久
+                    for t in pending:
+                        if not t.done():
+                            t.cancel()
             await embedder.aclose()
             await llm.aclose()
             await life_llm.aclose()
             await response_policy_llm.aclose()
+            for extra_llm in extra_llms:
+                await extra_llm.aclose()
+            if cross_reranker is not None:
+                await cross_reranker.aclose()
             if web_search is not None:
                 await web_search.aclose()
             if web_fetch is not None:
