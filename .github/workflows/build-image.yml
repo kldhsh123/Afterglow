@@ -1,13 +1,13 @@
 name: build-image
 
 # 触发条件：
-#   - push 到 main / docker-dev：构建 + 推 edge tag（验证 CI 流程，不抢 latest）
+#   - push 到 main / dev：构建 + 推 edge tag（验证 CI 流程，不抢 latest）
 #   - 推 git tag v*：正式发布，按 semver 自动衍生 0.2.3 / 0.2 / latest
 #   - 手动触发：从 VERSION 文件读版本号 + 推 latest
 # 不用任何额外 secret，GITHUB_TOKEN 自动可用
 on:
   push:
-    branches: [main, docker-dev]
+    branches: [main, dev]
     tags: ['v*']
   workflow_dispatch:
     inputs:
@@ -51,7 +51,7 @@ jobs:
 
       # 自动生成镜像 tag：
       #   - git tag v0.2.3 → 0.2.3, 0.2, latest
-      #   - push 到 main / docker-dev → edge, <branch>-<sha7>
+      #   - push 到 main / dev → 分支名 tag + <branch>-<sha7>；main 额外推 edge
       #   - workflow_dispatch → 用 VERSION 文件值 + latest（可关闭）
       - name: Extract metadata
         id: meta

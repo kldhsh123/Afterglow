@@ -24,7 +24,6 @@ services:
     # 镜像版本：与 Afterglow 项目 VERSION 文件保持一致；
     # 通过 GitHub Actions 自动构建并发布到 GHCR，支持 amd64/arm64 双架构。
     # 拉取：docker compose pull   (公开包，无需 login)
-    # 想用具体版本：image: ghcr.io/kldhsh123/afterglow:0.2.3
     image: ghcr.io/kldhsh123/afterglow:latest
     container_name: afterglow-backend
 

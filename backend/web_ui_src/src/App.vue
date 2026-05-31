@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Afterglow 配置向导（后端自带，不依赖 frontend 项目）
 // 6 步：token → 身份 → 关系 → 聊天 AI → 向量服务(含打标推荐) → 导入聊天记录 → 设置密码
-import { computed, onMounted, reactive, ref, shallowRef } from 'vue'
+import { computed, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import {
   ArrowLeft, ArrowRight, CheckCircle2, AlertCircle, Loader2,
   KeyRound, Copy, RefreshCw, ExternalLink, Upload, FileText, X,
@@ -104,10 +104,36 @@ const embTesting = ref(false)
 const labelTest = ref<TestResult | null>(null)
 const labelTesting = ref(false)
 // 允许跳过可用性校验：网络波动 / 代理问题导致连通测试失败时，
-// 让用户在确认配置无误后强制继续（按步骤独立，互不影响）。
-// 仅放行"下一步"，不绕过必填字段校验。
+// 让用户在确认配置无误后强制继续。仅放行"下一步"，不绕过必填字段校验。
+// 按【服务】拆分而非按【步骤】，避免 embedding 跳过顺带放行 label 校验。
+// 任一关键字段被修改 → 对应 skip + test 状态自动清空，避免残留旧态。
 const skipChatCheck = ref(false)
-const skipEmbCheck = ref(false)
+const skipEmbeddingCheck = ref(false)
+const skipLabelCheck = ref(false)
+
+// 字段变化 → 清空对应的 test 结果与 skip 标志，强迫用户重测/重勾
+// （防止"先填错→失败→跳过→改字段"留下错误的放行状态）。
+watch(
+  () => [form.OPENAI_BASE_URL, form.OPENAI_API_KEY, form.CHAT_MODEL],
+  () => {
+    chatTest.value = null
+    skipChatCheck.value = false
+  },
+)
+watch(
+  () => [form.EMBEDDING_API_URL, form.EMBEDDING_API_KEY, form.EMBEDDING_MODEL, form.EMBEDDING_DIM],
+  () => {
+    embTest.value = null
+    skipEmbeddingCheck.value = false
+  },
+)
+watch(
+  () => [form.LABEL_API_URL, form.LABEL_API_KEY, form.LABEL_MODEL, form.LABELING_ENABLED],
+  () => {
+    labelTest.value = null
+    skipLabelCheck.value = false
+  },
+)
 
 const uploadedFiles = ref<UploadedFile[]>([])
 const importTask = ref<ImportTaskState | null>(null)
@@ -744,8 +770,26 @@ const canNext = computed(() => {
   switch (step.value) {
     case 1: return !!(form.SELF_NAME && form.SELF_UID && form.FRIEND_NAME && form.FRIEND_UID)
     case 2: return form.RELATIONSHIP_TYPE !== 'custom' || !!form.RELATIONSHIP_DESCRIPTION
-    case 3: return !!chatTest.value?.ok || skipChatCheck.value
-    case 4: return (!!embTest.value?.ok && (!form.LABELING_ENABLED || !!labelTest.value?.ok)) || skipEmbCheck.value
+    case 3: {
+      // 必填字段必须填齐；连通性测试通过 OR 用户显式跳过（仅跳过可用性，不绕过必填）
+      const filled = !!(form.OPENAI_BASE_URL && form.OPENAI_API_KEY && form.CHAT_MODEL)
+      if (!filled) return false
+      return !!chatTest.value?.ok || skipChatCheck.value
+    }
+    case 4: {
+      // 向量服务：必填三件套；连通通过 OR 跳过
+      const embFilled = !!(form.EMBEDDING_API_URL && form.EMBEDDING_API_KEY && form.EMBEDDING_MODEL)
+      if (!embFilled) return false
+      const embOk = !!embTest.value?.ok || skipEmbeddingCheck.value
+      if (!embOk) return false
+      // 打标服务：仅在启用时校验；同样要求必填三件套 + 连通/跳过
+      if (form.LABELING_ENABLED) {
+        const labelFilled = !!(form.LABEL_API_URL && form.LABEL_API_KEY && form.LABEL_MODEL)
+        if (!labelFilled) return false
+        if (!labelTest.value?.ok && !skipLabelCheck.value) return false
+      }
+      return true
+    }
     // step 5: 高级功能可选可跳过；开了视觉/联网搜索的话强制必填关键字段
     case 5: {
       // 自定义（非复用打标）模式下必须填三件套
@@ -1390,13 +1434,19 @@ onMounted(async () => {
                     <span>{{ labelTest.message?.trim() || '未知错误，请检查网络、代理或接口地址后重试' }}</span>
                   </div>
                 </div>
+                <!-- 打标服务独立的跳过开关；仅在启用打标且校验失败时出现 -->
+                <label v-if="form.LABELING_ENABLED && labelTest && !labelTest.ok"
+                  class="flex items-center gap-2 mt-1 cursor-pointer text-xs text-warning/90">
+                  <input v-model="skipLabelCheck" type="checkbox" class="w-3.5 h-3.5 accent-warning" />
+                  <span>打标服务校验未通过，但我确认配置无误，允许跳过并继续</span>
+                </label>
               </div>
             </div>
-            <!-- 允许跳过：向量/打标连通测试失败时，确认无误可强制继续 -->
-            <label v-if="(embTest && !embTest.ok) || (form.LABELING_ENABLED && labelTest && !labelTest.ok)"
+            <!-- 允许跳过：仅放行 embedding 的连通性失败；必填字段未填仍会被 canNext 拦下 -->
+            <label v-if="embTest && !embTest.ok"
               class="flex items-center gap-2 mt-1 cursor-pointer text-xs text-warning/90">
-              <input v-model="skipEmbCheck" type="checkbox" class="w-3.5 h-3.5 accent-warning" />
-              <span>校验未通过，但我确认配置无误，允许跳过并继续</span>
+              <input v-model="skipEmbeddingCheck" type="checkbox" class="w-3.5 h-3.5 accent-warning" />
+              <span>向量服务校验未通过，但我确认配置无误，允许跳过并继续</span>
             </label>
           </div>
 

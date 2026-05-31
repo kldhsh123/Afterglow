@@ -47,6 +47,22 @@ OpenAI 兼容聊天接口，也是第三方程序最应该接入的主接口。
 > OpenAI 官方 SDK 会忽略它，不影响兼容性。流式 chat 首个 chunk 也会带 `policy`，方便客户端在内容到达前先拿到延迟。
 > 当 AI 主动选择不回复时（用户说"别说话"、决策层认为不应继续刺激用户等场景），
 > 响应会带 `finish_reason="silenced"` + `content="[silent]"`（sentinel 可通过 `SILENCE_RESPONSE_SENTINEL` 配置）+ `policy.should_reply=false`。
+
+> **关于 `schedule_tasks` 字段：** 响应体顶层另一非 OpenAI 字段，类型为 `list[ScheduleTask] | null`。
+> 仅在 `SCHEDULE_EXTRACT_ENABLED=true` 且 AI 解析到用户的定时任务请求时返回；其它情况是 `null`。
+> 第三方程序（IM bot / 自动化脚本 / 桌面通知）可凭此字段把"明天早上7点叫我起床"这类自然语言意图直接转为定时任务。
+> 每条 `ScheduleTask` 字段：
+> - `id` (string)：短随机 ID，便于第三方做幂等去重，例如 `"t_a1b2c3"`
+> - `trigger_at` (string)：ISO 8601 含时区的【绝对】首次触发时间，例如 `"2026-06-01T07:00:00+08:00"`
+> - `recurrence` (string | null)：iCalendar RRULE 子集，例如 `"FREQ=DAILY;BYHOUR=7;BYMINUTE=0"`；`null` 表示一次性
+> - `message` (string)：届时要发送给用户的内容
+> - `title` (string)：简短标题（可选）
+> - `source` (string)：`"extractor"`（默认，时间线小模型解析）或 `"main"`（主聊天模型直出，目前未启用）
+>
+> 解析流程：主聊天模型在回复里输出 `<schedule-hint>明天早上7点叫我起床</schedule-hint>`（自然语言意图，对用户不可见），
+> 后端调用时间线小模型把每条 hint 转为结构化 `ScheduleTask`。失败/超时/未启用时直接返回 `null`，不影响主回复。
+> 小模型配置见 `.env.example` 的 `SCHEDULE_*` 段；留空时依次复用 `LABEL_*` / `RESPONSE_POLICY_*` / `LIFE_*` / 主 LLM。
+
 > 严格 enum 校验的 OpenAI SDK 可在 `.env` 里把 `SILENCE_FINISH_REASON=stop` 退回标准协议。
 
 > **关于多条消息分条（QQ / 微信式"连续发好几条"）：** Afterglow 通过 persona 模板约束主模型把

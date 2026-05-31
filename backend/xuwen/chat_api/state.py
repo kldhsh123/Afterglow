@@ -33,6 +33,9 @@ class AppState:
     llm: LLMClient
     life_llm: LLMClient
     response_policy_llm: LLMClient
+    # 时间线小模型。SCHEDULE_EXTRACT_ENABLED=true 才会被使用；
+    # 关闭时仍会构造（成本低），便于热启用而无需重启。
+    schedule_extractor_llm: LLMClient
     retriever: HybridRetriever
     writeback: WritebackQueue
     metrics: MetricsRecorder
