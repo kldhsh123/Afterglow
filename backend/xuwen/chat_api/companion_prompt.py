@@ -68,8 +68,16 @@ def build_persona_card_with_companion_context(
     relationship_context: str,
     style_query: str = "",
     response_policy_context: str = "",
+    include_schedule_hint: bool = False,
 ) -> str:
-    """Load persona card and append high-priority companion context."""
+    """Load persona card and append high-priority companion context.
+
+    `include_schedule_hint`：是否注入 <schedule-hint> 内部协议指引。
+    只有真正会调用 schedule_extractor 并把结果回传给客户端的路由（目前仅
+    routes/chat.py 的 ChatCompletions）才应传 True。Responses API / 主动话题
+    等路由若也开启该指引，AI 会输出 hint 但调用方拿不到 schedule_tasks，
+    任务会被静默丢失（Finding 5）。
+    """
     persona_card = load_persona_card(settings.persona_data_dir / "persona_card.md")
     blocks = [_PERSONA_CARD_BOUNDARY]
     style_profile = load_style_profile(settings.persona_data_dir / "persona_style_profile.json")
@@ -90,7 +98,7 @@ def build_persona_card_with_companion_context(
         blocks.append(response_policy_context)
     if settings.life_marker_update_enabled:
         blocks.append(_LIFE_MARKER_INSTRUCTION)
-    if settings.schedule_extract_enabled:
+    if include_schedule_hint and settings.schedule_extract_enabled:
         blocks.append(_SCHEDULE_HINT_INSTRUCTION)
 
     sticker_store = StickerStore(settings)

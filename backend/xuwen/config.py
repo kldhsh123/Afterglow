@@ -370,6 +370,9 @@ class Settings(BaseSettings):
     schedule_max_tokens: int = 400
     # 单轮最多解析的 hint 数量，防止主模型刷屏导致小模型成本失控
     schedule_max_hints_per_turn: int = 5
+    # 整批解析的总超时（秒），到点未完成则 fail-open 返回空列表。
+    # 避免小模型 endpoint 慢/不通时阻塞主回复（Finding 6）。
+    schedule_extract_timeout_seconds: float = 10.0
 
     # ----- 沉默响应（决策层判断本轮不应回复时返回的内容）-----
     # content 字段放一个明确的 sentinel，让标准 OpenAI 客户端也能区分

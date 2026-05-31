@@ -268,22 +268,36 @@ async def extract_schedule_tasks(
     if not model:
         # 没有可用模型（用户什么都没配）→ 静默退出
         return []
+    # 整批超时：避免小模型 endpoint 慢/不通时阻塞主回复（Finding 6）。
+    # LLMClient 单次默认 60s timeout，N 条并发最坏也接近 60s——这里用更紧的总预算
+    # 兜底，到点未完成则 fail-open 返回空列表，主回复正常发出。
+    # 不做下限钳制：用户若显式配 0 或极小值，等价于"禁用 extractor"，与
+    # SCHEDULE_EXTRACT_ENABLED=false 等价的快路径，是合理用法。
+    timeout = settings.schedule_extract_timeout_seconds
     try:
-        results = await asyncio.gather(
-            *(
-                _extract_one(
-                    h,
-                    llm=llm,
-                    model=model,
-                    settings=settings,
-                    now=now,
-                    trace_id=trace_id,
-                    metrics=metrics,
-                )
-                for h in capped
+        results = await asyncio.wait_for(
+            asyncio.gather(
+                *(
+                    _extract_one(
+                        h,
+                        llm=llm,
+                        model=model,
+                        settings=settings,
+                        now=now,
+                        trace_id=trace_id,
+                        metrics=metrics,
+                    )
+                    for h in capped
+                ),
+                return_exceptions=True,
             ),
-            return_exceptions=True,
+            timeout=timeout,
         )
+    except TimeoutError:
+        logger.warning(
+            "schedule_extractor 超时（%.1fs），fail-open 返回空列表", timeout
+        )
+        return []
     except Exception:
         logger.warning("schedule_extractor gather 失败", exc_info=True)
         return []

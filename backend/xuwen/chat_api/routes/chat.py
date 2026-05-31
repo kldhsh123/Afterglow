@@ -335,6 +335,10 @@ async def chat_completions(
         response_policy_context=response_decision.render_prompt_block(
             silence_sentinel=effective_silence_sentinel(state.settings),
         ),
+        # 本路由（ChatCompletions）会调用 schedule_extractor 并回传 schedule_tasks，
+        # 所以可以安全地教 AI 输出 <schedule-hint>。Responses / Companion 路由
+        # 未接入提取链路，传 False（默认）以免任务被静默丢失。
+        include_schedule_hint=True,
     )
     # 等 Layer B 起的 fetch_many 跑完。如果 prompt 组装已盖住 fetch RTT，这里 await 接近 0ms。
     url_context = await fetch_many_task
