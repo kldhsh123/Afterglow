@@ -41,11 +41,57 @@ def _explain_http_error(status: int, body_text: str) -> str:
     return f"HTTP {status}：{snippet}"
 
 
+def _describe_exc(exc: Exception) -> str:
+    """提取异常的非空原因文本，保证返回值非空。
+
+    httpx 网络异常（ConnectTimeout/ReadTimeout/ConnectError 等）的 str(exc)
+    经常是空字符串，直接拼接会得到"原因为空"。这里依次回退到底层
+    cause/context、repr、类名，确保任何异常都能给出可读文本。
+    """
+    raw = str(exc).strip()
+    if raw:
+        return raw
+    cause = exc.__cause__ or exc.__context__
+    if cause is not None:
+        c = str(cause).strip()
+        return f"{type(cause).__name__}: {c}" if c else type(cause).__name__
+    return repr(exc).strip() or type(exc).__name__
+
+
 def _explain_network_error(exc: Exception) -> str:
-    """网络层错误（DNS、连接、超时）的中文解释。"""
+    """网络层错误（DNS、连接、超时、代理）的中文解释。
+
+    按 httpx 异常【类型】判定，而非依赖 str(exc)——后者对 httpx 网络异常
+    常为空，旧的子串匹配会全部落空并退到空 fallback（"网络错误："）。
+    所有分支都保证返回非空、可读的中文。
+    """
     name = type(exc).__name__
     text = str(exc).lower()
-    if "timeout" in text or "timed out" in name.lower():
+
+    # 1) 按 httpx 异常类型判定（这些异常的 str(exc) 多为空，不能依赖文本）
+    if isinstance(exc, httpx.TimeoutException):
+        return "连接超时。请检查网络、是否需要代理、接口地址是否正确。"
+    if isinstance(exc, httpx.ProxyError):
+        return "代理连接失败。请检查代理设置（HTTP_PROXY/HTTPS_PROXY）或关闭代理后重试。"
+    if isinstance(exc, httpx.ConnectError):
+        # ConnectError 会聚合 DNS / 拒绝连接 / SSL 握手等底层原因，能拿到文本就细化
+        if "ssl" in text or "certificate" in text:
+            return "SSL/TLS 错误。如果使用本地服务（http://127.0.0.1）请确认协议是 http 而非 https。"
+        if (
+            "name or service not known" in text
+            or "nodename nor servname" in text
+            or "temporary failure in name resolution" in text
+            or "getaddrinfo" in text
+        ):
+            return "域名解析失败。请确认接口地址拼写正确且能访问外网。"
+        if "connection refused" in text or "[errno 111]" in text:
+            return "服务拒绝连接。如果是本地服务（如 Ollama），请确认服务已启动。"
+        return f"无法连接到服务（{name}）。请检查接口地址、网络或代理设置。"
+    if isinstance(exc, httpx.RemoteProtocolError):
+        return "服务端异常断开连接。请稍后重试，或确认接口地址与协议是否正确。"
+
+    # 2) 文本兜底：兼容非 httpx 异常，按原有关键词给中文
+    if "timeout" in text or "timed out" in text:
         return "连接超时。请检查网络、是否需要代理、接口地址是否正确。"
     if "ssl" in text:
         return "SSL/TLS 错误。如果使用本地服务（http://127.0.0.1）请确认协议是 http 而非 https。"
@@ -53,7 +99,11 @@ def _explain_network_error(exc: Exception) -> str:
         return "域名解析失败。请确认接口地址拼写正确且能访问外网。"
     if "connection refused" in text:
         return "服务拒绝连接。如果是本地服务（如 Ollama），请确认服务已启动。"
-    return f"网络错误：{exc}"
+
+    # 3) 最终兜底——永不为空，带上异常类名与可得原因
+    if isinstance(exc, httpx.TransportError):
+        return f"网络传输错误（{name}）：{_describe_exc(exc)}"
+    return f"网络错误（{name}）：{_describe_exc(exc)}"
 
 
 async def test_openai_chat(
@@ -84,7 +134,7 @@ async def test_openai_chat(
         return TestResult(
             ok=False,
             message=_explain_network_error(e),
-            detail=f"{type(e).__name__}: {e}",
+            detail=f"{type(e).__name__}: {_describe_exc(e)}",
         )
     if resp.status_code >= 400:
         return TestResult(
@@ -133,7 +183,7 @@ async def test_embedding(
         return TestResult(
             ok=False,
             message=_explain_network_error(e),
-            detail=f"{type(e).__name__}: {e}",
+            detail=f"{type(e).__name__}: {_describe_exc(e)}",
         )
     if resp.status_code >= 400:
         msg = _explain_http_error(resp.status_code, resp.text)

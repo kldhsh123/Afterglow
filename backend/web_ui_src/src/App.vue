@@ -103,6 +103,11 @@ const embTest = ref<TestResult | null>(null)
 const embTesting = ref(false)
 const labelTest = ref<TestResult | null>(null)
 const labelTesting = ref(false)
+// 允许跳过可用性校验：网络波动 / 代理问题导致连通测试失败时，
+// 让用户在确认配置无误后强制继续（按步骤独立，互不影响）。
+// 仅放行"下一步"，不绕过必填字段校验。
+const skipChatCheck = ref(false)
+const skipEmbCheck = ref(false)
 
 const uploadedFiles = ref<UploadedFile[]>([])
 const importTask = ref<ImportTaskState | null>(null)
@@ -739,8 +744,8 @@ const canNext = computed(() => {
   switch (step.value) {
     case 1: return !!(form.SELF_NAME && form.SELF_UID && form.FRIEND_NAME && form.FRIEND_UID)
     case 2: return form.RELATIONSHIP_TYPE !== 'custom' || !!form.RELATIONSHIP_DESCRIPTION
-    case 3: return !!chatTest.value?.ok
-    case 4: return !!embTest.value?.ok && (!form.LABELING_ENABLED || !!labelTest.value?.ok)
+    case 3: return !!chatTest.value?.ok || skipChatCheck.value
+    case 4: return (!!embTest.value?.ok && (!form.LABELING_ENABLED || !!labelTest.value?.ok)) || skipEmbCheck.value
     // step 5: 高级功能可选可跳过；开了视觉/联网搜索的话强制必填关键字段
     case 5: {
       // 自定义（非复用打标）模式下必须填三件套
@@ -1202,9 +1207,15 @@ onMounted(async () => {
                 :class="chatTest.ok ? 'text-accent dark:text-night-accent' : 'text-warning'">
                 <CheckCircle2 v-if="chatTest.ok" :size="14" />
                 <AlertCircle v-else :size="14" />
-                <span>{{ chatTest.message }}</span>
+                <span>{{ chatTest.message?.trim() || '未知错误，请检查网络、代理或接口地址后重试' }}</span>
               </div>
             </div>
+            <!-- 允许跳过：连通测试失败时给一个"确认无误强制继续"的出口 -->
+            <label v-if="chatTest && !chatTest.ok"
+              class="flex items-center gap-2 mt-1 cursor-pointer text-xs text-warning/90">
+              <input v-model="skipChatCheck" type="checkbox" class="w-3.5 h-3.5 accent-warning" />
+              <span>校验未通过，但我确认配置无误，允许跳过并继续</span>
+            </label>
           </div>
 
           <!-- step 4: 向量服务 + 打标 -->
@@ -1281,7 +1292,7 @@ onMounted(async () => {
                 :class="embTest.ok ? 'text-accent dark:text-night-accent' : 'text-warning'">
                 <CheckCircle2 v-if="embTest.ok" :size="14" />
                 <AlertCircle v-else :size="14" />
-                <span>{{ embTest.message }}</span>
+                <span>{{ embTest.message?.trim() || '未知错误，请检查网络、代理或接口地址后重试' }}</span>
               </div>
               <button v-if="embTest && !embTest.ok && embTest.extra?.actual_dim"
                 class="text-xs px-3 py-1 rounded-full border border-accent/40 text-accent
@@ -1376,11 +1387,17 @@ onMounted(async () => {
                     :class="labelTest.ok ? 'text-accent dark:text-night-accent' : 'text-warning'">
                     <CheckCircle2 v-if="labelTest.ok" :size="12" />
                     <AlertCircle v-else :size="12" />
-                    <span>{{ labelTest.message }}</span>
+                    <span>{{ labelTest.message?.trim() || '未知错误，请检查网络、代理或接口地址后重试' }}</span>
                   </div>
                 </div>
               </div>
             </div>
+            <!-- 允许跳过：向量/打标连通测试失败时，确认无误可强制继续 -->
+            <label v-if="(embTest && !embTest.ok) || (form.LABELING_ENABLED && labelTest && !labelTest.ok)"
+              class="flex items-center gap-2 mt-1 cursor-pointer text-xs text-warning/90">
+              <input v-model="skipEmbCheck" type="checkbox" class="w-3.5 h-3.5 accent-warning" />
+              <span>校验未通过，但我确认配置无误，允许跳过并继续</span>
+            </label>
           </div>
 
           <!-- step 5: 可选功能 -->
