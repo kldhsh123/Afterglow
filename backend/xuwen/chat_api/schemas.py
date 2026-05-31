@@ -123,6 +123,37 @@ class PolicyHint(BaseModel):
     reply_delay_reason: str = Field(default="", description="延迟原因短语；无延迟时为空")
 
 
+class ScheduleTask(BaseModel):
+    """非 OpenAI 标准字段：AI 主动建议的定时任务。
+
+    用例：用户说"明天早上叫我起床"，AI 在自然回复之外，把这条意图作为结构化
+    任务回传。第三方程序（IM bot / 自动化脚本 / 桌面通知）拿到 trigger_at +
+    可选 recurrence 后，可自行接入 cron/at/调度器在届时把 message 发给用户。
+
+    设计：
+    - trigger_at 永远是 ISO 8601 含时区的【绝对】时间；
+      重复任务时表示"首次触发时间"，后续靠 recurrence 推算
+    - recurrence 用 iCalendar RRULE 子集（FREQ/INTERVAL/BYHOUR/BYMINUTE/BYDAY...）；
+      None 表示一次性
+    - id 为短随机字符串，便于第三方做幂等去重
+    - source 标识由谁解析（main = 主模型直出；extractor = 时间线小模型）
+    """
+
+    id: str = Field(description="短随机 ID，用于第三方去重")
+    trigger_at: str = Field(description="ISO 8601 含时区的首次触发时间，例如 2026-06-01T07:00:00+08:00")
+    message: str = Field(description="届时要发送给用户的消息内容")
+    title: str = Field(default="", description="简短标题；可选")
+    recurrence: str | None = Field(
+        default=None,
+        description="iCalendar RRULE 字符串；None 表示一次性任务。例：FREQ=DAILY;BYHOUR=7;BYMINUTE=0",
+    )
+    source: Literal["main", "extractor"] = Field(
+        default="extractor",
+        description="解析来源：main=主聊天模型直出，extractor=时间线小模型解析",
+    )
+
+
+
 class Choice(BaseModel):
     index: int = 0
     message: ChatMessage
@@ -141,6 +172,10 @@ class ChatCompletionResponse(BaseModel):
     trace_id: str = ""
     # 非 OpenAI 字段，描述本轮决策；调用方可以忽略
     policy: PolicyHint | None = None
+    # 非 OpenAI 字段：AI 主动建议的定时任务列表。
+    # 默认 None，开启 SCHEDULE_EXTRACT_ENABLED 且解析出任务时才有值。
+    # 第三方程序可据此安排定时消息推送；详见 ScheduleTask。
+    schedule_tasks: list[ScheduleTask] | None = None
 
 
 # ---------------------------------------------------------------------------

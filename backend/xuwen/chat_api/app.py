@@ -73,6 +73,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             api_key=resolved_settings.resolved_response_policy_api_key.get_secret_value(),
             max_retries=1,
         )
+        schedule_extractor_llm = LLMClient(
+            resolved_settings,
+            api_url=resolved_settings.resolved_schedule_api_url,
+            api_key=resolved_settings.resolved_schedule_api_key.get_secret_value(),
+            max_retries=1,
+        )
         extra_llms: list[LLMClient] = []
         query_rewriter = None
         if resolved_settings.query_rewrite_enabled:
@@ -156,6 +162,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             llm=llm,
             life_llm=life_llm,
             response_policy_llm=response_policy_llm,
+            schedule_extractor_llm=schedule_extractor_llm,
             retriever=retriever,
             writeback=writeback,
             metrics=metrics,
@@ -200,6 +207,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await llm.aclose()
             await life_llm.aclose()
             await response_policy_llm.aclose()
+            await schedule_extractor_llm.aclose()
             for extra_llm in extra_llms:
                 await extra_llm.aclose()
             if cross_reranker is not None:

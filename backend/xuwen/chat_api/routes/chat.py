@@ -20,6 +20,7 @@ from xuwen.chat_api.chat_pipeline import (
     effective_reply_delay_seconds,
     effective_silence_sentinel,
     extract_life_marker_async,
+    extract_schedule_hints,
     fallback_for_rejected_sticker,
     is_ai_silence_signal,
     looks_like_sticker_only_intent,
@@ -32,6 +33,7 @@ from xuwen.chat_api.companion_prompt import (
 from xuwen.chat_api.image_store import ImageError, save_data_url
 from xuwen.chat_api.llm_client import GenerationParams
 from xuwen.chat_api.output_filter import AssistantOutputFilter, sanitize_assistant_text
+from xuwen.chat_api.schedule_extractor import extract_schedule_tasks
 from xuwen.chat_api.schemas import (
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -40,6 +42,7 @@ from xuwen.chat_api.schemas import (
     ImagePart,
     ImageUrlPayload,
     PolicyHint,
+    ScheduleTask,
     TextPart,
     Usage,
 )
@@ -58,6 +61,7 @@ from xuwen.companion.response_policy import (
 from xuwen.config import Settings
 from xuwen.core.errors import RetrievalError, XuwenError
 from xuwen.core.models import RetrievalQuery
+from xuwen.core.time import local_now
 from xuwen.memory.writer import WritebackTurn
 from xuwen.persona.prompt import ChatMessage as PromptMessage
 from xuwen.persona.prompt import build_chat_messages
@@ -331,6 +335,10 @@ async def chat_completions(
         response_policy_context=response_decision.render_prompt_block(
             silence_sentinel=effective_silence_sentinel(state.settings),
         ),
+        # 本路由（ChatCompletions）会调用 schedule_extractor 并回传 schedule_tasks，
+        # 所以可以安全地教 AI 输出 <schedule-hint>。Responses / Companion 路由
+        # 未接入提取链路，传 False（默认）以免任务被静默丢失。
+        include_schedule_hint=True,
     )
     # 等 Layer B 起的 fetch_many 跑完。如果 prompt 组装已盖住 fetch RTT，这里 await 接近 0ms。
     url_context = await fetch_many_task
@@ -511,6 +519,25 @@ async def chat_completions(
             user_text=current_user_text,
             assistant_text="" if ai_silenced else assistant_text,
         )
+    # Feature #9：从主模型原始输出抽 <schedule-hint>，调用小模型解析为 ScheduleTask。
+    # 失败/未启用时为 None；不影响正常回复链路。
+    schedule_tasks_field = None
+    if state.settings.schedule_extract_enabled and not ai_silenced:
+        hints = extract_schedule_hints(
+            raw_assistant_text,
+            max_hints=state.settings.schedule_max_hints_per_turn,
+        )
+        if hints:
+            tasks = await extract_schedule_tasks(
+                hints,
+                llm=state.schedule_extractor_llm,
+                settings=state.settings,
+                now=local_now(state.settings.app_timezone),
+                trace_id=trace_id,
+                metrics=state.metrics,
+            )
+            schedule_tasks_field = tasks or None
+
     # 假流式：客户端传 stream=true 但后端配置不启用真流式 → 把完整内容包装成
     # 单个 content chunk + 收尾，按 OpenAI SSE 协议返回，客户端无感。
     if req.stream:
@@ -520,6 +547,7 @@ async def chat_completions(
                 trace_id=trace_id,
                 assistant_text=assistant_text,
                 policy=policy_hint,
+                schedule_tasks=schedule_tasks_field,
                 finish_reason=(
                     state.settings.silence_finish_reason if ai_silenced else "stop"
                 ),
@@ -541,6 +569,7 @@ async def chat_completions(
         usage=Usage(),
         trace_id=trace_id,
         policy=policy_hint,
+        schedule_tasks=schedule_tasks_field,
     )
 
 
@@ -550,6 +579,7 @@ async def _pseudo_stream_chunks(
     trace_id: str,
     assistant_text: str,
     policy: PolicyHint,
+    schedule_tasks: list[ScheduleTask] | None = None,
     finish_reason: str = "stop",
 ) -> AsyncIterator[bytes]:
     """OpenAI SSE 协议包装：把已经生成好的完整 assistant_text 作为单个 content chunk
@@ -584,6 +614,8 @@ async def _pseudo_stream_chunks(
         yield _format_sse(_chunk({"content": assistant_text}))
     final = _chunk({}, finish=finish_reason)
     final["policy"] = policy.model_dump()
+    if schedule_tasks:
+        final["schedule_tasks"] = [t.model_dump() for t in schedule_tasks]
     yield _format_sse(final)
     yield b"data: [DONE]\n\n"
 
@@ -709,7 +741,27 @@ async def _stream_response(
         )
     finish_reason = state.settings.silence_finish_reason if ai_silenced else "stop"
 
-    yield _format_sse(_chunk_dict({}, finish=finish_reason, extra={"policy": policy.model_dump()}))
+    # Feature #9 Finding 1：真流式同样要把 schedule_tasks 放进收尾 chunk，
+    # 与假流式 / 非流式 schema 一致。失败/未启用时 None，不影响协议兼容。
+    final_extra: dict[str, Any] = {"policy": policy.model_dump()}
+    if state.settings.schedule_extract_enabled and not ai_silenced:
+        hints = extract_schedule_hints(
+            raw_full,
+            max_hints=state.settings.schedule_max_hints_per_turn,
+        )
+        if hints:
+            stream_tasks = await extract_schedule_tasks(
+                hints,
+                llm=state.schedule_extractor_llm,
+                settings=state.settings,
+                now=local_now(state.settings.app_timezone),
+                trace_id=trace_id,
+                metrics=state.metrics,
+            )
+            if stream_tasks:
+                final_extra["schedule_tasks"] = [t.model_dump() for t in stream_tasks]
+
+    yield _format_sse(_chunk_dict({}, finish=finish_reason, extra=final_extra))
     yield b"data: [DONE]\n\n"
 
     # 流结束后用累积的完整 raw 文本跑 life-update 标记块解析（apply 即可，

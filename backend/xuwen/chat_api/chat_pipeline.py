@@ -26,6 +26,34 @@ _LIFE_MARKER_RE = re.compile(
     re.DOTALL | re.IGNORECASE,
 )
 
+# Feature #9：主模型在回复中可输出 <schedule-hint>明天早上7点叫我起床</schedule-hint>
+# 表达定时任务意图。流结束后由 schedule_extractor 小模型解析为结构化 ScheduleTask。
+_SCHEDULE_HINT_RE = re.compile(
+    r"<schedule-hint>\s*(.*?)\s*</schedule-hint>",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def extract_schedule_hints(assistant_text: str, *, max_hints: int = 5) -> list[str]:
+    """从 assistant_text 中抽取 <schedule-hint> 块内的自然语言时间意图。
+
+    返回去除首尾空白、去重、最多 max_hints 条的列表；没有命中时返回空列表。
+    本函数纯文本处理，不调用任何 LLM；调用 schedule_extractor 之前的轻量预筛。
+    """
+    if not assistant_text:
+        return []
+    hints: list[str] = []
+    seen: set[str] = set()
+    for raw in _SCHEDULE_HINT_RE.findall(assistant_text):
+        hint = raw.strip()
+        if not hint or hint in seen:
+            continue
+        seen.add(hint)
+        hints.append(hint)
+        if len(hints) >= max_hints:
+            break
+    return hints
+
 
 def build_policy_hint(
     decision: ResponseDecision,

@@ -357,6 +357,23 @@ class Settings(BaseSettings):
     response_policy_temperature: float = 0.2
     response_policy_max_tokens: int = 260
 
+    # ----- 定时任务提取小模型（默认关闭）-----
+    # 主聊天模型仅需在回复里输出 <schedule-hint>明天早上7点叫我起床</schedule-hint>，
+    # 流结束后这个小模型负责把自然语言时间→结构化 ScheduleTask（ISO 8601 + RRULE）。
+    # 留空时复用 LABEL_*，再回退到 RESPONSE_POLICY_*/LIFE_*/主 LLM。
+    # 失败/超时/解析错误时不附 schedule_tasks 字段，不影响主回复。
+    schedule_extract_enabled: bool = False
+    schedule_api_url: str = ""
+    schedule_api_key: SecretStr = Field(default=SecretStr(""))
+    schedule_model: str = ""
+    schedule_temperature: float = 0.1
+    schedule_max_tokens: int = 400
+    # 单轮最多解析的 hint 数量，防止主模型刷屏导致小模型成本失控
+    schedule_max_hints_per_turn: int = 5
+    # 整批解析的总超时（秒），到点未完成则 fail-open 返回空列表。
+    # 避免小模型 endpoint 慢/不通时阻塞主回复（Finding 6）。
+    schedule_extract_timeout_seconds: float = 10.0
+
     # ----- 沉默响应（决策层判断本轮不应回复时返回的内容）-----
     # content 字段放一个明确的 sentinel，让标准 OpenAI 客户端也能区分
     # "AI 主动选择不说话" 和 "网络异常 / 空回复"；Afterglow 客户端仍可读 policy.should_reply。
@@ -757,6 +774,33 @@ class Settings(BaseSettings):
     def resolved_response_policy_model(self) -> str:
         """互动决策小模型名；留空则复用 LIFE_MODEL，LIFE_MODEL 也空再复用 CHAT_MODEL。"""
         return self.response_policy_model or self.resolved_life_model
+
+    @property
+    def resolved_schedule_api_url(self) -> str:
+        """定时任务提取小模型 endpoint；留空依次复用 LABEL_*/RESPONSE_POLICY_*/LIFE_*/主 LLM。"""
+        if self.schedule_api_url:
+            return self.schedule_api_url
+        if self.label_api_key.get_secret_value():
+            return self.label_api_url
+        return self.resolved_response_policy_api_url
+
+    @property
+    def resolved_schedule_api_key(self) -> SecretStr:
+        """定时任务提取小模型 key；空时复用 LABEL_*，再回退 RESPONSE_POLICY 链。"""
+        if self.schedule_api_key.get_secret_value():
+            return self.schedule_api_key
+        if self.label_api_key.get_secret_value():
+            return self.label_api_key
+        return self.resolved_response_policy_api_key
+
+    @property
+    def resolved_schedule_model(self) -> str:
+        """定时任务提取小模型名；空时复用 LABEL_MODEL，再回退 RESPONSE_POLICY 链。"""
+        if self.schedule_model:
+            return self.schedule_model
+        if self.label_api_key.get_secret_value():
+            return self.label_model
+        return self.resolved_response_policy_model
 
     @property
     def resolved_query_rewrite_api_url(self) -> str:

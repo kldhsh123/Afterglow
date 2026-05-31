@@ -23,12 +23,25 @@ _REPLY_MEDIA_RE = re.compile(
 )
 # 主模型在回复中输出的 <life-update>{...}</life-update> 标记块——路由层会
 # 解析并 patch life，但对外回复必须剥离干净不让用户看到内部协议。
+# 主模型在回复中输出的 <life-update>{...}</life-update> 标记块——路由层会
+# 解析并 patch life，但对外回复必须剥离干净不让用户看到内部协议。
+# 三种形态都要剥离（防 max_tokens 截断 / 模型半截即停 / 主模型只输出孤立 close）：
+#   1) 成对块：<life-update>...</life-update>
+#   2) 未闭合的开标签到字符串末尾（被截断）：<life-update>...
+#   3) 孤立的关闭标签：</life-update>
 _LIFE_UPDATE_RE = re.compile(
-    r"\s*<life-update>.*?</life-update>\s*",
+    r"\s*(?:<life-update>.*?(?:</life-update>|$)|</life-update>)\s*",
     re.DOTALL | re.IGNORECASE,
 )
 _LIFE_UPDATE_OPEN_TAG = "<life-update>"
 _LIFE_UPDATE_CLOSE_TAG = "</life-update>"
+# Feature #9 同三种形态保护（max_tokens 截断时尤其常见，因为协议块通常追加在回复末尾）。
+_SCHEDULE_HINT_RE = re.compile(
+    r"\s*(?:<schedule-hint>.*?(?:</schedule-hint>|$)|</schedule-hint>)\s*",
+    re.DOTALL | re.IGNORECASE,
+)
+_SCHEDULE_HINT_OPEN_TAG = "<schedule-hint>"
+_SCHEDULE_HINT_CLOSE_TAG = "</schedule-hint>"
 # 完整 sticker token：用来匹配模型已经输出完整的 [sticker:xxx]，便于校验
 _FULL_STICKER_TOKEN_RE = re.compile(r"\[sticker(?::|=)([^\]\s]+)\]")
 _TRAILING_PARTIAL_STICKER_RE = re.compile(r"\s*\[sticker(?::|=)[^\]\s]*$")
@@ -71,6 +84,7 @@ def sanitize_assistant_text(
 
     out = _REPLY_MEDIA_RE.sub("", text)
     out = _LIFE_UPDATE_RE.sub("", out)
+    out = _SCHEDULE_HINT_RE.sub("", out)
     out = _MEDIA_PLACEHOLDER_RE.sub("", out)
     out = _QQ_FACE_RE.sub("", out)
     out = _QQ_NATIVE_FACE_RE.sub("", out)
@@ -125,6 +139,10 @@ class AssistantOutputFilter:
             return ""
 
         cut = len(self._buffer) - _STREAM_TAIL_CHARS
+        # 用 lower-case 副本做位置查找，与 _LIFE_UPDATE_RE / _SCHEDULE_HINT_RE 的
+        # IGNORECASE 行为对齐——否则 <SCHEDULE-HINT> 这种大小写变体能绕过流式守卫
+        # 把半截标签透传给前端（Finding 2）。两个标签都是纯 ASCII，lower 不会移位。
+        buffer_lower = self._buffer.lower()
         # 不要在 bracket token 中间切开，尤其是较长的 [sticker:xxx]。
         last_bracket = self._buffer.rfind("[", 0, cut)
         if last_bracket >= 0:
@@ -133,14 +151,30 @@ class AssistantOutputFilter:
                 cut = last_bracket
         if last_bracket >= 0 and cut - last_bracket < _STREAM_TAIL_CHARS:
             cut = last_bracket
+        # 同样保护 <...> 形式的内部协议标签（<life-update>、<schedule-hint>）。
+        # 与上面的 `[` 守卫对称：当 < 在 cut 前但匹配的 > 未在 cut 前出现时，
+        # 把 cut 回退到 < 处，防止前端看到半截开标签（如 "<life-upda"）。
+        last_lt = self._buffer.rfind("<", 0, cut)
+        if last_lt >= 0:
+            close_gt = self._buffer.find(">", last_lt)
+            if close_gt == -1 or close_gt >= cut:
+                cut = last_lt
         # 不要在 <life-update>...</life-update> 块中间切开，否则用户会看到半截内部协议
-        last_tag_open = self._buffer.rfind(_LIFE_UPDATE_OPEN_TAG, 0, cut)
+        last_tag_open = buffer_lower.rfind(_LIFE_UPDATE_OPEN_TAG, 0, cut)
         if last_tag_open >= 0:
-            tag_close_idx = self._buffer.find(_LIFE_UPDATE_CLOSE_TAG, last_tag_open)
+            tag_close_idx = buffer_lower.find(_LIFE_UPDATE_CLOSE_TAG, last_tag_open)
             if tag_close_idx == -1 or (
                 tag_close_idx + len(_LIFE_UPDATE_CLOSE_TAG) > cut
             ):
                 cut = last_tag_open
+        # 同样保护 <schedule-hint>...</schedule-hint>（同样走 lower-case 比对）
+        last_hint_open = buffer_lower.rfind(_SCHEDULE_HINT_OPEN_TAG, 0, cut)
+        if last_hint_open >= 0:
+            hint_close_idx = buffer_lower.find(_SCHEDULE_HINT_CLOSE_TAG, last_hint_open)
+            if hint_close_idx == -1 or (
+                hint_close_idx + len(_SCHEDULE_HINT_CLOSE_TAG) > cut
+            ):
+                cut = last_hint_open
         if cut <= 0:
             return ""
 
