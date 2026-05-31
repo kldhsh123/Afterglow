@@ -23,17 +23,21 @@ _REPLY_MEDIA_RE = re.compile(
 )
 # 主模型在回复中输出的 <life-update>{...}</life-update> 标记块——路由层会
 # 解析并 patch life，但对外回复必须剥离干净不让用户看到内部协议。
+# 主模型在回复中输出的 <life-update>{...}</life-update> 标记块——路由层会
+# 解析并 patch life，但对外回复必须剥离干净不让用户看到内部协议。
+# 三种形态都要剥离（防 max_tokens 截断 / 模型半截即停 / 主模型只输出孤立 close）：
+#   1) 成对块：<life-update>...</life-update>
+#   2) 未闭合的开标签到字符串末尾（被截断）：<life-update>...
+#   3) 孤立的关闭标签：</life-update>
 _LIFE_UPDATE_RE = re.compile(
-    r"\s*<life-update>.*?</life-update>\s*",
+    r"\s*(?:<life-update>.*?(?:</life-update>|$)|</life-update>)\s*",
     re.DOTALL | re.IGNORECASE,
 )
 _LIFE_UPDATE_OPEN_TAG = "<life-update>"
 _LIFE_UPDATE_CLOSE_TAG = "</life-update>"
-# 主模型在回复中输出的 <schedule-hint>...</schedule-hint> 自然语言意图块——
-# 路由层会调用 schedule_extractor 小模型解析为 ScheduleTask，对外回复必须剥离。
-# Feature #9。
+# Feature #9 同三种形态保护（max_tokens 截断时尤其常见，因为协议块通常追加在回复末尾）。
 _SCHEDULE_HINT_RE = re.compile(
-    r"\s*<schedule-hint>.*?</schedule-hint>\s*",
+    r"\s*(?:<schedule-hint>.*?(?:</schedule-hint>|$)|</schedule-hint>)\s*",
     re.DOTALL | re.IGNORECASE,
 )
 _SCHEDULE_HINT_OPEN_TAG = "<schedule-hint>"
