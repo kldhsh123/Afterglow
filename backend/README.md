@@ -234,8 +234,8 @@ WeFlow 导出 JSON 顶部有 `weflow.format = "arkme-json"`，结构如下：
 {
   "weflow": {"format": "arkme-json", ...},
   "senders": [
-    {"senderID": 1, "wxid": "wxid_xxx", "displayName": "MC"},
-    {"senderID": 2, "wxid": "wxid_yyy", "displayName": "开朗的火山河123"}
+    {"senderID": 1, "wxid": "wxid_xxx", "displayName": "对方名称"},
+    {"senderID": 2, "wxid": "wxid_yyy", "displayName": "你的名称"}
   ],
   "messages": [
     {"isSend": 1, "senderID": 2, ...},   // ← isSend=1 的 senderID 指向"你自己"
