@@ -35,6 +35,10 @@ _BRACKET_MEDIA_RE = re.compile(r"\[(图片|语音|视频|文件|表情|动画表
 # 模仿出 "[/xxx]" 字面字符串。统一归一化为 [表情]。
 _QQ_NATIVE_FACE_RE = re.compile(r"\[/[^\]\n]{1,16}\]")
 
+# QQ 导出里也会出现 `[[狗狗可怜]]` / `[[爱心]]` 这种双中括号表情 token。
+# 这同样只是客户端表情名，不应作为可复读文本进入向量库。
+_QQ_DOUBLE_BRACKET_FACE_RE = re.compile(r"\[\[[^\]\n]{1,32}\]\]")
+
 # 微信内置 emoji token：`[微笑]` `[捂脸]` `[害羞]` `[破涕为笑]` 等。
 # 微信本地表情名都是 1-4 个中文字 + 方括号；不是图片，也不是 Unicode emoji，
 # 直接进库会让主模型在回复时模仿出 `[微笑]` 字面字符串。
@@ -142,10 +146,12 @@ class Cleaner:
 
     def _normalize_brackets(self, text: str) -> str:
         """把 [图片: xxx.png] 这种带文件名的占位统一为 [图片]，
-        再把 QQ 自带文字表情 `[/汪汪]` 和微信内置 emoji `[微笑]` 都归一化为 [表情]，
+        再把 QQ 自带文字表情 `[/汪汪]` / `[[爱心]]` 和微信内置 emoji `[微笑]`
+        都归一化为 [表情]，
         避免模型学到这种字面 token。系统占位符（[图片] / [位置] / ...）保留原样。"""
         text = _BRACKET_MEDIA_RE.sub(lambda m: f"[{m.group(1)}]", text)
         text = _QQ_NATIVE_FACE_RE.sub("[表情]", text)
+        text = _QQ_DOUBLE_BRACKET_FACE_RE.sub("[表情]", text)
         text = _WECHAT_EMOJI_RE.sub(
             lambda m: m.group(0) if m.group(0) in _RESERVED_BRACKET_TOKENS else "[表情]",
             text,
