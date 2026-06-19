@@ -139,7 +139,8 @@ EMBEDDING_MAX_REQUESTS_PER_MINUTE=100
 - **PII 默认脱敏**：手机号 / 邮箱 / 身份证 / 银行卡 / IP 在入库前自动替换为占位符。QQ 号、URL、域名按设计**保留**（uid 需要匹配、URL 是对话语境的一部分）。
 - **`.env` 已在 `.gitignore`**：切勿把含有 API key 的配置文件提交到 git。
 - **后端 API 默认需要鉴权**：除 `/healthz` 外，所有接口默认要求 `XUWEN_API_KEY`，避免模型额度、记忆数据和调试信息被滥用。
-- **导出 JSON 风险提醒**：[QQChatExporter](https://github.com/shuakami/qq-chat-exporter) / [WeFlow](https://github.com/hicccc77/WeFlow) 等导出工具产出的 JSON 含有完整聊天明文（含 wxid / uid 等账号信息），分享给他人前请自行确认。
+- **导出 JSON 风险提醒**：[QQChatExporter](https://github.com/shuakami/qq-chat-exporter) / WeFlow 等导出工具产出的 JSON 含有完整聊天明文（含 wxid / uid 等账号信息），分享给他人前请自行确认。
+- **微信导入提醒**：WeFlow 是 Afterglow 所支持的微信导入适配器，Afterglow 的默认微信导入插件依赖此项目。我注意到 WeFlow 不再开源，所以我无法保证 WeFlow 将来的安全性；在不久的将来我需要 WeFlow 的替代方案来确保用户隐私安全。在此期间，我不会建议使用 WeFlow，但这是目前唯一可用的方案。
 - **导出时只勾选纯文本**：Afterglow 只消费文本语料，导出工具一律**关闭图片 / 语音 / 视频 / 文件**等附件选项。这样导出的 JSON 体积小、不含媒体二进制，导入也更快。
 
 ---
@@ -153,39 +154,57 @@ flowchart LR
 
   subgraph Afterglow["Afterglow 核心能力"]
     API --> Auth["API 鉴权<br/>Trace ID"]
-    Auth --> Retrieve["HybridRetriever<br/>来源分层 + RRF 融合"]
-    Auth --> Life["生活状态小模型<br/>LIFE_* / 网页意图"]
-    Auth --> Relationship["关系记忆<br/>用户近况蒸馏"]
+    Auth --> LayerA["Layer A 并发<br/>检索 / 关系记忆 / 生活状态"]
+    LayerA --> Retrieve["HybridRetriever<br/>三索引 + RRF + 可选 rerank"]
+    LayerA --> Life["LifeStateManager<br/>life_state + 作息画像 + LIFE_*"]
+    LayerA --> Relationship["关系记忆<br/>用户近况蒸馏"]
+    Auth --> Policy["本轮互动决策层<br/>规则引擎 + 可选小模型复核"]
     Auth --> Web["可选联网搜索<br/>URL 网页读取"]
-    Retrieve --> Policy["本轮互动决策层<br/>规则引擎 + 可选小模型复核"]
+    Retrieve --> Policy
     Life --> Policy
     Relationship --> Policy
     Policy --> Prompt["Prompt Builder<br/>persona + 记忆 + 状态 + 决策"]
     Web --> Prompt
     Prompt --> ChatLLM["主聊天模型<br/>OpenAI 兼容"]
-    ChatLLM --> Writeback["Live Memory 回写<br/>user_new / ai_generated"]
+    ChatLLM --> Filter["输出过滤<br/>占位符 / sticker / life-update"]
+    Filter --> API
+    Filter --> Writeback["Live Memory 回写<br/>user_new / ai_generated"]
+    Filter --> Schedule["可选定时任务提取<br/>schedule-hint"]
+    Filter --> LifePatch["生活状态标记回写<br/>life-update"]
   end
 
   subgraph Ingestion["离线导入流水线"]
-    message["导出的聊天记录 JSON"] --> Parse["解析 / 清洗"]
-    Parse --> Redact["PII 脱敏"]
-    Redact --> Chunk["切分 / 三索引 chunk"]
+    message["导出的聊天记录 JSON"] --> Plugin["导入 plugin<br/>QQChatExporter / WeFlow"]
+    Plugin --> Normalize["NormalizedMessage<br/>角色 / 类型 / 占位符"]
+    Normalize --> Clean["清洗 / emoji 与表情占位 / @ 归一"]
+    Clean --> Redact["PII 脱敏"]
+    Redact --> Split["会话切分"]
+    Split --> Chunk["三索引 chunk<br/>friend / window / response_pair"]
     Chunk --> Embed["Embedding 模型"]
     Chunk --> Label["可选打标签小模型"]
+    Split --> PersonaBuild["persona / style / circadian 画像"]
   end
 
   subgraph Storage["本地持久化"]
     Lance[(LanceDB<br/>human_original / live / 关系记忆)]
-    Persona["persona_card.md<br/>style profile"]
-    Assets["图片 / 表情缓存"]
+    Persona["persona_card.md<br/>persona_style_profile.json"]
+    Circadian["circadian_profile.json<br/>真实作息画像"]
+    LifeFile["life_state.json<br/>当天生活时间线"]
+    Assets["图片 / 表情包缓存<br/>stickers index + 文件"]
   end
 
   Embed --> Lance
   Label --> Lance
+  PersonaBuild --> Persona
+  PersonaBuild --> Circadian
   Retrieve --> Lance
   Relationship --> Lance
   Prompt --> Persona
+  Life --> Circadian
+  Life --> LifeFile
+  LifePatch --> LifeFile
   Writeback --> Lance
+  Schedule --> API
   API --> Assets
 ```
 
@@ -194,13 +213,16 @@ mindmap
   root((Afterglow))
     Afterglow 项目主体
       导入与清洗
+      导入插件
       向量库（来源分层）
       混合检索
       Persona
-      生活状态
+      作息画像
+      生活时间线
       关系记忆
       互动决策层
       联网能力
+      表情包与图片缓存
       OpenAI 兼容 API
       诊断链路
     前端 测试调试
@@ -214,6 +236,7 @@ mindmap
       打标签小模型
       生活状态/网页意图小模型
       互动决策小模型（可选）
+      Cross-encoder Reranker（可选）
       Tavily 或 SearXNG
 ```
 
@@ -248,7 +271,7 @@ mindmap
 | Node.js | ≥ 20 | 前端构建 | **仅用前端时需要**；纯 API 用户可不装 |
 | [uv](https://github.com/astral-sh/uv) | latest | Python 包管理 | 推荐 |
 | [pnpm](https://pnpm.io/) | latest | Node 包管理 | 仅前端 |
-| [QQChatExporter V5](https://github.com/shuakami/qq-chat-exporter) / [WeFlow](https://github.com/hicccc77/WeFlow)（微信，`arkme-json`）导出纯文本 JSON | — | 真人聊天数据源 | 至少一份；plugin 会自动识别格式 |
+| [QQChatExporter V5](https://github.com/shuakami/qq-chat-exporter) / WeFlow（微信，`arkme-json`）导出纯文本 JSON | — | 真人聊天数据源 | 至少一份；plugin 会自动识别格式；WeFlow 是当前唯一可用的微信导入方案，但不再建议主动使用 |
 
 ### 1. 准备模型（API）
 
@@ -348,6 +371,7 @@ cp .env.example .env
 - **身份信息** —— `SELF_NAME` / `SELF_UID` / `FRIEND_NAME` / `FRIEND_UID`
   - QQ：`SELF_UID` / `FRIEND_UID` 填 QQChatExporter 导出 JSON 里的 `selfUid` / 对方 `sender.uid`（`u_xxx` 形式）
   - 微信：填 WeFlow 导出 JSON 里 `senders[]` 的 `wxid`（`wxid_xxx` 形式）；定位方法见 `backend/README.md`
+  - **微信导入风险**：WeFlow 是 Afterglow 目前支持的微信导入适配器，默认微信导入插件依赖它；但 WeFlow 不再开源，无法保证将来的安全性。当前不建议主动使用 WeFlow，除非你接受这是现阶段唯一可用方案。
   - `FRIEND_*` 永远是**你想让 AI 模仿的那个人**，不是你自己
   - **跨平台 / 多账号**：同一个人有多个 UID（QQ + 微信 / 主号 + 小号），直接在 `SELF_UID` / `FRIEND_UID` 里**用逗号分隔**列上所有 UID，导入时会被视为同一身份。例：`FRIEND_UID=u_qq_friend,wxid_friend_main,wxid_friend_alt`
 - **主聊天模型** —— `OPENAI_BASE_URL` / `OPENAI_API_KEY` / `CHAT_MODEL`
@@ -636,7 +660,7 @@ A：可以。`.env` 设 `ENABLE_PII_REDACTION=false`，或通过 `PII_RULES_PATH
 A：QQ 号在导出文件里到处都是（uid 关联需要）；URL 是对话语境的一部分（朋友分享 B 站视频是有意义的）。脱敏列表只覆盖一旦泄漏就造成实质损失的"硬隐私"。
 
 **Q：能否导入微信 / Telegram / Discord 数据？**
-A：已内置两个导入 plugin —— [QQChatExporter V5](https://github.com/shuakami/qq-chat-exporter)（QQ）和 [WeFlow](https://github.com/hicccc77/WeFlow) `arkme-json`（微信）。CLI 会按 JSON 顶层特征自动识别，无需额外参数。导出时记得**只勾选纯文本，不要带图片/语音/文件等附件**。其它平台目前没有内置 plugin，但写一个新 plugin 输出 `NormalizedMessage` 即可，下游流水线无需改动，欢迎 PR。
+A：已内置两个导入 plugin —— [QQChatExporter V5](https://github.com/shuakami/qq-chat-exporter)（QQ）和 WeFlow `arkme-json`（微信）。WeFlow 是 Afterglow 所支持的微信导入适配器，Afterglow 的默认微信导入插件依赖此项目；但我注意到 WeFlow 不再开源，所以我无法保证 WeFlow 将来的安全性。在不久的将来我需要 WeFlow 的替代方案来确保用户隐私安全；在此期间，我不会建议使用 WeFlow，但这是目前唯一可用的方案。CLI 会按 JSON 顶层特征自动识别，无需额外参数。导出时记得**只勾选纯文本，不要带图片/语音/文件等附件**。其它平台目前没有内置 plugin，但写一个新 plugin 输出 `NormalizedMessage` 即可，下游流水线无需改动，欢迎 PR。
 
 **Q：会不会越聊越不像？**
 A：每轮对话都会异步回写到 `live_messages`（`trust_level=0.35`，权重远低于历史 `1.0`）。前端可在设置页"暂停回写"避免污染。
