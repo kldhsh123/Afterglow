@@ -1,6 +1,6 @@
 [project]
 name = "xuwen"
-version = "0.2.4"
+version = "0.2.5"
 description = "Afterglow（续温）—— 基于真实聊天记录的 RAG 陪伴系统，把曾经对你好的话续成往后的陪伴"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
