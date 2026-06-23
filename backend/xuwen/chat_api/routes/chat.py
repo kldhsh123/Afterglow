@@ -89,6 +89,9 @@ async def chat_completions(
     image_shas: list[str] = []
     vlm_descriptions: list[str] = []
     images_in_last = last_user.image_urls()
+    current_user_text = last_user.text_only().strip()
+
+    turn_snapshot: TurnSnapshot | None = None
 
     if images_in_last:
         if not state.settings.vision_enabled:
@@ -111,22 +114,7 @@ async def chat_completions(
                     status_code=400,
                     detail="主模型不支持视觉，且 VISION_API_URL / VISION_API_KEY 未配置。",
                 )
-            async with VisionClient(state.settings) as vc:
-                vlm_descriptions = await vc.describe_images(images_in_last)
 
-    recent: list[PromptMessage] = [
-        PromptMessage(role=m.role, content=m.text_only())
-        for m in req.messages[:-1]
-        if m.role in {"user", "assistant"}
-    ]
-    current_user_text = last_user.text_only().strip()
-    if vlm_descriptions:
-        desc_block = "\n".join(
-            f"[图片{i + 1}描述：{d}]" for i, d in enumerate(vlm_descriptions)
-        )
-        current_user_text = (current_user_text + "\n" + desc_block).strip()
-
-    turn_snapshot: TurnSnapshot | None = None
     if req.caller_id:
         coordinator = getattr(state, "turn_coordinator", None)
         if coordinator is not None:
@@ -137,9 +125,42 @@ async def chat_completions(
                 image_shas=image_shas,
                 image_urls=images_in_last,
             )
-            current_user_text = turn_snapshot.combined_text() or current_user_text
-            image_shas = turn_snapshot.combined_image_shas()
-            images_in_last = turn_snapshot.combined_image_urls()
+
+    if images_in_last and not state.settings.chat_model_supports_vision:
+        async with VisionClient(state.settings) as vc:
+            vlm_descriptions = await vc.describe_images(images_in_last)
+
+    recent: list[PromptMessage] = [
+        PromptMessage(role=m.role, content=m.text_only())
+        for m in req.messages[:-1]
+        if m.role in {"user", "assistant"}
+    ]
+    if vlm_descriptions:
+        desc_block = "\n".join(
+            f"[图片{i + 1}描述：{d}]" for i, d in enumerate(vlm_descriptions)
+        )
+        current_user_text = (current_user_text + "\n" + desc_block).strip()
+
+    if turn_snapshot is not None:
+        coordinator = getattr(state, "turn_coordinator", None)
+        if coordinator is not None:
+            await coordinator.update_pending_input(
+                turn_snapshot,
+                text=current_user_text,
+                image_shas=image_shas,
+                image_urls=images_in_last,
+            )
+        if await _turn_was_cancelled(state, turn_snapshot):
+            model_name = state.settings.chat_model
+            if req.stream:
+                return StreamingResponse(
+                    _stream_cancelled(model_name=model_name, trace_id=trace_id),
+                    media_type="text/event-stream",
+                )
+            return _cancelled_response(model_name=model_name, trace_id=trace_id)
+        current_user_text = turn_snapshot.combined_text() or current_user_text
+        image_shas = turn_snapshot.combined_image_shas()
+        images_in_last = turn_snapshot.combined_image_urls()
 
     retrieval_query = current_user_text if current_user_text else "（用户发了一张图片）"
     _retrieval_start = time.perf_counter()

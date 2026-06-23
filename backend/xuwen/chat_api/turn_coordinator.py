@@ -33,6 +33,7 @@ class TurnSnapshot:
     caller_id: str
     generation: int
     cancel_event: asyncio.Event
+    current_message_id: str
     pending_inputs: list[PendingInput]
 
     @property
@@ -103,6 +104,7 @@ class TurnCoordinator:
                 caller_id=caller_id,
                 generation=generation,
                 cancel_event=cancel_event,
+                current_message_id=resolved_message_id,
                 pending_inputs=pending_inputs,
             )
 
@@ -110,6 +112,32 @@ class TurnCoordinator:
         async with self._lock:
             active = self._active.get(snapshot.caller_id)
             return active is not None and active.generation == snapshot.generation
+
+    async def update_pending_input(
+        self,
+        snapshot: TurnSnapshot,
+        *,
+        text: str | None = None,
+        image_shas: list[str] | None = None,
+        image_urls: list[str] | None = None,
+    ) -> bool:
+        async with self._lock:
+            active = self._active.get(snapshot.caller_id)
+            if active is None or active.generation != snapshot.generation:
+                return False
+
+            queue = self._queues.get(snapshot.caller_id, [])
+            for item in queue:
+                if item.message_id != snapshot.current_message_id:
+                    continue
+                if text is not None:
+                    item.text = text
+                if image_shas is not None:
+                    item.image_shas = list(image_shas)
+                if image_urls is not None:
+                    item.image_urls = list(image_urls)
+                return True
+            return False
 
     async def ack(self, snapshot: TurnSnapshot) -> bool:
         async with self._lock:
