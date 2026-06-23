@@ -15,13 +15,15 @@ import UpdateBanner from '@/components/common/UpdateBanner.vue'
 import DebugDrawer from '@/components/common/DebugDrawer.vue'
 import OnboardingDialog from '@/components/onboarding/OnboardingDialog.vue'
 import { Bug, ChevronDown, Sparkles } from 'lucide-vue-next'
-import type { PolicyHint, UpdateInfo } from '@/types/api'
+import type { ChatMessage, PolicyHint, UpdateInfo } from '@/types/api'
 
 const chat = useChatStore()
 const settings = useSettingsStore()
 const memory = useMemoryStore()
 
 let currentStream: StreamHandle | null = null
+let activeTurnToken = 0
+const pendingCallerMessageIds = new Set<string>()
 const debugOpen = ref(false)
 const updateInfo = ref<UpdateInfo | null>(null)
 // MessageList 暴露的 jumpToBottom，由工具栏"到底"按钮调用
@@ -84,16 +86,41 @@ async function attachMemorySources(assistantId: string, query: string) {
   }
 }
 
+function stopActiveGeneration() {
+  activeTurnToken += 1
+  if (currentStream) {
+    currentStream.abort()
+    currentStream = null
+  }
+  if (chat.streamingId) {
+    chat.discardAssistantMessage(chat.streamingId)
+  }
+  chat.isGenerating = false
+}
+
+function toApiMessage(m: ChatMessage) {
+  if (m.role === 'user' && m.images && m.images.length > 0) {
+    const parts: { type: string; text?: string; image_url?: { url: string } }[] = []
+    if (m.content) parts.push({ type: 'text', text: m.content })
+    for (const url of m.images) parts.push({ type: 'image_url', image_url: { url } })
+    return { role: m.role, content: parts as never }
+  }
+  return { role: m.role, content: m.content }
+}
+
 function send(text: string, images: string[] = []) {
-  if (chat.isGenerating) return
+  if (chat.isGenerating) stopActiveGeneration()
   chat.setError(null)
 
-  chat.appendUserMessage(text, images)
+  const userMsg = chat.appendUserMessage(text, images)
+  pendingCallerMessageIds.add(userMsg.id)
   const assistantMsg = chat.startAssistantMessage()
   chat.isGenerating = true
+  const turnToken = ++activeTurnToken
 
   // 拟人化打字
   const typer = useTypewriter((piece) => {
+    if (turnToken !== activeTurnToken) return
     chat.appendAssistantChunk(assistantMsg.id, piece)
   })
   let delayUntil = 0
@@ -102,7 +129,7 @@ function send(text: string, images: string[] = []) {
     const guarded = () => {
       // 沉默场景下不再向 typer 推任何文本，避免 sentinel/已到达 chunk 上屏
       if (silenced) return
-      if (chat.streamingId === assistantMsg.id) fn()
+      if (turnToken === activeTurnToken && chat.streamingId === assistantMsg.id) fn()
     }
     const waitMs = Math.max(0, delayUntil - Date.now())
     if (waitMs > 0) {
@@ -116,56 +143,64 @@ function send(text: string, images: string[] = []) {
   void attachMemorySources(assistantMsg.id, text)
 
   // 构造给后端的 messages：含图片的 user 走 OpenAI 多模态格式
-  const apiMessages = chat.messages
+  const completedHistory = chat.messages
     .filter((m) => m.role === 'user' || m.role === 'assistant')
-    .slice(0, -1) // 不含正在生成的 assistant 占位
-    .map((m) => {
-      if (m.role === 'user' && m.images && m.images.length > 0) {
-        const parts: { type: string; text?: string; image_url?: { url: string } }[] = []
-        if (m.content) parts.push({ type: 'text', text: m.content })
-        for (const url of m.images) parts.push({ type: 'image_url', image_url: { url } })
-        return { role: m.role, content: parts as never }
-      }
-      return { role: m.role, content: m.content }
-    })
+    .filter((m) => m.id !== assistantMsg.id)
+    .filter((m) => !(m.role === 'user' && pendingCallerMessageIds.has(m.id)))
+    .map(toApiMessage)
+  const apiMessages = [...completedHistory, toApiMessage(userMsg)]
 
   currentStream = streamChat(
     {
       messages: apiMessages,
       stream: true,
       conversation_id: chat.conversationId,
+      caller_id: chat.conversationId,
+      client_message_id: userMsg.id,
     },
     {
-      onTrace: (traceId) => chat.setMessageTraceId(assistantMsg.id, traceId),
+      onTrace: (traceId) => {
+        if (turnToken !== activeTurnToken) return
+        chat.setMessageTraceId(assistantMsg.id, traceId)
+      },
       onPolicy: (policy) => {
+        if (turnToken !== activeTurnToken) return
         const until = Date.now() + replyDelayMs(policy)
         delayUntil = Math.max(delayUntil, until)
       },
       onSilenced: () => {
+        if (turnToken !== activeTurnToken) return
         // AI 选择沉默：清空已显示文本、标记 silenced，气泡走灰色占位。
         if (silenced) return
         silenced = true
         chat.markMessageSilenced(assistantMsg.id)
+        pendingCallerMessageIds.clear()
         chat.isGenerating = false
+        currentStream = null
       },
       onChunk: (t) => runAfterReplyDelay(() => typer.pushText(t)),
       onDone: () => {
+        if (turnToken !== activeTurnToken) return
         if (silenced) {
           // 沉默已在 onSilenced 里收尾，不再触发 typer.finish / setMessageContent
           chat.isGenerating = false
+          currentStream = null
           return
         }
         runAfterReplyDelay(() => {
           typer.finish()
           // 等动画追上后再结束（最多再 1.5 秒）
           window.setTimeout(() => {
-            if (chat.streamingId !== assistantMsg.id) return
+            if (turnToken !== activeTurnToken || chat.streamingId !== assistantMsg.id) return
             chat.finishAssistantMessage(assistantMsg.id)
+            pendingCallerMessageIds.clear()
             chat.isGenerating = false
+            currentStream = null
           }, 50)
         })
       },
       onError: (err) => {
+        if (turnToken !== activeTurnToken) return
         chat.setError(`聊天出错：${err.message}`)
         // 把错误也显示成 assistant 的一句话
         if (!assistantMsg.content) {
@@ -176,20 +211,14 @@ function send(text: string, images: string[] = []) {
         }
         chat.finishAssistantMessage(assistantMsg.id)
         chat.isGenerating = false
+        currentStream = null
       },
     },
   )
 }
 
 function stop() {
-  if (currentStream) {
-    currentStream.abort()
-    currentStream = null
-  }
-  if (chat.streamingId) {
-    chat.finishAssistantMessage(chat.streamingId)
-  }
-  chat.isGenerating = false
+  stopActiveGeneration()
 }
 
 function pickSample(text: string) {

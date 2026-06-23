@@ -91,8 +91,11 @@ class CrossReranker:
         documents = [_candidate_text(c) for c in candidates]
         try:
             results = await self._call(query_text, documents, top_n)
-        except Exception:
-            logger.warning("cross reranker call failed; using RRF order", exc_info=True)
+        except Exception as e:
+            logger.warning(
+                "cross reranker 调用失败，使用 RRF 原顺序继续：%s",
+                type(e).__name__,
+            )
             if metrics is not None:
                 metrics.record(
                     "retrieval.cross_rerank",

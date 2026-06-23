@@ -101,6 +101,8 @@ export interface ChatCompletionRequest {
   top_p?: number
   max_tokens?: number
   conversation_id?: string
+  caller_id?: string
+  client_message_id?: string
 }
 
 export interface PolicyHint {

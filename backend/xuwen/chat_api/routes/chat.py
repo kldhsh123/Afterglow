@@ -27,7 +27,6 @@ from xuwen.chat_api.chat_pipeline import (
 )
 from xuwen.chat_api.companion_prompt import (
     build_persona_card_with_companion_context,
-    empty_retrieval_result,
     render_life_memory_context_from_recent,
 )
 from xuwen.chat_api.image_store import ImageError, save_data_url
@@ -50,6 +49,7 @@ from xuwen.chat_api.schemas import (
     ChatMessage as APIChatMessage,
 )
 from xuwen.chat_api.state import AppState, get_state
+from xuwen.chat_api.turn_coordinator import TurnSnapshot
 from xuwen.chat_api.vision_client import VisionClient
 from xuwen.chat_api.web_fetch import render_url_context, resolve_fetch_urls
 from xuwen.chat_api.web_search import render_web_context, should_search_web
@@ -69,6 +69,10 @@ from xuwen.persona.prompt import build_chat_messages
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["chat"])
 
+_CHAT_RETRIEVAL_TIMEOUT_SECONDS = 15.0
+_CHAT_LIFE_TIMEOUT_SECONDS = 12.0
+_CHAT_RELATIONSHIP_TIMEOUT_SECONDS = 5.0
+
 
 @router.post("/v1/chat/completions", response_model=None)
 async def chat_completions(
@@ -85,6 +89,9 @@ async def chat_completions(
     image_shas: list[str] = []
     vlm_descriptions: list[str] = []
     images_in_last = last_user.image_urls()
+    current_user_text = last_user.text_only().strip()
+
+    turn_snapshot: TurnSnapshot | None = None
 
     if images_in_last:
         if not state.settings.vision_enabled:
@@ -107,31 +114,69 @@ async def chat_completions(
                     status_code=400,
                     detail="主模型不支持视觉，且 VISION_API_URL / VISION_API_KEY 未配置。",
                 )
-            async with VisionClient(state.settings) as vc:
-                vlm_descriptions = await vc.describe_images(images_in_last)
+
+    if req.caller_id:
+        coordinator = getattr(state, "turn_coordinator", None)
+        if coordinator is not None:
+            turn_snapshot = await coordinator.begin_turn(
+                caller_id=req.caller_id,
+                message_id=req.client_message_id,
+                text=current_user_text,
+                image_shas=image_shas,
+                image_urls=images_in_last,
+            )
+
+    if images_in_last and not state.settings.chat_model_supports_vision:
+        async with VisionClient(state.settings) as vc:
+            vlm_descriptions = await vc.describe_images(images_in_last)
 
     recent: list[PromptMessage] = [
         PromptMessage(role=m.role, content=m.text_only())
         for m in req.messages[:-1]
         if m.role in {"user", "assistant"}
     ]
-    current_user_text = last_user.text_only().strip()
     if vlm_descriptions:
         desc_block = "\n".join(
             f"[图片{i + 1}描述：{d}]" for i, d in enumerate(vlm_descriptions)
         )
         current_user_text = (current_user_text + "\n" + desc_block).strip()
 
+    if turn_snapshot is not None:
+        coordinator = getattr(state, "turn_coordinator", None)
+        if coordinator is not None:
+            await coordinator.update_pending_input(
+                turn_snapshot,
+                text=current_user_text,
+                image_shas=image_shas,
+                image_urls=images_in_last,
+            )
+        if await _turn_was_cancelled(state, turn_snapshot):
+            model_name = state.settings.chat_model
+            if req.stream:
+                return StreamingResponse(
+                    _stream_cancelled(model_name=model_name, trace_id=trace_id),
+                    media_type="text/event-stream",
+                )
+            return _cancelled_response(model_name=model_name, trace_id=trace_id)
+        current_user_text = turn_snapshot.combined_text() or current_user_text
+        image_shas = turn_snapshot.combined_image_shas()
+        images_in_last = turn_snapshot.combined_image_urls()
+
     retrieval_query = current_user_text if current_user_text else "（用户发了一张图片）"
     _retrieval_start = time.perf_counter()
 
     async def _retrieve_with_metrics() -> Any:
         try:
-            result = await state.retriever.retrieve(
-                RetrievalQuery(
-                    query_text=retrieval_query,
-                    conversation_id=req.conversation_id,
-                )
+            result = await asyncio.wait_for(
+                state.retriever.retrieve(
+                    RetrievalQuery(
+                        query_text=retrieval_query,
+                        conversation_id=req.conversation_id,
+                    ),
+                    metrics=state.metrics,
+                    trace_id=trace_id,
+                ),
+                timeout=_CHAT_RETRIEVAL_TIMEOUT_SECONDS,
             )
             state.metrics.record(
                 "retrieval",
@@ -139,14 +184,34 @@ async def chat_completions(
                 detail=f"final={len(result.fused)}",
             )
             return result
+        except TimeoutError:
+            logger.warning(
+                "检索超时 %.1fs，停止本轮聊天",
+                _CHAT_RETRIEVAL_TIMEOUT_SECONDS,
+            )
+            state.metrics.record(
+                "retrieval",
+                (time.perf_counter() - _retrieval_start) * 1000,
+                error="TimeoutError",
+            )
+            raise HTTPException(
+                status_code=504,
+                detail=(
+                    f"记忆检索超时（>{_CHAT_RETRIEVAL_TIMEOUT_SECONDS:.0f}s）。"
+                    "本轮已停止：请先检查 Embedding/向量模型连通性。"
+                ),
+            ) from None
         except RetrievalError as e:
-            logger.warning("检索失败，降级到无 RAG 模式：%s", e.message)
+            logger.warning("检索失败，停止本轮聊天：%s", e.message)
             state.metrics.record(
                 "retrieval",
                 (time.perf_counter() - _retrieval_start) * 1000,
                 error=type(e).__name__,
             )
-            return empty_retrieval_result()
+            raise HTTPException(
+                status_code=503,
+                detail=f"记忆检索失败，本轮已停止：{e.message}",
+            ) from e
 
     async def _web_search_or_skip() -> str:
         web_should_search = should_search_web(current_user_text)
@@ -193,24 +258,54 @@ async def chat_completions(
 
     async def _life_in_parallel():
         async with state.life_apply_lock:
-            return await state.life.decide_for_turn(
-                llm=state.life_llm,
-                model=state.settings.resolved_life_model,
-                current_user_text=current_user_text,
-                recent=recent,
-                relationship_context=life_markdown,
-                memory_context=render_life_memory_context_from_recent(recent, state.settings),
-                trigger="chat",
-                trace_id=trace_id,
-                metrics=state.metrics,
+            try:
+                return await asyncio.wait_for(
+                    state.life.decide_for_turn(
+                        llm=state.life_llm,
+                        model=state.settings.resolved_life_model,
+                        current_user_text=current_user_text,
+                        recent=recent,
+                        relationship_context=life_markdown,
+                        memory_context=render_life_memory_context_from_recent(recent, state.settings),
+                        trigger="chat",
+                        trace_id=trace_id,
+                        metrics=state.metrics,
+                    ),
+                    timeout=_CHAT_LIFE_TIMEOUT_SECONDS,
+                )
+            except TimeoutError:
+                logger.warning(
+                    "life 决策超时 %.1fs，沿用当前 snapshot",
+                    _CHAT_LIFE_TIMEOUT_SECONDS,
+                )
+                state.metrics.record("life.decide", 0.0, error="TimeoutError")
+                return state.life.snapshot()
+
+    async def _relationship_context_or_empty() -> str:
+        try:
+            return await asyncio.wait_for(
+                state.relationship_memory.render_context(
+                    retrieval_query,
+                    include_relevant=False,
+                    metrics=state.metrics,
+                    trace_id=trace_id,
+                ),
+                timeout=_CHAT_RELATIONSHIP_TIMEOUT_SECONDS,
             )
+        except TimeoutError:
+            logger.warning(
+                "关系记忆渲染超时 %.1fs，降级为空上下文",
+                _CHAT_RELATIONSHIP_TIMEOUT_SECONDS,
+            )
+            state.metrics.record("relationship.context", 0.0, error="TimeoutError")
+            return ""
 
     # Layer A：只放"无论是否回复都需要"的预决策任务（检索 / 关系记忆 / life）。
     # Web Search / URL Resolve 涉及外部 API 调用 + 用户隐私文本外发，必须等 decision
     # 确认 should_reply=True 才能启动；否则用户说"别回我"也会触发搜索调用（隐私 + 费用泄漏）。
     retrieved, relationship_block, life = await asyncio.gather(
         _retrieve_with_metrics(),
-        state.relationship_memory.render_context(retrieval_query),
+        _relationship_context_or_empty(),
         _life_in_parallel(),
     )
 
@@ -278,6 +373,13 @@ async def chat_completions(
 
     # silence 短路：放在 web/url 调用之前，避免用户说"别说话"还把消息发到搜索 / URL 解析端
     if not response_decision.should_reply:
+        if await _turn_was_cancelled(state, turn_snapshot):
+            if req.stream:
+                return StreamingResponse(
+                    _stream_cancelled(model_name=model_name, trace_id=trace_id),
+                    media_type="text/event-stream",
+                )
+            return _cancelled_response(model_name=model_name, trace_id=trace_id)
         if req.conversation_id and (current_user_text or image_shas):
             await state.writeback.enqueue_turn(
                 WritebackTurn(
@@ -292,6 +394,7 @@ async def chat_completions(
             0.0,
             detail=f"trace={trace_id},{response_decision.metric_detail()}",
         )
+        await _ack_turn(state, turn_snapshot)
         if req.stream:
             return StreamingResponse(
                 _stream_silenced(
@@ -394,6 +497,7 @@ async def chat_completions(
                 trace_id=trace_id,
                 policy=policy_hint,
                 decision=response_decision,
+                turn_snapshot=turn_snapshot,
             ),
             media_type="text/event-stream",
         )
@@ -503,6 +607,9 @@ async def chat_completions(
         )
         raise
 
+    if await _turn_was_cancelled(state, turn_snapshot):
+        return _cancelled_response(model_name=model_name, trace_id=trace_id)
+
     if req.conversation_id:
         await state.writeback.enqueue_turn(
             WritebackTurn(
@@ -519,6 +626,7 @@ async def chat_completions(
             user_text=current_user_text,
             assistant_text="" if ai_silenced else assistant_text,
         )
+    await _ack_turn(state, turn_snapshot)
     # Feature #9：从主模型原始输出抽 <schedule-hint>，调用小模型解析为 ScheduleTask。
     # 失败/未启用时为 None；不影响正常回复链路。
     schedule_tasks_field = None
@@ -632,6 +740,7 @@ async def _stream_response(
     trace_id: str,
     policy: PolicyHint,
     decision: ResponseDecision,
+    turn_snapshot: TurnSnapshot | None = None,
 ) -> AsyncIterator[bytes]:
     """OpenAI SSE 格式生成 chunk；收尾块带 policy 字段。"""
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
@@ -665,6 +774,11 @@ async def _stream_response(
             payload.update(extra)
         return payload
 
+    if await _turn_was_cancelled(state, turn_snapshot):
+        async for chunk in _stream_cancelled(model_name=model_name, trace_id=trace_id):
+            yield chunk
+        return
+
     yield _format_sse(
         _chunk_dict({"role": "assistant"}, extra={"policy": policy.model_dump()})
     )
@@ -679,6 +793,10 @@ async def _stream_response(
             stage="chat.stream",
             metrics=state.metrics,
         ):
+            if await _turn_was_cancelled(state, turn_snapshot):
+                yield _format_sse(_chunk_dict({}, finish="cancelled"))
+                yield b"data: [DONE]\n\n"
+                return
             filtered = output_filter.feed(piece)
             if not filtered:
                 continue
@@ -761,8 +879,16 @@ async def _stream_response(
             if stream_tasks:
                 final_extra["schedule_tasks"] = [t.model_dump() for t in stream_tasks]
 
+    if await _turn_was_cancelled(state, turn_snapshot):
+        yield _format_sse(_chunk_dict({}, finish="cancelled"))
+        yield b"data: [DONE]\n\n"
+        return
+
     yield _format_sse(_chunk_dict({}, finish=finish_reason, extra=final_extra))
     yield b"data: [DONE]\n\n"
+
+    if await _turn_was_cancelled(state, turn_snapshot):
+        return
 
     # 流结束后用累积的完整 raw 文本跑 life-update 标记块解析（apply 即可，
     # 不影响已发出 chunk —— 标记块已在 sanitize 流程里被剥离）。
@@ -789,6 +915,7 @@ async def _stream_response(
             user_text=user_text,
             assistant_text=assistant_text,
         )
+    await _ack_turn(state, turn_snapshot)
 
 
 async def _stream_silenced(
@@ -835,6 +962,67 @@ async def _stream_silenced(
     final = _chunk({}, finish=settings.silence_finish_reason)
     final["policy"] = policy.model_dump()
     yield _format_sse(final)
+    yield b"data: [DONE]\n\n"
+
+
+async def _turn_was_cancelled(
+    state: AppState,
+    turn_snapshot: TurnSnapshot | None,
+) -> bool:
+    if turn_snapshot is None:
+        return False
+    if turn_snapshot.cancel_event.is_set():
+        return True
+    coordinator = getattr(state, "turn_coordinator", None)
+    if coordinator is None:
+        return False
+    return not await coordinator.is_current(turn_snapshot)
+
+
+async def _ack_turn(state: AppState, turn_snapshot: TurnSnapshot | None) -> None:
+    if turn_snapshot is None:
+        return
+    coordinator = getattr(state, "turn_coordinator", None)
+    if coordinator is None:
+        return
+    await coordinator.ack(turn_snapshot)
+
+
+def _cancelled_response(*, model_name: str, trace_id: str) -> ChatCompletionResponse:
+    return ChatCompletionResponse(
+        model=model_name,
+        choices=[
+            Choice(
+                index=0,
+                message=APIChatMessage(role="assistant", content=""),
+                finish_reason="cancelled",
+            )
+        ],
+        usage=Usage(),
+        trace_id=trace_id,
+    )
+
+
+async def _stream_cancelled(
+    *,
+    model_name: str,
+    trace_id: str,
+) -> AsyncIterator[bytes]:
+    completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
+    created = int(time.time())
+
+    def _chunk(delta: dict[str, Any], finish: str | None = None) -> dict[str, Any]:
+        return {
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model_name,
+            "trace_id": trace_id,
+            "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
+        }
+
+    yield _format_sse(_chunk({"role": "assistant"}))
+    yield _format_sse(_chunk({}, finish="cancelled"))
     yield b"data: [DONE]\n\n"
 
 

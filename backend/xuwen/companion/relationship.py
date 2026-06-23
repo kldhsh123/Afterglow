@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import hashlib
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
 from xuwen.config import Settings
+from xuwen.core.metrics import MetricsRecorder
 from xuwen.ingestion.embedder import EmbeddingClient
 from xuwen.memory.store import MemoryStore
 
@@ -50,13 +52,41 @@ class RelationshipMemoryManager:
         except FileNotFoundError:
             return ""
 
-    async def relevant_memories(self, query: str, *, limit: int = 6) -> list[str]:
+    async def relevant_memories(
+        self,
+        query: str,
+        *,
+        limit: int = 6,
+        metrics: MetricsRecorder | None = None,
+        trace_id: str = "",
+    ) -> list[str]:
         if not query.strip():
             return []
         try:
+            embed_start = time.perf_counter()
             vector = await self.embedder.embed_one(query)
+            if metrics is not None:
+                metrics.record(
+                    "relationship.relevant.embed",
+                    (time.perf_counter() - embed_start) * 1000,
+                    detail=f"trace={trace_id},query_len={len(query)}",
+                )
+            search_start = time.perf_counter()
             rows = await self.store.search_relationship_memories(vector, top_k=limit)
+            if metrics is not None:
+                metrics.record(
+                    "relationship.relevant.search",
+                    (time.perf_counter() - search_start) * 1000,
+                    detail=f"trace={trace_id},rows={len(rows)}",
+                )
         except Exception:
+            if metrics is not None:
+                metrics.record(
+                    "relationship.relevant",
+                    0.0,
+                    error="error",
+                    detail=f"trace={trace_id}",
+                )
             return []
         out: list[str] = []
         for row in rows:
@@ -65,16 +95,49 @@ class RelationshipMemoryManager:
                 out.append(text)
         return out[:limit]
 
-    async def render_context(self, query: str) -> str:
+    async def render_context(
+        self,
+        query: str,
+        *,
+        include_relevant: bool = True,
+        metrics: MetricsRecorder | None = None,
+        trace_id: str = "",
+    ) -> str:
+        render_start = time.perf_counter()
         parts: list[str] = []
+        markdown_start = time.perf_counter()
         markdown = self.load_markdown()
+        if metrics is not None:
+            metrics.record(
+                "relationship.markdown.read",
+                (time.perf_counter() - markdown_start) * 1000,
+                detail=f"trace={trace_id},chars={len(markdown)}",
+        )
         if markdown:
             parts.append("【关系记忆文件】\n" + markdown)
-        relevant = await self.relevant_memories(query)
+        relevant: list[str] = []
+        if include_relevant:
+            relevant = await self.relevant_memories(
+                query,
+                metrics=metrics,
+                trace_id=trace_id,
+            )
         if relevant:
             lines = "\n".join(f"- {m}" for m in relevant)
             parts.append("【和当前消息相关的关系记忆】\n" + lines)
-        return "\n\n".join(parts)
+        rendered = "\n\n".join(parts)
+        if metrics is not None:
+            metrics.record(
+                "relationship.render",
+                (time.perf_counter() - render_start) * 1000,
+                detail=(
+                    f"trace={trace_id},markdown_chars={len(markdown)},"
+                    f"relevant={len(relevant)},"
+                    f"include_relevant={include_relevant},"
+                    f"rendered_chars={len(rendered)}"
+                ),
+            )
+        return rendered
 
     async def remember_turn(
         self,

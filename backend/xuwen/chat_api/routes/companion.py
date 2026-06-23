@@ -87,7 +87,9 @@ async def proactive(
                 RetrievalQuery(
                     query_text=retrieval_query,
                     conversation_id=req.conversation_id,
-                )
+                ),
+                metrics=state.metrics,
+                trace_id=trace_id,
             )
             state.metrics.record(
                 "companion.retrieval",
@@ -107,7 +109,12 @@ async def proactive(
     # retrieve 与 relationship_memory.render_context 互相独立，并发省一次 embedding+lance RTT
     retrieved, relationship_context = await asyncio.gather(
         _retrieve_with_metrics(),
-        state.relationship_memory.render_context(retrieval_query),
+        state.relationship_memory.render_context(
+            retrieval_query,
+            include_relevant=False,
+            metrics=state.metrics,
+            trace_id=trace_id,
+        ),
     )
 
     async with state.life_apply_lock:
