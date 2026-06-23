@@ -16,11 +16,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 from dataclasses import dataclass
 from typing import Any
 
 from xuwen.config import Settings
 from xuwen.core.errors import RetrievalError
+from xuwen.core.metrics import MetricsRecorder
 from xuwen.core.models import RetrievalQuery, RetrievalResult, ScoredChunk
 from xuwen.core.time import now_ms, recency_weight
 from xuwen.ingestion.embedder import EmbeddingClient
@@ -74,22 +76,52 @@ class HybridRetriever:
         self.reranker = reranker
         self.cross_reranker = cross_reranker
 
-    async def retrieve(self, query: RetrievalQuery) -> RetrievalResult:
+    async def retrieve(
+        self,
+        query: RetrievalQuery,
+        *,
+        metrics: MetricsRecorder | None = None,
+        trace_id: str = "",
+    ) -> RetrievalResult:
         """执行混合检索并返回融合结果。"""
+        total_start = time.perf_counter()
         if not query.query_text.strip():
             raise RetrievalError("query_text 不能为空")
 
         # 1) query 改写（可选）+ 向量化。第一个永远是原始 query。
         query_texts = [query.query_text]
         if self.query_rewriter is not None:
+            rewrite_start = time.perf_counter()
             query_texts = await self.query_rewriter.rewrite(query.query_text)
+            _record_retrieval_metric(
+                metrics,
+                "retrieval.query_rewrite",
+                rewrite_start,
+                trace_id=trace_id,
+                detail=f"variants={len(query_texts)}",
+            )
         query_texts = _dedupe_query_texts(query_texts)
         try:
+            embed_start = time.perf_counter()
             if len(query_texts) == 1:
                 vectors = [await self.embedder.embed_one(query_texts[0])]
             else:
                 vectors = await self.embedder.embed_texts(query_texts)
+            _record_retrieval_metric(
+                metrics,
+                "retrieval.embed",
+                embed_start,
+                trace_id=trace_id,
+                detail=f"variants={len(query_texts)},dim={len(vectors[0]) if vectors else 0}",
+            )
         except Exception as e:
+            _record_retrieval_metric(
+                metrics,
+                "retrieval.embed",
+                embed_start,
+                trace_id=trace_id,
+                error=type(e).__name__,
+            )
             # 把 embedder 的失败包装成 RetrievalError，方便上层统一处理
             raise RetrievalError(f"查询向量化失败：{type(e).__name__}") from e
 
@@ -140,14 +172,18 @@ class HybridRetriever:
             window_raw,
             live_semantic_raw,
             recent_live_raw,
-        ) = await asyncio.gather(
+        ) = await _timed_gather(
+            metrics,
+            "retrieval.vector_search",
             pair_raw_task,
             friend_raw_task,
             window_raw_task,
             live_semantic_task,
             recent_live_task,
+            trace_id=trace_id,
         )
 
+        fuse_start = time.perf_counter()
         pair_rows = _filter_response_pair_rows(pair_raw, limit=top_k_pair)
         friend_rows = _filter_friend_rows(
             friend_raw,
@@ -198,26 +234,61 @@ class HybridRetriever:
             now_ms=now,
             final_k=final_pool_k,
         )
+        _record_retrieval_metric(
+            metrics,
+            "retrieval.fuse",
+            fuse_start,
+            trace_id=trace_id,
+            detail=(
+                f"pair={len(pair_rows)},friend={len(friend_rows)},"
+                f"window={len(window_rows)},live={len(live_rows)},pool={len(fused_pool)}"
+            ),
+        )
 
         # 5) Cross-encoder 粗排（可选）：48 → 16，砍掉纯噪声候选给 LLM 精排
         candidates_for_rerank = fused_pool
         if self.cross_reranker is not None and self.settings.cross_rerank_enabled:
+            cross_start = time.perf_counter()
             candidates_for_rerank = await self.cross_reranker.rerank(
                 query_text=query.query_text,
                 candidates=fused_pool,
                 top_n=self.settings.cross_rerank_top_n,
+                trace_id=trace_id,
+                metrics=metrics,
+            )
+            _record_retrieval_metric(
+                metrics,
+                "retrieval.cross_rerank.total",
+                cross_start,
+                trace_id=trace_id,
+                detail=f"in={len(fused_pool)},out={len(candidates_for_rerank)}",
             )
 
         # 6) LLM 语义精排（可选）：在 cross 粗排后的候选里做"风格证据"判断
         if self.reranker is not None:
+            rerank_start = time.perf_counter()
             fused = await self.reranker.rerank(
                 query_text=query.query_text,
                 candidates=candidates_for_rerank,
                 final_k=final_k,
             )
+            _record_retrieval_metric(
+                metrics,
+                "retrieval.semantic_rerank",
+                rerank_start,
+                trace_id=trace_id,
+                detail=f"in={len(candidates_for_rerank)},out={len(fused)}",
+            )
         else:
             fused = candidates_for_rerank[:final_k]
 
+        _record_retrieval_metric(
+            metrics,
+            "retrieval.total",
+            total_start,
+            trace_id=trace_id,
+            detail=f"final={len(fused)}",
+        )
         return RetrievalResult(
             friend_examples=[*response_pairs[:4], *friend_examples],
             dialogue_windows=dialogue_windows,
@@ -248,6 +319,41 @@ async def _search_variants(
     ]
     results = await asyncio.gather(*tasks)
     return _merge_variant_rows(results)
+
+
+async def _timed_gather(
+    metrics: MetricsRecorder | None,
+    kind: str,
+    *aws: Any,
+    trace_id: str = "",
+) -> tuple[Any, ...]:
+    start = time.perf_counter()
+    try:
+        result = await asyncio.gather(*aws)
+    except Exception as e:
+        _record_retrieval_metric(metrics, kind, start, trace_id=trace_id, error=type(e).__name__)
+        raise
+    _record_retrieval_metric(metrics, kind, start, trace_id=trace_id)
+    return tuple(result)
+
+
+def _record_retrieval_metric(
+    metrics: MetricsRecorder | None,
+    kind: str,
+    start: float,
+    *,
+    trace_id: str = "",
+    detail: str = "",
+    error: str | None = None,
+) -> None:
+    if metrics is None:
+        return
+    prefix = f"trace={trace_id}" if trace_id else ""
+    if prefix and detail:
+        detail = f"{prefix},{detail}"
+    elif prefix:
+        detail = prefix
+    metrics.record(kind, (time.perf_counter() - start) * 1000, error=error, detail=detail)
 
 
 async def _noop_rows() -> list[dict[str, Any]]:

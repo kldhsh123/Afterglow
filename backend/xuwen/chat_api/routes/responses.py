@@ -131,7 +131,9 @@ async def responses(
                 RetrievalQuery(
                     query_text=retrieval_query,
                     conversation_id=conversation_id,
-                )
+                ),
+                metrics=state.metrics,
+                trace_id=trace_id,
             )
             state.metrics.record(
                 "retrieval",
@@ -200,7 +202,12 @@ async def responses(
     # 确认 should_reply=True 才能启动；否则用户说"别回我"也会触发搜索调用（隐私 + 费用泄漏）。
     retrieved, relationship_block, life = await asyncio.gather(
         _retrieve_with_metrics(),
-        state.relationship_memory.render_context(retrieval_query),
+        state.relationship_memory.render_context(
+            retrieval_query,
+            include_relevant=False,
+            metrics=state.metrics,
+            trace_id=trace_id,
+        ),
         _life_in_parallel(),
     )
 

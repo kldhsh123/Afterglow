@@ -38,7 +38,7 @@ async function loadStickers() {
 }
 
 const canSend = computed(
-  () => (text.value.trim().length > 0 || pendingImages.value.length > 0) && !chat.isGenerating,
+  () => text.value.trim().length > 0 || pendingImages.value.length > 0,
 )
 
 async function autoResize() {
@@ -307,7 +307,6 @@ function stop() {
           <StopCircle :size="22" />
         </button>
         <button
-          v-else
           class="p-2 rounded-full transition-colors"
           :class="
             canSend

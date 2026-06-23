@@ -28,6 +28,7 @@ from xuwen.chat_api.routes import memory as memory_route
 from xuwen.chat_api.routes import responses as responses_route
 from xuwen.chat_api.routes import stickers as stickers_route
 from xuwen.chat_api.state import AppState, get_state
+from xuwen.chat_api.turn_coordinator import TurnCoordinator
 from xuwen.chat_api.web_fetch import WebFetchClient
 from xuwen.chat_api.web_search import WebSearchClient
 from xuwen.companion.life import LifeStateManager
@@ -171,6 +172,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             responses_store=ResponsesStore(
                 capacity=resolved_settings.responses_store_capacity,
             ),
+            turn_coordinator=TurnCoordinator(),
             update_checker=update_checker,
             web_search=web_search,
             web_fetch=web_fetch,

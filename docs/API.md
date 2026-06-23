@@ -36,6 +36,7 @@ OpenAI 兼容聊天接口，也是第三方程序最应该接入的主接口。
 - 注入 persona、关系记忆、真实当前时间、AI 生活状态、可选联网检索摘要和可选 URL 网页读取结果。
 - 在启用视觉配置时支持图片输入。
 - 传入 `conversation_id` 时，会把完整一轮对话写回 live memory。
+- 可选传入 `caller_id` / `client_message_id`，用于还原 IM 里用户短时间连续发多条消息的打断与合并语义。
 
 > **关于 `model` 字段：** Afterglow 的模型选择是后端运维决策（你在 `.env` 里通过 `CHAT_MODEL` 配置），
 > 不应由客户端控制。请求体里的 `model` 字段作为 OpenAI 协议占位**接受但完全忽略**——
@@ -64,6 +65,25 @@ OpenAI 兼容聊天接口，也是第三方程序最应该接入的主接口。
 > 小模型配置见 `.env.example` 的 `SCHEDULE_*` 段；留空时依次复用 `LABEL_*` / `RESPONSE_POLICY_*` / `LIFE_*` / 主 LLM。
 
 > 严格 enum 校验的 OpenAI SDK 可在 `.env` 里把 `SILENCE_FINISH_REASON=stop` 退回标准协议。
+
+> **关于用户连发消息（`caller_id` / `client_message_id`）：**
+> 这是 Afterglow 的非 OpenAI 扩展字段，默认不启用；旧客户端不传时保持普通 Chat Completions 行为。
+>
+> - `caller_id`：调用方稳定 ID，例如一个前端会话、一个 IM bot 会话、一个外部程序实例。只有同一个
+>   `caller_id` 的请求会互相取消；不同 `caller_id` 可以并行。
+> - `client_message_id`：调用方给“这一条用户消息”生成的 ID，用于幂等排队。未传时后端会生成临时 ID，
+>   但调用方重试去重能力会变弱。
+>
+> 推荐接入方式：用户每发一条气泡就立即请求后端，不做 1 秒级 debounce。若同一 `caller_id` 的上一轮
+> 还没完成，新请求会把上一轮标记为取消，并把之前尚未成功回复的用户消息与当前消息合并成这一轮的
+> `current_user_text`，中间用双换行分隔。成功回复后，这些 `client_message_id` 会被确认并从队列移除。
+>
+> 使用该模式时，请求体里的 `messages` 建议只放“已经完成回复的历史 + 当前这一条新用户消息”。
+> 不要把尚未被回复的旧用户气泡也重复放进 `messages`，否则它们会同时出现在历史和后端未完成队列里。
+>
+> 被取消的旧请求不会写入 live memory / relationship memory，也不会确认未完成队列。流式旧请求会尽快以
+> `finish_reason="cancelled"` 收尾；非流式旧请求如果已经进入上游模型调用，后端不能强行中断远端推理，
+> 但返回前会检查自己是否仍是最新 generation，若已被取代则返回空内容 + `finish_reason="cancelled"`。
 
 > **关于多条消息分条（QQ / 微信式"连续发好几条"）：** Afterglow 通过 persona 模板约束主模型把
 > "本轮想分多条发出去的内容"用**双换行 `\n\n` 作为分条分隔符**写在同一个 assistant message 里，
@@ -99,7 +119,9 @@ OpenAI 兼容聊天接口，也是第三方程序最应该接入的主接口。
   "stream": false,
   "temperature": 0.7,
   "max_tokens": 300,
-  "conversation_id": "my-app-user-1"
+  "conversation_id": "my-app-user-1",
+  "caller_id": "my-app-user-1",
+  "client_message_id": "u-20260623-0001"
 }
 ```
 

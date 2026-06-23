@@ -86,6 +86,17 @@ class ChatCompletionRequest(BaseModel):
         default=None,
         description="会话标识，用于把这一轮回写到 live_messages 表。",
     )
+    # Afterglow 扩展：调用方可选传入，用于 IM 连发场景。
+    # 只有 caller_id 非空时才启用同 caller 的"新请求取消上一轮并合并未完成输入"语义；
+    # 旧客户端不传该字段时保持原 OpenAI 兼容行为。
+    caller_id: str | None = Field(
+        default=None,
+        description="调用方稳定标识；同一 caller_id 的新请求会取消尚未完成的上一轮。",
+    )
+    client_message_id: str | None = Field(
+        default=None,
+        description="调用方生成的单条用户消息 ID，用于把未完成消息排队并在成功回复后确认。",
+    )
 
     @field_validator("messages")
     @classmethod

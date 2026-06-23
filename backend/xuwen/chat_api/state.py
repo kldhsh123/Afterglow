@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 
 from xuwen.chat_api.llm_client import LLMClient
 from xuwen.chat_api.responses_store import ResponsesStore
+from xuwen.chat_api.turn_coordinator import TurnCoordinator
 from xuwen.chat_api.web_fetch import WebFetchClient
 from xuwen.chat_api.web_search import WebSearchClient
 from xuwen.companion.life import LifeStateManager
@@ -42,6 +43,7 @@ class AppState:
     life: LifeStateManager
     relationship_memory: RelationshipMemoryManager
     responses_store: ResponsesStore
+    turn_coordinator: TurnCoordinator
     update_checker: UpdateChecker
     # 串行化所有 life.apply_marker_patch 的 fire-and-forget task，避免并发写同一份 life state 文件。
     # asyncio.Lock 必须在 event loop 启动后创建，所以 lifespan 里再赋值；field(default=None) 占位。

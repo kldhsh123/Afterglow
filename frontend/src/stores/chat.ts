@@ -140,6 +140,12 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  function discardAssistantMessage(id: string) {
+    const idx = messages.value.findIndex((x) => x.id === id)
+    if (idx !== -1) messages.value.splice(idx, 1)
+    if (streamingId.value === id) streamingId.value = null
+  }
+
   function setMessageContent(id: string, text: string) {
     const m = messages.value.find((x) => x.id === id)
     if (m) m.content = text
@@ -207,6 +213,7 @@ export const useChatStore = defineStore('chat', () => {
     appendAssistantMessage,
     appendAssistantChunk,
     finishAssistantMessage,
+    discardAssistantMessage,
     setMessageContent,
     markMessageSilenced,
     attachMemorySources,
