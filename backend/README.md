@@ -134,10 +134,7 @@ cp .env.example .env
 #   LABEL_REQUEST_INTERVAL_SECONDS=0 # 遇到 429 再调成 0.2 / 0.5 / 1
 # 首次导入会在向量入库后同步打标并显示进度；中断或限流失败后可用 cli label 续跑。
 
-# 3. 跑测试（可选，确认依赖安装无误）
-uv run pytest
-
-# 4. 导入历史聊天记录
+# 3. 导入历史聊天记录
 uv run python -m xuwen.ingestion.cli import 路径/到/你的_导出.json
 # 多文件批量导入（QQ + 微信 / 多账号场景）：
 # uv run python -m xuwen.ingestion.cli import qq_导出.json wechat_导出.json 小号_导出.json
@@ -150,18 +147,18 @@ uv run python -m xuwen.ingestion.cli import 路径/到/你的_导出.json
 # 若已开启 LABELING_ENABLED=true，导入完成后会继续跑打标阶段。
 # 未打标 chunk 仍正常参与向量召回，只是不享受后续标签加权。
 
-# 4b. 手动续跑打标（可选，仅 LABELING_ENABLED=true 时需要）
+# 3b. 手动续跑打标（可选，仅 LABELING_ENABLED=true 时需要）
 # uv run python -m xuwen.ingestion.cli label
 
-# 5. 查看向量库统计
+# 4. 查看向量库统计
 uv run python -m xuwen.ingestion.cli stats
 
-# 6. 生成 persona 卡片与场景风格画像（建议做，否则 prompt 缺画像，回答会偏通用）
+# 5. 生成 persona 卡片与场景风格画像（建议做，否则 prompt 缺画像，回答会偏通用）
 #    persona 是离线统计画像，只提供长期语气参考；当天状态由 life_state.json 决定。
 #    会生成 persona_card.md / persona_report.json / persona_style_profile.json。
 uv run python scripts/analyze_persona.py 路径/到/你的聊天记录.json
 
-# 7. 启动 chat API（OpenAI 兼容）
+# 6. 启动 chat API（OpenAI 兼容）
 uv run uvicorn xuwen.chat_api.app:create_app --factory --reload
 # → http://127.0.0.1:8000
 # 端点：
@@ -173,7 +170,7 @@ uv run uvicorn xuwen.chat_api.app:create_app --factory --reload
 #   POST /memory/writeback/{pause,resume}
 #   DELETE /memory/{table}/{id}         软删除某条记忆
 
-# 8. （可选）检索质量自检
+# 7. （可选）检索质量自检
 uv run python scripts/eval_retrieval.py             # 健康自检
 uv run python scripts/eval_retrieval.py --eval dataset.jsonl  # 带 ground truth 评估
 ```
@@ -289,7 +286,6 @@ xuwen/
 
 web_ui_src/      # 配置向导前端源码（Vue + Vite），构建到 xuwen/web_ui/static/
 scripts/         # 离线脚本：analyze_persona、eval_retrieval、import_history
-tests/           # 单元 + 集成测试
 ```
 
 ## 设计文档
