@@ -177,19 +177,9 @@ uv run python -m xuwen.ingestion.cli import export.json --plugin wechat_weflow
 
 ```bash
 cd backend
-uv run ruff check xuwen tests
+uv run ruff check xuwen
 uv run mypy xuwen
-uv run pytest -q
 ```
-
-针对常见改动的测试建议：
-
-- 改 prompt：跑 `tests/unit/test_prompt.py`。
-- 改 life 状态：跑 `tests/unit/test_life.py`。
-- 改 LLM 客户端或诊断：跑 `tests/unit/test_llm_client.py`、`tests/unit/test_metrics.py`。
-- 改导入插件：跑 `tests/unit/test_plugins.py` 和对应插件测试。
-- 改聊天 API：跑 `tests/integration/test_chat_api.py`。
-- 改前端：跑 `pnpm build`。
 
 前端构建：
 
