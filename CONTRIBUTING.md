@@ -90,8 +90,8 @@ Afterglow/
 
 ```bash
 cd backend
-uv run ruff check xuwen tests
-uv run ruff format xuwen tests   # 可选，本项目不强制 format
+uv run ruff check xuwen
+uv run ruff format xuwen   # 可选，本项目不强制 format
 uv run mypy xuwen
 ```
 
@@ -182,7 +182,7 @@ Closes #123
 发 PR 前请逐项过一遍：
 
 - [ ] 目标分支是 `dev`
-- [ ] `uv run ruff check xuwen tests` 干净
+- [ ] `uv run ruff check xuwen` 干净
 - [ ] `uv run mypy xuwen` 干净（或只剩跟改动无关的旧告警）
 - [ ] 改了 `backend/web_ui_src/` 也 `npm run build` 并把 `static/` 一起提交
 - [ ] 改了 `frontend/` 跑过 `npx vue-tsc --noEmit`
