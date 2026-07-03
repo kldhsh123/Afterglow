@@ -223,14 +223,11 @@ Afterglow 用 `SELF_UID` / `FRIEND_UID` 在导入时区分"哪条消息是你说
 把 `selfUid` 填到 `SELF_UID`，第一条 `sender.uid` 中非 self 的填到 `FRIEND_UID`。
 `SELF_NAME` / `FRIEND_NAME` 用易读的名字即可。
 
-### 微信（WeFlow `arkme-json`）
+### 微信（[WeFlow](https://github.com/hicccc77/WeFlow) `arkme-json`）
 
-> **微信导入提醒**：WeFlow 是 Afterglow 所支持的微信导入适配器，Afterglow 的默认微信导入插件依赖此项目。
-> 我注意到 WeFlow 不再开源，所以我无法保证 WeFlow 将来的安全性。
-> 所以在不久的将来我需要 WeFlow 的替代方案来确保用户隐私安全。
-> 在此期间，我不会建议使用 WeFlow，但这是目前唯一可用的方案。
+> **微信导入提醒**：[WeFlow](https://github.com/hicccc77/WeFlow) 是 Afterglow 所支持的微信导入适配器，Afterglow 的默认微信导入插件依赖此项目。
 
-WeFlow 导出 JSON 顶部有 `weflow.format = "arkme-json"`，结构如下：
+[WeFlow](https://github.com/hicccc77/WeFlow) 导出 JSON 顶部有 `weflow.format = "arkme-json"`，结构如下：
 
 ```json
 {
@@ -261,7 +258,7 @@ FRIEND_NAME=MC
 FRIEND_UID=wxid_xxx
 ```
 
-> **群聊提醒**：当前 WeFlow plugin 在 `wxid` 都不匹配时会按 `isSend` 字段兜底（`1` → self、`0` → friend）。
+> **群聊提醒**：当前 [WeFlow](https://github.com/hicccc77/WeFlow) plugin 在 `wxid` 都不匹配时会按 `isSend` 字段兜底（`1` → self、`0` → friend）。
 > 这只在私聊里语义正确；群聊有多人发言，**必须**显式填 `FRIEND_UID` 才能正确区分。
 
 > **快速取值（命令行）**：
