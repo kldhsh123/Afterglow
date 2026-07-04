@@ -102,6 +102,15 @@ class ProactiveProfile:
     summary: str = ""
 
 
+@dataclass(slots=True)
+class _WindowSession:
+    session_id: str
+    start_time_ms: int
+    end_time_ms: int
+    first_line: tuple[str, str] | None
+    last_line: tuple[str, str] | None
+
+
 def compute_proactive_profile(
     sessions: list[Session],
     *,
@@ -172,29 +181,19 @@ def compute_proactive_profile_from_window_rows(
     这是老数据兼容路径。它只能看到窗口文本，不如导入阶段基于 NormalizedMessage
     精确；但足够恢复小时、间隔、首发者和开场类型这些核心信号。
     """
-    by_session: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        sid = str(row.get("session_id") or "")
-        if not sid:
-            continue
-        existing = by_session.get(sid)
-        start = int(row.get("start_time_ms") or 0)
-        if existing is None or start < int(existing.get("start_time_ms") or 0):
-            by_session[sid] = row
-
-    ordered = sorted(
-        by_session.values(),
-        key=lambda r: (int(r.get("start_time_ms") or 0), int(r.get("end_time_ms") or 0)),
+    ordered = _window_rows_to_sessions(
+        rows,
+        friend_name=friend_name,
+        self_name=self_name,
     )
+
     samples: list[ProactiveOpeningSample] = []
     self_started = 0
     for prev, cur in pairwise(ordered):
-        prev_end = int(prev.get("end_time_ms") or 0)
-        cur_start = int(cur.get("start_time_ms") or 0)
-        gap = int((cur_start - prev_end) / 60_000)
+        gap = int((cur.start_time_ms - prev.end_time_ms) / 60_000)
         if gap < min_gap_minutes:
             continue
-        first = _first_speaker_line(str(cur.get("text") or ""), friend_name=friend_name, self_name=self_name)
+        first = cur.first_line
         if first is None:
             continue
         role, text = first
@@ -203,13 +202,13 @@ def compute_proactive_profile_from_window_rows(
             continue
         if role != "friend" or not _usable_text(text):
             continue
-        previous = _last_speaker_line(str(prev.get("text") or ""), friend_name=friend_name, self_name=self_name)
+        previous = prev.last_line
         previous_role = previous[0] if previous is not None else "unknown"
         previous_tail = previous[1] if previous is not None else ""
-        dt = datetime.fromtimestamp(cur_start / 1000)
+        dt = datetime.fromtimestamp(cur.start_time_ms / 1000)
         samples.append(
             ProactiveOpeningSample(
-                timestamp_ms=cur_start,
+                timestamp_ms=cur.start_time_ms,
                 hour=dt.hour,
                 weekday=dt.weekday(),
                 idle_gap_minutes=max(0, gap),
@@ -227,6 +226,64 @@ def compute_proactive_profile_from_window_rows(
         total_sessions=len(ordered),
         min_gap_minutes=min_gap_minutes,
         sample_limit=sample_limit,
+    )
+
+
+def _window_rows_to_sessions(
+    rows: Iterable[dict[str, Any]],
+    *,
+    friend_name: str,
+    self_name: str,
+) -> list[_WindowSession]:
+    by_session: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        sid = str(row.get("session_id") or "")
+        if not sid:
+            continue
+        by_session.setdefault(sid, []).append(row)
+
+    sessions: list[_WindowSession] = []
+    for sid, session_rows in by_session.items():
+        ordered_rows = sorted(
+            session_rows,
+            key=lambda r: (
+                int(r.get("start_time_ms") or 0),
+                int(r.get("end_time_ms") or 0),
+            ),
+        )
+        by_end_desc = sorted(
+            session_rows,
+            key=lambda r: (
+                int(r.get("end_time_ms") or 0),
+                int(r.get("start_time_ms") or 0),
+            ),
+            reverse=True,
+        )
+        starts = [int(row.get("start_time_ms") or 0) for row in session_rows]
+        ends = [int(row.get("end_time_ms") or 0) for row in session_rows]
+        first_line = _first_nonempty_speaker_line(
+            ordered_rows,
+            friend_name=friend_name,
+            self_name=self_name,
+        )
+        last_line = _last_nonempty_speaker_line(
+            by_end_desc,
+            friend_name=friend_name,
+            self_name=self_name,
+        )
+        sessions.append(
+            _WindowSession(
+                session_id=sid,
+                start_time_ms=min(starts) if starts else 0,
+                end_time_ms=max(ends) if ends else 0,
+                first_line=first_line,
+                last_line=last_line,
+            )
+        )
+
+    return sorted(
+        sessions,
+        key=lambda s: (s.start_time_ms, s.end_time_ms, s.session_id),
     )
 
 
@@ -425,6 +482,23 @@ def _first_speaker_line(
     return None
 
 
+def _first_nonempty_speaker_line(
+    rows: Iterable[dict[str, Any]],
+    *,
+    friend_name: str,
+    self_name: str,
+) -> tuple[str, str] | None:
+    for row in rows:
+        first = _first_speaker_line(
+            str(row.get("text") or ""),
+            friend_name=friend_name,
+            self_name=self_name,
+        )
+        if first is not None:
+            return first
+    return None
+
+
 def _last_speaker_line(
     text: str,
     *,
@@ -435,6 +509,23 @@ def _last_speaker_line(
         parsed = _parse_speaker_line(line, friend_name=friend_name, self_name=self_name)
         if parsed is not None and _usable_text(parsed[1]):
             return parsed
+    return None
+
+
+def _last_nonempty_speaker_line(
+    rows: Iterable[dict[str, Any]],
+    *,
+    friend_name: str,
+    self_name: str,
+) -> tuple[str, str] | None:
+    for row in rows:
+        last = _last_speaker_line(
+            str(row.get("text") or ""),
+            friend_name=friend_name,
+            self_name=self_name,
+        )
+        if last is not None:
+            return last
     return None
 
 
