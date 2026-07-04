@@ -666,6 +666,50 @@ class MemoryStore:
             )
             raise
 
+    async def list_dialogue_windows(self, limit: int = 10_000) -> list[dict[str, Any]]:
+        """按时间列出 dialogue_windows（不回拉 vector）。
+
+        用于运行时兜底重建主动开聊画像。LanceDB 非向量查询没有稳定 ORDER BY，
+        这里拉取有限行后在内存排序；窗口表通常远小于单条消息表。
+        """
+        tbl = self._table(TABLE_DIALOGUE_WINDOWS)
+        start = time.perf_counter()
+        try:
+            cols = [
+                col
+                for col in self._non_vector_columns(TABLE_DIALOGUE_WINDOWS, tbl)
+                if col != "_distance"
+            ]
+            query = (
+                tbl.search()
+                .where("deleted = false")
+                .limit(max(1, limit))
+            )
+            if cols:
+                query = query.select(cols)
+            arrow_tbl = await asyncio.to_thread(query.to_arrow)
+            rows = cast(list[dict[str, Any]], arrow_tbl.to_pylist())
+            rows = [row for row in rows if row.get("deleted") is False]
+            rows.sort(key=lambda r: (r.get("start_time_ms") or 0, r.get("end_time_ms") or 0))
+            rows = rows[: max(1, limit)]
+            self._record_db_perf(
+                "list_dialogue_windows",
+                TABLE_DIALOGUE_WINDOWS,
+                start,
+                rows=len(rows),
+                detail=f"limit={limit}",
+            )
+            return rows
+        except Exception as e:
+            self._record_db_perf(
+                "list_dialogue_windows",
+                TABLE_DIALOGUE_WINDOWS,
+                start,
+                status="error",
+                detail=type(e).__name__,
+            )
+            raise
+
     # ------------------------------------------------------------------
     # 统计
     # ------------------------------------------------------------------

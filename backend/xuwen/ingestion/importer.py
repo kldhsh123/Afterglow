@@ -64,6 +64,7 @@ async def import_history(
     split_progress_cb: Callable[[int, int], None] | None = None,
     stage_cb: Callable[[str], None] | None = None,
     update_circadian: bool = True,
+    update_proactive: bool = True,
 ) -> ImportReport:
     """从导出 JSON 文件导入到 LanceDB。
 
@@ -76,8 +77,10 @@ async def import_history(
         用于 UI 让进度数字在 split 阶段也动起来。
     stage_cb(stage_msg)：每个内部阶段（解析/清洗/切分/向量化等）切换时回调一次，
         UI 用于展示当前正在做的事，避免大库时长时间卡在某个百分比上没有具体文案。
-    update_circadian=False 时跳过画像生成，留给多文件批量导入的调用方在最末一次或
+    update_circadian=False 时跳过作息画像生成，留给多文件批量导入的调用方在最末一次或
     跑完所有文件后单独触发，避免中间文件覆盖最终画像。
+    update_proactive=False 时跳过主动开聊画像生成；批量导入应在全部文件入库后
+    从 dialogue_windows 统一重建，避免每个文件覆盖前一个文件的学习结果。
     """
     settings.require_identity()
 
@@ -298,6 +301,31 @@ async def import_history(
 
             logging.getLogger(__name__).warning(
                 "circadian profile 生成失败，已忽略", exc_info=True
+            )
+
+    if update_proactive:
+        # 生成 / 更新主动开聊画像 proactive_profile.json。失败不影响主导入。
+        try:
+            from xuwen.persona.proactive_profile import (
+                PROACTIVE_PROFILE_FILENAME,
+                compute_proactive_profile,
+                save_proactive_profile,
+            )
+
+            proactive_profile = compute_proactive_profile(
+                sessions,
+                min_gap_minutes=settings.proactive_learning_min_gap_minutes,
+                timezone=settings.app_timezone,
+            )
+            save_proactive_profile(
+                proactive_profile,
+                settings.persona_data_dir / PROACTIVE_PROFILE_FILENAME,
+            )
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "proactive profile 生成失败，已忽略", exc_info=True
             )
 
     duration = round(time.perf_counter() - start, 3)

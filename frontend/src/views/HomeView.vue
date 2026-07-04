@@ -1,11 +1,17 @@
 <script setup lang="ts">
 // 聊天主页面：组合 MessageList + ChatInput + 错误条 + 引导
 
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useChatStore } from '@/stores/chat'
 import { useSettingsStore } from '@/stores/settings'
 import { useMemoryStore } from '@/stores/memory'
-import { requestProactiveTopic, streamChat, type StreamHandle } from '@/api/chat'
+import {
+  cancelChatTurn,
+  ChatStreamError,
+  requestProactiveTopic,
+  streamChat,
+  type StreamHandle,
+} from '@/api/chat'
 import { fetchInfo, fetchMemoryStats, searchMemory } from '@/api/memory'
 import { useTypewriter } from '@/composables/useTypewriter'
 import MessageList from '@/components/chat/MessageList.vue'
@@ -51,7 +57,12 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms))
 }
 
+function handleExternalConversationReset() {
+  void stopActiveGeneration({ discardBackend: true })
+}
+
 onMounted(async () => {
+  window.addEventListener('afterglow:new-conversation', handleExternalConversationReset)
   // 拉取后端 /info 同步元数据（不阻塞 UI）
   try {
     const info = await fetchInfo()
@@ -75,6 +86,10 @@ onMounted(async () => {
   }
 })
 
+onBeforeUnmount(() => {
+  window.removeEventListener('afterglow:new-conversation', handleExternalConversationReset)
+})
+
 async function attachMemorySources(assistantId: string, query: string) {
   if (!query.trim()) return
   try {
@@ -86,8 +101,9 @@ async function attachMemorySources(assistantId: string, query: string) {
   }
 }
 
-function stopActiveGeneration() {
+async function stopActiveGeneration(options: { discardBackend?: boolean } = {}) {
   activeTurnToken += 1
+  const messageIds = Array.from(pendingCallerMessageIds)
   if (currentStream) {
     currentStream.abort()
     currentStream = null
@@ -96,6 +112,14 @@ function stopActiveGeneration() {
     chat.discardAssistantMessage(chat.streamingId)
   }
   chat.isGenerating = false
+  if (options.discardBackend && messageIds.length > 0) {
+    try {
+      await cancelChatTurn(chat.conversationId, messageIds)
+    } catch (e) {
+      console.warn('后端取消生成失败：', e)
+    }
+    for (const id of messageIds) pendingCallerMessageIds.delete(id)
+  }
 }
 
 function toApiMessage(m: ChatMessage) {
@@ -108,12 +132,13 @@ function toApiMessage(m: ChatMessage) {
   return { role: m.role, content: m.content }
 }
 
-function send(text: string, images: string[] = []) {
-  if (chat.isGenerating) stopActiveGeneration()
+async function send(text: string, images: string[] = []) {
+  if (chat.isGenerating) await stopActiveGeneration()
   chat.setError(null)
 
   const userMsg = chat.appendUserMessage(text, images)
   pendingCallerMessageIds.add(userMsg.id)
+  const turnPendingMessageIds = Array.from(pendingCallerMessageIds)
   const assistantMsg = chat.startAssistantMessage()
   chat.isGenerating = true
   const turnToken = ++activeTurnToken
@@ -201,6 +226,11 @@ function send(text: string, images: string[] = []) {
       },
       onError: (err) => {
         if (turnToken !== activeTurnToken) return
+        const idsToClear =
+          err instanceof ChatStreamError && err.status && err.status < 500
+            ? [userMsg.id]
+            : turnPendingMessageIds
+        for (const id of idsToClear) pendingCallerMessageIds.delete(id)
         chat.setError(`聊天出错：${err.message}`)
         // 把错误也显示成 assistant 的一句话
         if (!assistantMsg.content) {
@@ -218,11 +248,11 @@ function send(text: string, images: string[] = []) {
 }
 
 function stop() {
-  stopActiveGeneration()
+  void stopActiveGeneration({ discardBackend: true })
 }
 
 function pickSample(text: string) {
-  send(text, [])
+  void send(text, [])
 }
 
 async function startProactiveTopic() {

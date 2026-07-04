@@ -29,6 +29,16 @@ export interface StreamHandle {
   promise: Promise<void>
 }
 
+export class ChatStreamError extends Error {
+  status?: number
+
+  constructor(message: string, status?: number) {
+    super(message)
+    this.name = 'ChatStreamError'
+    this.status = status
+  }
+}
+
 export function streamChat(
   req: ChatCompletionRequest,
   handlers: StreamHandlers,
@@ -54,7 +64,7 @@ export function streamChat(
         } catch {
           /* ignore */
         }
-        throw new Error(detail)
+        throw new ChatStreamError(detail, resp.status)
       }
       const traceId = resp.headers.get('x-request-id')
       if (traceId) handlers.onTrace?.(traceId)
@@ -104,6 +114,19 @@ export function requestProactiveTopic(
   })
 }
 
+export function cancelChatTurn(
+  callerId: string,
+  messageIds: string[] = [],
+): Promise<{ discarded: number; cancelled_active: boolean; remaining: number }> {
+  return jsonRequest('/v1/chat/turns/cancel', {
+    method: 'POST',
+    body: JSON.stringify({
+      caller_id: callerId,
+      message_ids: messageIds,
+    }),
+  })
+}
+
 /** 解析单条 SSE 事件（多行 `data: ...`），抽出 delta.content */
 function parseEvent(raw: string, handlers: StreamHandlers): void {
   const lines = raw.split('\n')
@@ -116,7 +139,7 @@ function parseEvent(raw: string, handlers: StreamHandlers): void {
       const parsed = JSON.parse(payload)
       if (parsed?.error?.message) {
         if (typeof parsed.error.trace_id === 'string') handlers.onTrace?.(parsed.error.trace_id)
-        handlers.onError?.(new Error(parsed.error.message))
+        handlers.onError?.(new ChatStreamError(parsed.error.message))
         return
       }
       if (typeof parsed?.trace_id === 'string') handlers.onTrace?.(parsed.trace_id)
@@ -125,6 +148,10 @@ function parseEvent(raw: string, handlers: StreamHandlers): void {
         // policy 阶段就能判沉默：should_reply=false 表示规则层已经决定不回。
         // 提前触发可避免后续 sentinel chunk 短暂上屏。
         if (parsed.policy.should_reply === false) handlers.onSilenced?.()
+      }
+      if (parsed?.silenced === true) {
+        handlers.onSilenced?.()
+        continue
       }
       const choice = parsed?.choices?.[0]
       // finish_reason 由后端 _stream_silenced / AI 自主沉默时打到 'silenced'。

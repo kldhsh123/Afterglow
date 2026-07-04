@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useSettingsStore } from '@/stores/settings'
 import { useChatStore } from '@/stores/chat'
+import { cancelChatTurn } from '@/api/chat'
 import { Settings, RotateCcw, Moon, Sun } from 'lucide-vue-next'
 
 const settings = useSettingsStore()
@@ -20,7 +21,12 @@ function toggleTheme() {
 
 function newConversation() {
   if (!confirm('开启一段新对话？当前对话会被清空（向量库里的回写依旧保留）。')) return
+  const oldConversationId = chat.conversationId
+  window.dispatchEvent(new CustomEvent('afterglow:new-conversation'))
   chat.clear()
+  void cancelChatTurn(oldConversationId).catch((e) => {
+    console.warn('后端取消旧对话生成失败：', e)
+  })
 }
 
 function goSettings() {

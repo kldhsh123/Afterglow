@@ -66,12 +66,9 @@ backend/xuwen/
 | name | display_name | 输入格式 | 识别特征 |
 |---|---|---|---|
 | `qqexporter_v5` | QQChatExporter V5 | QQ 导出 JSON | `metadata.name` 含 `qqchatexporter` 或 `chatInfo.selfUid` 存在 |
-| `wechat_weflow` | WeChat (WeFlow arkme-json) | 微信 WeFlow 导出 JSON | `weflow.format = "arkme-json"` 或 `session + senders + messages` 同时存在 |
+| `wechat_weflow` | WeChat ([WeFlow](https://github.com/hicccc77/WeFlow) arkme-json) | 微信 [WeFlow](https://github.com/hicccc77/WeFlow) 导出 JSON | `weflow.format = "arkme-json"` 或 `session + senders + messages` 同时存在 |
 
-> **微信导入提醒**：WeFlow 是 Afterglow 所支持的微信导入适配器，Afterglow 的默认微信导入插件依赖此项目。
-> 我注意到 WeFlow 不再开源，所以我无法保证 WeFlow 将来的安全性。
-> 所以在不久的将来我需要 WeFlow 的替代方案来确保用户隐私安全。
-> 在此期间，我不会建议使用 WeFlow，但这是目前唯一可用的方案。
+> **微信导入提醒**：[WeFlow](https://github.com/hicccc77/WeFlow) 是 Afterglow 所支持的微信导入适配器，Afterglow 的默认微信导入插件依赖此项目。
 
 CLI 在导入时按注册顺序遍历 `match()`，第一个命中的负责 `parse()`；
 也可以用 `--plugin <name>` 强制指定。
@@ -177,19 +174,9 @@ uv run python -m xuwen.ingestion.cli import export.json --plugin wechat_weflow
 
 ```bash
 cd backend
-uv run ruff check xuwen tests
+uv run ruff check xuwen
 uv run mypy xuwen
-uv run pytest -q
 ```
-
-针对常见改动的测试建议：
-
-- 改 prompt：跑 `tests/unit/test_prompt.py`。
-- 改 life 状态：跑 `tests/unit/test_life.py`。
-- 改 LLM 客户端或诊断：跑 `tests/unit/test_llm_client.py`、`tests/unit/test_metrics.py`。
-- 改导入插件：跑 `tests/unit/test_plugins.py` 和对应插件测试。
-- 改聊天 API：跑 `tests/integration/test_chat_api.py`。
-- 改前端：跑 `pnpm build`。
 
 前端构建：
 

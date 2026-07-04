@@ -385,6 +385,35 @@ class Settings(BaseSettings):
     # unsafe / 规则层 silence 等硬边界与本开关无关，始终由规则层独立控制。
     ai_silence_enabled: bool = True
 
+    # ----- 主动聊天（默认关闭）-----
+    # 学习历史中 TA 主动开聊的时间、间隔、上下文和开场类型；运行时只做
+    # 可解释打分与防打扰门控，真正内容仍复用 /v1/companion/proactive。
+    proactive_enabled: bool = False
+    # 识别“主动开启一轮聊天”时，相邻 session 至少需要沉默多久。
+    proactive_learning_min_gap_minutes: int = 120
+    # 运行时分数阈值。分数低于阈值时不触发主动消息。
+    proactive_score_threshold: float = 0.55
+    # 外部调度器/前端轮询建议间隔。当前后端不强制自动投递。
+    proactive_check_interval_seconds: int = 900
+    # 最近会话未空闲到这个时长时，不主动发起。
+    proactive_min_idle_minutes: int = 180
+    # 每个 conversation_id 每日最多主动发起次数。
+    proactive_max_per_day: int = 1
+    # 安静时段，支持跨午夜，例如 23:30-08:30；留空关闭。
+    proactive_quiet_hours: str = "00:00-08:30"
+    # life 判断正在忙/睡/离开时跳过主动发起。
+    proactive_skip_when_life_busy: bool = True
+    # 老数据缺少 proactive_profile.json 时，从最近多少个 dialogue_windows 兜底重建。
+    proactive_profile_window_limit: int = 10_000
+    # 保存在 .data/persona/proactive_audit.jsonl 的最近审计记录内存窗口。
+    proactive_audit_max_records: int = 200
+    # 主动开场最近上下文文件缓存。它不是长期记忆，只保存每个 caller/conversation
+    # 最近少量消息，方便主动开场找一个具体但不泄露风格的可聊话题钩子。
+    proactive_context_cache_enabled: bool = True
+    proactive_context_cache_max_items: int = 40
+    proactive_context_cache_prompt_items: int = 12
+    proactive_context_cache_max_text_chars: int = 240
+
     # ----- /v1/responses 服务端缓存 -----
     # OpenAI Responses API 通过 previous_response_id 找回上一轮上下文；
     # Afterglow 用进程内 LRU 缓存 response_id → conversation_id 的映射。
