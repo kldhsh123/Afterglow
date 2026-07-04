@@ -675,11 +675,21 @@ class MemoryStore:
         tbl = self._table(TABLE_DIALOGUE_WINDOWS)
         start = time.perf_counter()
         try:
-            arrow_tbl = await asyncio.to_thread(tbl.to_arrow)
+            cols = [
+                col
+                for col in self._non_vector_columns(TABLE_DIALOGUE_WINDOWS, tbl)
+                if col != "_distance"
+            ]
+            query = (
+                tbl.search()
+                .where("deleted = false")
+                .limit(max(1, limit))
+            )
+            if cols:
+                query = query.select(cols)
+            arrow_tbl = await asyncio.to_thread(query.to_arrow)
             rows = cast(list[dict[str, Any]], arrow_tbl.to_pylist())
             rows = [row for row in rows if row.get("deleted") is False]
-            for row in rows:
-                row.pop("vector", None)
             rows.sort(key=lambda r: (r.get("start_time_ms") or 0, r.get("end_time_ms") or 0))
             rows = rows[: max(1, limit)]
             self._record_db_perf(
