@@ -225,6 +225,40 @@ async def _run_persona_analysis(json_path: Path, settings: Settings) -> dict[str
     }
 
 
+async def _rebuild_proactive_profile_from_store(
+    settings: Settings,
+    store: Any | None = None,
+) -> str:
+    """从已入库的全部对话窗口重建主动开聊画像。"""
+    from xuwen.memory.store import MemoryStore
+    from xuwen.persona.proactive_profile import (
+        PROACTIVE_PROFILE_FILENAME,
+        compute_proactive_profile_from_window_rows,
+        save_proactive_profile,
+    )
+
+    active_store = store
+    if active_store is None:
+        active_store = MemoryStore(settings)
+        await active_store.connect()
+        active_store.ensure_tables()
+
+    rows = await active_store.list_dialogue_windows(
+        limit=settings.proactive_profile_window_limit
+    )
+    profile = compute_proactive_profile_from_window_rows(
+        rows,
+        friend_name=settings.friend_name or "TA",
+        self_name=settings.self_name or "我",
+        min_gap_minutes=settings.proactive_learning_min_gap_minutes,
+    )
+    save_proactive_profile(
+        profile,
+        settings.persona_data_dir / PROACTIVE_PROFILE_FILENAME,
+    )
+    return profile.summary
+
+
 async def _heartbeat(
     task_id: str,
     base_stage: str,
@@ -464,6 +498,24 @@ async def run_import_task(task_id: str, settings: Settings) -> None:
                     if r.get("file") == persona_name:
                         r["persona"] = persona_stats
                         break
+
+        stage = "基于全部导入记录重建主动开聊画像…"
+        _log(stage)
+        mgr.update(task_id, stage=stage, progress=0.97)
+        try:
+            proactive_summary = await _rebuild_proactive_profile_from_store(settings)
+            reports.append(
+                {
+                    "proactive_profile": {
+                        "summary": proactive_summary,
+                        "source": "dialogue_windows",
+                    }
+                }
+            )
+            _log(f"  → 主动开聊画像完成：{proactive_summary}")
+        except Exception as e:
+            _log(f"  → 主动开聊画像重建失败（已跳过）：{type(e).__name__}: {e}")
+            reports.append({"proactive_profile_error": f"{type(e).__name__}: {e}"})
 
         _log(f"任务 {task_id} 完成")
         mgr.update(
