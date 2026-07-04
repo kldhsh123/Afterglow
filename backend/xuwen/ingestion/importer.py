@@ -315,6 +315,7 @@ async def import_history(
             proactive_profile = compute_proactive_profile(
                 sessions,
                 min_gap_minutes=settings.proactive_learning_min_gap_minutes,
+                timezone=settings.app_timezone,
             )
             save_proactive_profile(
                 proactive_profile,

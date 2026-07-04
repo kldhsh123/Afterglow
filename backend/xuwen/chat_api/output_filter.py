@@ -23,8 +23,6 @@ _REPLY_MEDIA_RE = re.compile(
 )
 # 主模型在回复中输出的 <life-update>{...}</life-update> 标记块——路由层会
 # 解析并 patch life，但对外回复必须剥离干净不让用户看到内部协议。
-# 主模型在回复中输出的 <life-update>{...}</life-update> 标记块——路由层会
-# 解析并 patch life，但对外回复必须剥离干净不让用户看到内部协议。
 # 三种形态都要剥离（防 max_tokens 截断 / 模型半截即停 / 主模型只输出孤立 close）：
 #   1) 成对块：<life-update>...</life-update>
 #   2) 未闭合的开标签到字符串末尾（被截断）：<life-update>...
@@ -53,12 +51,9 @@ _STREAM_TAIL_CHARS = 16
 def _filter_unknown_stickers(text: str, valid_names: frozenset[str]) -> str:
     """剥离 `[sticker:xxx]` 中 xxx 不在 valid_names 里的 token。
 
-    valid_names 为空集时**不做任何过滤**（用于测试或调试场景）。
-    这是为了避免一个空集 = 全删的误伤；如果你确实想全删，路由层不要传 valid_names。
+    valid_names 为空集表示当前没有任何可用 sticker，因此所有 sticker token 都要剥离。
+    如果读取 sticker 列表失败需要跳过校验，调用方应传 None。
     """
-    if not valid_names:
-        return text
-
     def _replace(match: re.Match[str]) -> str:
         name = match.group(1)
         if name in valid_names:

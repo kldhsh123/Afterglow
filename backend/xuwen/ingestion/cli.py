@@ -138,6 +138,7 @@ async def _rebuild_proactive_profile_from_store(
         friend_name=settings.friend_name or "TA",
         self_name=settings.self_name or "我",
         min_gap_minutes=settings.proactive_learning_min_gap_minutes,
+        timezone=settings.app_timezone,
     )
     save_proactive_profile(
         profile,

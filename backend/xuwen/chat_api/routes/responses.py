@@ -72,6 +72,12 @@ from xuwen.persona.prompt import build_chat_messages
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["responses"])
 
+_RESPONSES_RETRIEVAL_TIMEOUT_SECONDS = 15.0
+_RESPONSES_LIFE_TIMEOUT_SECONDS = 12.0
+_RESPONSES_RELATIONSHIP_TIMEOUT_SECONDS = 5.0
+_RESPONSES_RESPONSE_POLICY_TIMEOUT_SECONDS = 8.0
+_RESPONSES_VISION_TIMEOUT_SECONDS = 15.0
+
 
 @router.post("/v1/responses", response_model=None)
 async def responses(
@@ -112,8 +118,23 @@ async def responses(
                     status_code=400,
                     detail="主模型不支持视觉，且 VISION_API_URL / VISION_API_KEY 未配置。",
                 )
-            async with VisionClient(state.settings) as vc:
-                vlm_descriptions = await vc.describe_images(last_user_images)
+            try:
+                async with VisionClient(state.settings) as vc:
+                    vlm_descriptions = await asyncio.wait_for(
+                        vc.describe_images(last_user_images),
+                        timeout=_RESPONSES_VISION_TIMEOUT_SECONDS,
+                    )
+            except TimeoutError:
+                logger.warning(
+                    "Responses VLM 描图超时 %.1fs，使用占位描述",
+                    _RESPONSES_VISION_TIMEOUT_SECONDS,
+                )
+                state.metrics.record("responses.vision.describe", 0.0, error="TimeoutError")
+                vlm_descriptions = ["[图片：识别超时]"] * len(last_user_images)
+            except Exception:
+                logger.warning("Responses VLM 描图失败，使用占位描述", exc_info=True)
+                state.metrics.record("responses.vision.describe", 0.0, error="Exception")
+                vlm_descriptions = ["[图片：识别失败]"] * len(last_user_images)
 
     recent = history
     current_user_text = (last_user_text or "").strip()
@@ -130,13 +151,16 @@ async def responses(
 
     async def _retrieve_with_metrics() -> Any:
         try:
-            result = await state.retriever.retrieve(
-                RetrievalQuery(
-                    query_text=retrieval_query,
-                    conversation_id=conversation_id,
+            result = await asyncio.wait_for(
+                state.retriever.retrieve(
+                    RetrievalQuery(
+                        query_text=retrieval_query,
+                        conversation_id=conversation_id,
+                    ),
+                    metrics=state.metrics,
+                    trace_id=trace_id,
                 ),
-                metrics=state.metrics,
-                trace_id=trace_id,
+                timeout=_RESPONSES_RETRIEVAL_TIMEOUT_SECONDS,
             )
             state.metrics.record(
                 "retrieval",
@@ -144,6 +168,13 @@ async def responses(
                 detail=f"final={len(result.fused)}",
             )
             return result
+        except TimeoutError:
+            logger.warning(
+                "Responses 检索超时 %.1fs，降级到无 RAG 模式",
+                _RESPONSES_RETRIEVAL_TIMEOUT_SECONDS,
+            )
+            state.metrics.record("retrieval", 0.0, error="TimeoutError")
+            return empty_retrieval_result()
         except RetrievalError as e:
             logger.warning("检索失败，降级到无 RAG 模式：%s", e.message)
             state.metrics.record(
@@ -188,29 +219,58 @@ async def responses(
 
     async def _life_in_parallel():
         async with state.life_apply_lock:
-            return await state.life.decide_for_turn(
-                llm=state.life_llm,
-                model=state.settings.resolved_life_model,
-                current_user_text=current_user_text,
-                recent=recent,
-                relationship_context=life_markdown,
-                memory_context=render_life_memory_context_from_recent(recent, state.settings),
-                trigger="responses",
-                trace_id=trace_id,
-                metrics=state.metrics,
+            try:
+                return await asyncio.wait_for(
+                    state.life.decide_for_turn(
+                        llm=state.life_llm,
+                        model=state.settings.resolved_life_model,
+                        current_user_text=current_user_text,
+                        recent=recent,
+                        relationship_context=life_markdown,
+                        memory_context=render_life_memory_context_from_recent(recent, state.settings),
+                        trigger="responses",
+                        trace_id=trace_id,
+                        metrics=state.metrics,
+                    ),
+                    timeout=_RESPONSES_LIFE_TIMEOUT_SECONDS,
+                )
+            except TimeoutError:
+                logger.warning(
+                    "Responses life 决策超时 %.1fs，沿用当前 snapshot",
+                    _RESPONSES_LIFE_TIMEOUT_SECONDS,
+                )
+                state.metrics.record("responses.life.decide", 0.0, error="TimeoutError")
+                return state.life.snapshot()
+
+    async def _relationship_context_or_empty() -> str:
+        try:
+            return await asyncio.wait_for(
+                state.relationship_memory.render_context(
+                    retrieval_query,
+                    include_relevant=False,
+                    metrics=state.metrics,
+                    trace_id=trace_id,
+                ),
+                timeout=_RESPONSES_RELATIONSHIP_TIMEOUT_SECONDS,
             )
+        except TimeoutError:
+            logger.warning(
+                "Responses 关系记忆渲染超时 %.1fs，降级为空上下文",
+                _RESPONSES_RELATIONSHIP_TIMEOUT_SECONDS,
+            )
+            state.metrics.record("responses.relationship.context", 0.0, error="TimeoutError")
+            return ""
+        except Exception:
+            logger.warning("Responses 关系记忆渲染失败，降级为空上下文", exc_info=True)
+            state.metrics.record("responses.relationship.context", 0.0, error="Exception")
+            return ""
 
     # Layer A：只放"无论是否回复都需要"的预决策任务（检索 / 关系记忆 / life）。
     # Web Search / URL Resolve 涉及外部 API 调用 + 用户隐私文本外发，必须等 decision
     # 确认 should_reply=True 才能启动；否则用户说"别回我"也会触发搜索调用（隐私 + 费用泄漏）。
     retrieved, relationship_block, life = await asyncio.gather(
         _retrieve_with_metrics(),
-        state.relationship_memory.render_context(
-            retrieval_query,
-            include_relevant=False,
-            metrics=state.metrics,
-            trace_id=trace_id,
-        ),
+        _relationship_context_or_empty(),
         _life_in_parallel(),
     )
 
@@ -246,19 +306,29 @@ async def responses(
         detail=f"trace={trace_id},{decision.metric_detail()}",
     )
     if state.settings.response_policy_model_enabled:
-        decision = await refine_decision_with_llm(
-            base=decision,
-            llm=state.response_policy_llm,
-            model=state.settings.resolved_response_policy_model,
-            settings=state.settings,
-            current_user_text=current_user_text,
-            recent=recent,
-            life=life,
-            relationship_context=relationship_block,
-            has_images=bool(last_user_images),
-            trace_id=trace_id,
-            metrics=state.metrics,
-        )
+        try:
+            decision = await asyncio.wait_for(
+                refine_decision_with_llm(
+                    base=decision,
+                    llm=state.response_policy_llm,
+                    model=state.settings.resolved_response_policy_model,
+                    settings=state.settings,
+                    current_user_text=current_user_text,
+                    recent=recent,
+                    life=life,
+                    relationship_context=relationship_block,
+                    has_images=bool(last_user_images),
+                    trace_id=trace_id,
+                    metrics=state.metrics,
+                ),
+                timeout=_RESPONSES_RESPONSE_POLICY_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            logger.warning(
+                "Responses 互动策略小模型超时 %.1fs，沿用规则层决策",
+                _RESPONSES_RESPONSE_POLICY_TIMEOUT_SECONDS,
+            )
+            state.metrics.record("response.policy.refined", 0.0, error="TimeoutError")
         state.metrics.record(
             "response.policy.refined",
             0.0,
@@ -439,7 +509,7 @@ async def responses(
             and looks_like_sticker_only_intent(stripped)
         ):
             retried = False
-            if state.settings.sticker_reject_retry:
+            if state.settings.sticker_reject_retry and valid_names is not None:
                 hint = build_sticker_retry_hint(stripped, valid_names)
                 retry_messages = [
                     *messages,
@@ -509,10 +579,12 @@ async def responses(
                 user_image_shas=image_shas,
             )
         )
-        await state.relationship_memory.remember_turn(
+        await _remember_relationship_turn(
+            state,
             conversation_id=conversation_id,
             user_text=current_user_text,
             assistant_text="" if ai_silenced else assistant_text,
+            trace_id=trace_id,
         )
     await state.proactive_context_cache.append_turn(
         caller_id=None,
@@ -1028,10 +1100,12 @@ async def _stream_response(
                 user_image_shas=image_shas,
             )
         )
-        await state.relationship_memory.remember_turn(
+        await _remember_relationship_turn(
+            state,
             conversation_id=conversation_id,
             user_text=user_text,
             assistant_text=persisted_text,
+            trace_id=trace_id,
         )
     await state.proactive_context_cache.append_turn(
         caller_id=None,
@@ -1050,3 +1124,22 @@ async def _stream_response(
             model=model_name,
         )
     )
+
+
+async def _remember_relationship_turn(
+    state: AppState,
+    *,
+    conversation_id: str,
+    user_text: str,
+    assistant_text: str,
+    trace_id: str,
+) -> None:
+    try:
+        await state.relationship_memory.remember_turn(
+            conversation_id=conversation_id,
+            user_text=user_text,
+            assistant_text=assistant_text,
+        )
+    except Exception:
+        logger.warning("Responses 关系记忆写入失败，已忽略：trace=%s", trace_id, exc_info=True)
+        state.metrics.record("responses.relationship.remember", 0.0, error="Exception")
