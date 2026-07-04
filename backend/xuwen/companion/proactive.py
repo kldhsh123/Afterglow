@@ -178,19 +178,27 @@ class ProactiveEngine:
         current = now or local_now(self.settings.app_timezone)
         current_ms = int(current.timestamp() * 1000)
         cid = conversation_id or ""
+        supplied_user_at = _coerce_positive_ms(last_user_message_at_ms)
         async with self._state_lock:
+            if cid and supplied_user_at > self._user_activity_ms.get(cid, 0):
+                self._user_activity_ms[cid] = supplied_user_at
+                self._save_poll_state()
             candidate = self._candidates.get(cid)
             last_user_at = max(
                 self._user_activity_ms.get(cid, 0),
-                int(last_user_message_at_ms or 0),
+                supplied_user_at,
             )
+            user_idle_minutes = _idle_minutes_since_ms(last_user_at, current_ms)
             if candidate is not None and _user_activity_after_candidate(
                 last_user_at,
                 candidate,
             ):
                 self._candidates.pop(cid, None)
                 self._save_poll_state()
-                next_at = self._next_schedule_at_ms(current, idle_minutes=None)
+                next_at = self._next_schedule_at_ms(
+                    current,
+                    idle_minutes=user_idle_minutes,
+                )
                 new_candidate = _PollCandidate(
                     conversation_id=cid,
                     created_at_ms=current_ms,
@@ -245,7 +253,11 @@ class ProactiveEngine:
                     created_at_ms=current_ms,
                     scheduled_for_ms=self._next_schedule_at_ms(
                         current,
-                        idle_minutes=_idle_minutes_from_decision(decision),
+                        idle_minutes=(
+                            user_idle_minutes
+                            if user_idle_minutes is not None
+                            else _idle_minutes_from_decision(decision)
+                        ),
                     ),
                     reason=reason,
                 )
@@ -258,7 +270,10 @@ class ProactiveEngine:
                 next_candidate = _PollCandidate(
                     conversation_id=cid,
                     created_at_ms=current_ms,
-                    scheduled_for_ms=self._next_schedule_at_ms(current, idle_minutes=None),
+                    scheduled_for_ms=self._next_schedule_at_ms(
+                        current,
+                        idle_minutes=user_idle_minutes,
+                    ),
                     reason=reason,
                 )
                 self._candidates[cid] = next_candidate
@@ -796,8 +811,21 @@ def _idle_minutes(last_live: dict[str, Any] | None, now: datetime) -> float | No
     ts = int(last_live.get("created_at_ms") or 0)
     if ts <= 0:
         return None
-    now_ms_value = int(now.timestamp() * 1000)
-    return max(0.0, (now_ms_value - ts) / 60_000)
+    return _idle_minutes_since_ms(ts, int(now.timestamp() * 1000))
+
+
+def _idle_minutes_since_ms(ts_ms: int, now_ms_value: int) -> float | None:
+    if ts_ms <= 0:
+        return None
+    return max(0.0, (now_ms_value - ts_ms) / 60_000)
+
+
+def _coerce_positive_ms(value: int | None) -> int:
+    try:
+        ts = int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    return ts if ts > 0 else 0
 
 
 def _idle_minutes_from_decision(_decision: ProactiveDecision) -> float | None:
