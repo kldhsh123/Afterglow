@@ -628,6 +628,8 @@ class ProactiveEngine:
                 break
         if last_sent <= 0:
             return False
+        if self._user_activity_ms.get(cid, 0) > last_sent:
+            return False
         for row in recent_live:
             if str(row.get("role") or "") == "user" and int(row.get("created_at_ms") or 0) > last_sent:
                 return False
