@@ -1,28 +1,18 @@
 name: build-image
 
 # 触发条件：
-#   - push 到 dev：只构建验证，不推 GHCR
-#   - PR 合并到 main 后产生的 main push：构建并推 VERSION / latest
-#   - 推 git tag v*：正式发布，按 semver 自动衍生 0.2.3 / 0.2 / latest
-#   - 手动触发：从 VERSION 文件读版本号 + 可选推 latest
-#   - 纯 Markdown 变动不触发
+#   - GitHub Release 发布后构建并推 GHCR
+#   - 手动触发：从 VERSION 文件读版本号，用于本地/维护调试
 # 不用任何额外 secret，GITHUB_TOKEN 自动可用
 on:
-  push:
-    branches: [main, dev]
-    tags: ['v*']
-    paths-ignore:
-      - '**/*.md'
-  pull_request:
-    branches: [main]
-    paths-ignore:
-      - '**/*.md'
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       push_latest:
-        description: '是否同时推 latest tag'
+        description: '手动触发时是否同时推 latest tag'
         type: boolean
-        default: true
+        default: false
 
 permissions:
   contents: read
@@ -39,10 +29,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 读 VERSION 文件：main 自动发版与 workflow_dispatch 都用它打版本 tag。
+      # release 事件用 release tag；手动触发才读 VERSION 文件。
       - name: Read VERSION
         id: ver
-        run: echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            raw="${{ github.event.release.tag_name }}"
+            prerelease="${{ github.event.release.prerelease }}"
+          else
+            raw="$(cat VERSION)"
+            prerelease="false"
+          fi
+
+          version="${raw#v}"
+          {
+            echo "raw=${raw}"
+            echo "version=${version}"
+            echo "prerelease=${prerelease}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -51,7 +56,6 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
-        if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' }}
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -59,37 +63,45 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # 自动生成镜像 tag：
-      #   - git tag v0.2.3 → 0.2.3, 0.2, latest
-      #   - push 到 main → VERSION, latest, main-<sha7>
-      #   - push 到 dev / PR → 只构建验证，不推包；tag 仅用于本次 build 元数据
-      #   - workflow_dispatch → 用 VERSION 文件值 + latest（可关闭）
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.IMAGE }}
-          tags: |
-            type=ref,event=branch,prefix=
-            type=ref,event=pr,prefix=pr-
-            type=sha,prefix={{branch}}-,format=short,enable=${{ github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/') }}
-            type=raw,value=${{ steps.ver.outputs.version }},enable=${{ github.ref == 'refs/heads/main' }}
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern=latest,enable=${{ startsWith(github.ref, 'refs/tags/') }}
-            type=raw,value=${{ steps.ver.outputs.version }},enable=${{ github.event_name == 'workflow_dispatch' }}
-            type=raw,value=latest,enable=${{ github.event_name == 'workflow_dispatch' && inputs.push_latest }}
+      #   - Release v0.2.3 → 0.2.3, 0.2, latest
+      #   - prerelease 不推 latest
+      #   - workflow_dispatch → VERSION 文件值；可选 latest
+      - name: Resolve image tags
+        id: tags
+        shell: bash
+        run: |
+          version="${{ steps.ver.outputs.version }}"
+          prerelease="${{ steps.ver.outputs.prerelease }}"
+          tags=("${IMAGE}:${version}")
 
-      # dev / PR 只构建 amd64 验证；main/tag/manual 才构建并推送多架构镜像。
+          if [[ "$version" =~ ^([0-9]+)\.([0-9]+)\.[0-9]+$ ]]; then
+            tags+=("${IMAGE}:${BASH_REMATCH[1]}.${BASH_REMATCH[2]}")
+          fi
+
+          if [[ "${{ github.event_name }}" == "release" && "$prerelease" != "true" ]]; then
+            tags+=("${IMAGE}:latest")
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.push_latest }}" == "true" ]]; then
+            tags+=("${IMAGE}:latest")
+          fi
+
+          {
+            echo "tags<<EOF"
+            printf '%s\n' "${tags[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: docker/backend.Dockerfile
-          platforms: ${{ (github.ref == 'refs/heads/dev' || github.event_name == 'pull_request') && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
-          push: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.ver.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
