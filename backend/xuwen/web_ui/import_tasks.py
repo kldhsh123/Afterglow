@@ -377,6 +377,7 @@ async def _process_one_file(
             Path(path),
             settings,
             update_circadian=False,
+            update_proactive=False,
             chunk_progress_cb=_on_chunk,
             label_progress_cb=_on_label,
             split_progress_cb=_on_split,

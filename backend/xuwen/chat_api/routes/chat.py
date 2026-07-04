@@ -32,6 +32,7 @@ from xuwen.chat_api.companion_prompt import (
 from xuwen.chat_api.image_store import ImageError, save_data_url
 from xuwen.chat_api.llm_client import GenerationParams
 from xuwen.chat_api.output_filter import AssistantOutputFilter, sanitize_assistant_text
+from xuwen.chat_api.proactive_activity import record_proactive_user_activity
 from xuwen.chat_api.schedule_extractor import extract_schedule_tasks
 from xuwen.chat_api.schemas import (
     ChatCompletionRequest,
@@ -126,9 +127,12 @@ async def chat_completions(
                 image_urls=images_in_last,
             )
 
-    proactive_scope_id = req.conversation_id or req.caller_id
-    if proactive_scope_id and (current_user_text or images_in_last):
-        await state.proactive.record_user_activity(proactive_scope_id)
+    if current_user_text or images_in_last:
+        await record_proactive_user_activity(
+            state,
+            req.conversation_id,
+            req.caller_id,
+        )
 
     if images_in_last and not state.settings.chat_model_supports_vision:
         async with VisionClient(state.settings) as vc:

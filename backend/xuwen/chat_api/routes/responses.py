@@ -41,6 +41,7 @@ from xuwen.chat_api.companion_prompt import (
 from xuwen.chat_api.image_store import ImageError, save_data_url
 from xuwen.chat_api.llm_client import GenerationParams
 from xuwen.chat_api.output_filter import AssistantOutputFilter, sanitize_assistant_text
+from xuwen.chat_api.proactive_activity import record_proactive_user_activity
 from xuwen.chat_api.responses_store import ResponseRecord
 from xuwen.chat_api.schemas import (
     PolicyHint,
@@ -116,8 +117,8 @@ async def responses(
 
     recent = history
     current_user_text = (last_user_text or "").strip()
-    if conversation_id and (current_user_text or last_user_images):
-        await state.proactive.record_user_activity(conversation_id)
+    if current_user_text or last_user_images:
+        await record_proactive_user_activity(state, conversation_id)
     if vlm_descriptions:
         desc_block = "\n".join(
             f"[图片{i + 1}描述：{d}]" for i, d in enumerate(vlm_descriptions)
