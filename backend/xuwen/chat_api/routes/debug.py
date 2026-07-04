@@ -11,11 +11,18 @@ import os
 from typing import Any
 
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel
 
 from xuwen import __version__
 from xuwen.chat_api.state import AppState, get_state
 
 router = APIRouter(prefix="/debug", tags=["debug"])
+
+
+class ProactiveForceDueRequest(BaseModel):
+    conversation_id: str = ""
+    caller_id: str = ""
+    at_ms: int | None = None
 
 
 @router.get("/stats")
@@ -35,6 +42,7 @@ async def stats(state: AppState = Depends(get_state)) -> dict[str, Any]:
         },
         "database": state.store.db_perf_snapshot(),
         "life": _life_to_dict(state),
+        "proactive": state.proactive.snapshot(),
         "writeback": {
             "enqueued": state.writeback.stats.enqueued,
             "written": state.writeback.stats.written,
@@ -132,6 +140,18 @@ def config_snapshot(state: AppState = Depends(get_state)) -> dict[str, Any]:
         "silence_response_sentinel": s.silence_response_sentinel,
         "silence_finish_reason": s.silence_finish_reason,
         "responses_store_capacity": s.responses_store_capacity,
+        "proactive": {
+            "enabled": s.proactive_enabled,
+            "learning_min_gap_minutes": s.proactive_learning_min_gap_minutes,
+            "score_threshold": s.proactive_score_threshold,
+            "check_interval_seconds": s.proactive_check_interval_seconds,
+            "min_idle_minutes": s.proactive_min_idle_minutes,
+            "max_per_day": s.proactive_max_per_day,
+            "quiet_hours": s.proactive_quiet_hours,
+            "skip_when_life_busy": s.proactive_skip_when_life_busy,
+            "profile_window_limit": s.proactive_profile_window_limit,
+            "audit_max_records": s.proactive_audit_max_records,
+        },
         "vision_enabled": s.vision_enabled,
         "chat_model_supports_vision": s.chat_model_supports_vision,
         "web_access_enabled": s.web_access_enabled,
@@ -168,6 +188,19 @@ def reset_metrics(state: AppState = Depends(get_state)) -> dict[str, str]:
     """清空所有调用统计（不影响 LanceDB 数据）。"""
     state.metrics.reset()
     return {"status": "ok"}
+
+
+@router.post("/proactive/force-due")
+async def force_proactive_candidate_due(
+    req: ProactiveForceDueRequest,
+    state: AppState = Depends(get_state),
+) -> dict[str, Any]:
+    """实验性调试：把指定会话的主动聊天 pending candidate 改成已到期。"""
+    scope_id = req.conversation_id.strip() or req.caller_id.strip()
+    return await state.proactive.debug_force_candidate_due(
+        scope_id,
+        at_ms=req.at_ms,
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -174,6 +174,11 @@ async def _run_persona_analysis(json_path: Path, settings: Settings) -> dict[str
         compute_circadian_profile,
         save_circadian_profile,
     )
+    from xuwen.persona.proactive_profile import (
+        PROACTIVE_PROFILE_FILENAME,
+        compute_proactive_profile,
+        save_proactive_profile,
+    )
     from xuwen.persona.style_profile import build_style_profile, save_style_profile
 
     settings.require_identity()
@@ -206,10 +211,17 @@ async def _run_persona_analysis(json_path: Path, settings: Settings) -> dict[str
     circadian = compute_circadian_profile(cleaned)
     save_circadian_profile(circadian, out_dir / CIRCADIAN_PROFILE_FILENAME)
 
+    proactive = compute_proactive_profile(
+        sessions,
+        min_gap_minutes=settings.proactive_learning_min_gap_minutes,
+    )
+    save_proactive_profile(proactive, out_dir / PROACTIVE_PROFILE_FILENAME)
+
     return {
         "friend_messages": sum(1 for s in sessions for m in s.messages if m.is_friend),
         "sessions": len(sessions),
         "circadian_summary": circadian.summary,
+        "proactive_summary": proactive.summary,
     }
 
 

@@ -116,6 +116,8 @@ async def responses(
 
     recent = history
     current_user_text = (last_user_text or "").strip()
+    if conversation_id and (current_user_text or last_user_images):
+        await state.proactive.record_user_activity(conversation_id)
     if vlm_descriptions:
         desc_block = "\n".join(
             f"[图片{i + 1}描述：{d}]" for i, d in enumerate(vlm_descriptions)
@@ -285,6 +287,12 @@ async def responses(
                     user_image_shas=image_shas,
                 )
             )
+        await state.proactive_context_cache.append_turn(
+            caller_id=None,
+            conversation_id=conversation_id,
+            user_text=current_user_text,
+            assistant_text="",
+        )
         state.metrics.record(
             "responses.silenced",
             0.0,
@@ -505,6 +513,12 @@ async def responses(
             user_text=current_user_text,
             assistant_text="" if ai_silenced else assistant_text,
         )
+    await state.proactive_context_cache.append_turn(
+        caller_id=None,
+        conversation_id=conversation_id,
+        user_text=current_user_text,
+        assistant_text="" if ai_silenced else assistant_text,
+    )
 
     state.responses_store.put(
         ResponseRecord(
@@ -1018,6 +1032,12 @@ async def _stream_response(
             user_text=user_text,
             assistant_text=persisted_text,
         )
+    await state.proactive_context_cache.append_turn(
+        caller_id=None,
+        conversation_id=conversation_id,
+        user_text=user_text,
+        assistant_text=persisted_text,
+    )
 
     state.responses_store.put(
         ResponseRecord(

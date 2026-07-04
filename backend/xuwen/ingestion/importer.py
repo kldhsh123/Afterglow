@@ -300,6 +300,29 @@ async def import_history(
                 "circadian profile 生成失败，已忽略", exc_info=True
             )
 
+    # 生成 / 更新主动开聊画像 proactive_profile.json。失败不影响主导入。
+    try:
+        from xuwen.persona.proactive_profile import (
+            PROACTIVE_PROFILE_FILENAME,
+            compute_proactive_profile,
+            save_proactive_profile,
+        )
+
+        proactive_profile = compute_proactive_profile(
+            sessions,
+            min_gap_minutes=settings.proactive_learning_min_gap_minutes,
+        )
+        save_proactive_profile(
+            proactive_profile,
+            settings.persona_data_dir / PROACTIVE_PROFILE_FILENAME,
+        )
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "proactive profile 生成失败，已忽略", exc_info=True
+        )
+
     duration = round(time.perf_counter() - start, 3)
     report = ImportReport(
         total_raw_messages=raw_count,
