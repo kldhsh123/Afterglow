@@ -253,16 +253,17 @@ event: response.created → event: response.in_progress
 **previous_response_id 串接：** 第二次请求带上上次返回的 `id`，后端会沿用上次的
 `conversation_id` 自动接上对话。重启进程后缓存丢失，此时建议改用显式 `conversation_id`。
 
-### `POST /v1/companion/proactive`
+### `POST /v1/companion/proactive`（实验性，不推荐使用）
 
-让 AI 主动开启一个话题。这个接口适合外部调度器、机器人框架或其它程序调用，
-效果类似“对方主动找用户聊天”。
+让 AI 主动开启一个话题。这个功能目前是实验性能力，主动开场质量、话题选择和防打扰策略仍不稳定，
+不推荐产品接入或开启；保留接口主要用于本地实验和后续迭代验证。
 
 请求示例：
 
 ```json
 {
   "conversation_id": "my-app-user-1",
+  "caller_id": "my-im-caller-1",
   "reason": "morning",
   "private_context": "用户昨天说今天有考试",
   "topic_hint": "轻轻问候一下"
@@ -303,8 +304,135 @@ event: response.created → event: response.in_progress
 }
 ```
 
-`private_context` 是内部触发背景，不会作为用户消息写入历史。生成的 AI 消息会在传入
-`conversation_id` 时写入 live memory。
+`caller_id` 可选，用来读取同一调用方最近上下文缓存；没有稳定 `caller_id` 时只传
+`conversation_id` 也可以。`private_context` 是内部触发背景，不会作为用户消息写入历史。
+生成的 AI 消息会在传入 `conversation_id` 时写入 live memory，并写入最近上下文缓存。
+
+主动开场内容生成会按这个优先级找话题钩子：最近上下文缓存、关系记忆、RAG 片段。最近上下文缓存
+保存在 `.data/persona/proactive_context_cache.json`，默认每个 caller/conversation 保留 40 条短消息，
+生成时最多注入 12 条；它只用于短期连续性，不是长期记忆，也不参与风格学习。
+
+### `POST /v1/companion/proactive/poll`（实验性，不推荐使用）
+
+轮询式主动聊天入口。当前不推荐作为产品路径使用；如需实验，客户端、外部调度器或 IM bot
+可周期性请求本接口。后端会维护每个 `conversation_id` 或 `caller_id` 的 pending candidate，
+并返回下一次应该请求的时间。
+
+典型流程：
+
+1. 首次请求，后端返回 `state="scheduled"` 和 `next_poll_at_ms`。
+2. 客户端在 `next_poll_at_ms` 到达后再次请求。
+3. 如果 candidate 创建后用户没有先发消息，且当前画像评分和防打扰门控通过，返回
+   `state="sent"`，`proactive.message` 即应发送给用户的主动开场。
+4. 如果期间用户已经通过 `/v1/chat/completions` 或 `/v1/responses` 发过消息，后端会自动记录
+   用户活动并取消本次 pending candidate，返回新的 `next_poll_at_ms`。只有外部系统绕过
+   Afterglow 聊天入口时，才需要额外传 `last_user_message_at_ms`。
+
+请求示例：
+
+```json
+{
+  "conversation_id": "my-app-user-1",
+  "caller_id": "my-im-caller-1",
+  "reason": "learned_rhythm",
+  "auto_send": true
+}
+```
+
+响应示例：
+
+```json
+{
+  "state": "scheduled",
+  "should_send": false,
+  "score": 0.0,
+  "threshold": 0.55,
+  "reason": "scheduled",
+  "skip_reasons": [],
+  "features": {},
+  "private_context": "",
+  "topic_hint": "",
+  "profile_summary": "",
+  "next_poll_at_ms": 1783180800000,
+  "scheduled_for_ms": 1783180800000,
+  "candidate_created_at_ms": 1783177200000,
+  "cancelled_by_user_activity": false,
+  "proactive": null
+}
+```
+
+到点且通过门控时，如果 `auto_send=true`，`state` 会是 `sent` 或 `silenced`，`proactive`
+字段会包含与 `/v1/companion/proactive` 相同结构的生成结果。
+
+本地实验 smoke test：
+
+```bash
+cd backend
+uv run python scripts/test_proactive_poll.py
+uv run python scripts/test_proactive_poll.py --force-due
+uv run python scripts/test_proactive_poll.py --instant
+uv run python scripts/test_proactive_poll.py --generate-only
+uv run python scripts/test_proactive_poll.py --simulate-user "我先来找你了"
+uv run python scripts/test_proactive_poll.py --caller-id "my-im-caller-1" --force-due
+```
+
+脚本内置默认 Bearer token，适合本地验证。若后端不在 `127.0.0.1:8000`，加
+`--base-url http://host:port`。默认流程会先拿 `next_poll_at_ms`；如果时间离现在太远，
+脚本会退出并提示到点后重跑，或临时把 `.env` 中 `PROACTIVE_CHECK_INTERVAL_SECONDS`
+调小再测。`--force-due` 会调用 `/debug/proactive/force-due` 把 pending candidate 改成
+立刻到期，用于本地完整流程 smoke test；需要 `DEBUG_ENDPOINTS_ENABLED=true`。`--instant`
+只测即时门控，`--generate-only` 只测主动开场生成。`--simulate-user` 会在第一次 poll 后
+调用普通聊天接口，验证后端自己取消 pending candidate，而不是要求调用方判断。
+
+### `POST /v1/companion/proactive/decide`（实验性，不推荐使用）
+
+基于历史主动开聊画像做“现在要不要主动找用户”的可解释门控。这个接口适合前端轮询、
+外部调度器或 IM bot 调试；默认只返回即时决策，不维护 pending candidate。功能整体仍是实验性，
+不建议产品路径使用。
+
+主动画像由导入阶段生成到 `.data/persona/proactive_profile.json`；老数据缺少该文件时，
+后端会从 `dialogue_windows` 兜底重建。功能默认关闭，需设置 `PROACTIVE_ENABLED=true`。
+
+请求示例：
+
+```json
+{
+  "conversation_id": "my-app-user-1",
+  "caller_id": "my-im-caller-1",
+  "reason": "learned_rhythm",
+  "auto_send": false
+}
+```
+
+响应示例：
+
+```json
+{
+  "should_send": true,
+  "score": 0.76,
+  "threshold": 0.55,
+  "reason": "matched_learned_rhythm",
+  "skip_reasons": [],
+  "features": {
+    "time_match": 0.9,
+    "idle_gap_match": 0.8,
+    "availability": 1.0
+  },
+  "private_context": "主动聊天候选原因：learned_rhythm...",
+  "topic_hint": "按历史主动开聊习惯...",
+  "profile_summary": "共识别 12 次 TA 主动开聊样本...",
+  "next_check_seconds": 900,
+  "proactive": null
+}
+```
+
+如果 `auto_send=true` 且通过门控，`proactive` 字段会包含与
+`/v1/companion/proactive` 相同结构的生成结果。
+
+### `GET /v1/companion/proactive/profile`（实验性调试）
+
+查看主动聊天画像和最近审计记录。审计记录包含候选时间、发送/跳过状态、分数、跳过原因和
+特征权重；完整日志写入 `.data/persona/proactive_audit.jsonl`。
 
 ## 记忆接口
 
@@ -613,6 +741,33 @@ curl -F "file=@notes.pdf" \
 | `api_keys_configured` | object | `openai` / `embedding` / `vision` / `web_search` / `local_guard` 是否各自已配置（值都是 bool，**不含具体 key**） |
 | `paths` | object | `lance_db` / `persona` / `images` 实际落盘路径 |
 | `env` | object | `python` 解释器版本 + `process_pid` |
+
+### `POST /debug/proactive/force-due`（实验性调试）
+
+本地调试用：把指定 `conversation_id` 或 `caller_id` 的主动聊天 pending candidate 的
+`scheduled_for_ms` 改成当前时间，使下一次 `/v1/companion/proactive/poll` 能立刻走到
+到期检查。只在 `/debug/*` 已启用时可用；生产路径不应调用。
+
+请求：
+
+```json
+{
+  "conversation_id": "proactive-full-123",
+  "caller_id": "my-im-caller-1"
+}
+```
+
+响应：
+
+```json
+{
+  "forced": true,
+  "conversation_id": "proactive-full-123",
+  "previous_scheduled_for_ms": 1783180800000,
+  "scheduled_for_ms": 1783177200000,
+  "candidate_created_at_ms": 1783177000000
+}
+```
 
 ### `POST /debug/metrics/reset`
 

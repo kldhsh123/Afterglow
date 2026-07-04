@@ -14,6 +14,8 @@ from xuwen.chat_api.turn_coordinator import TurnCoordinator
 from xuwen.chat_api.web_fetch import WebFetchClient
 from xuwen.chat_api.web_search import WebSearchClient
 from xuwen.companion.life import LifeStateManager
+from xuwen.companion.proactive import ProactiveEngine
+from xuwen.companion.proactive_context import ProactiveContextCache
 from xuwen.companion.relationship import RelationshipMemoryManager
 from xuwen.config import Settings
 from xuwen.core.metrics import MetricsRecorder
@@ -42,6 +44,8 @@ class AppState:
     metrics: MetricsRecorder
     life: LifeStateManager
     relationship_memory: RelationshipMemoryManager
+    proactive: ProactiveEngine
+    proactive_context_cache: ProactiveContextCache
     responses_store: ResponsesStore
     turn_coordinator: TurnCoordinator
     update_checker: UpdateChecker

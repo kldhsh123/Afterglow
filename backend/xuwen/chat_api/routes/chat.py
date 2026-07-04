@@ -12,6 +12,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 
 from xuwen.chat_api.chat_pipeline import (
     available_sticker_names,
@@ -32,6 +33,7 @@ from xuwen.chat_api.companion_prompt import (
 from xuwen.chat_api.image_store import ImageError, save_data_url
 from xuwen.chat_api.llm_client import GenerationParams
 from xuwen.chat_api.output_filter import AssistantOutputFilter, sanitize_assistant_text
+from xuwen.chat_api.proactive_activity import record_proactive_user_activity
 from xuwen.chat_api.schedule_extractor import extract_schedule_tasks
 from xuwen.chat_api.schemas import (
     ChatCompletionRequest,
@@ -72,6 +74,35 @@ router = APIRouter(tags=["chat"])
 _CHAT_RETRIEVAL_TIMEOUT_SECONDS = 15.0
 _CHAT_LIFE_TIMEOUT_SECONDS = 12.0
 _CHAT_RELATIONSHIP_TIMEOUT_SECONDS = 5.0
+_CHAT_RESPONSE_POLICY_TIMEOUT_SECONDS = 8.0
+_CHAT_VISION_TIMEOUT_SECONDS = 15.0
+
+
+class ChatTurnCancelRequest(BaseModel):
+    caller_id: str = Field(..., min_length=1)
+    message_ids: list[str] = Field(default_factory=list)
+
+
+class ChatTurnCancelResponse(BaseModel):
+    discarded: int
+    cancelled_active: bool
+    remaining: int
+
+
+@router.post("/v1/chat/turns/cancel", response_model=ChatTurnCancelResponse)
+async def cancel_chat_turn(
+    req: ChatTurnCancelRequest,
+    state: AppState = Depends(get_state),
+) -> ChatTurnCancelResponse:
+    """用户明确停止生成：取消当前 active turn，并丢弃待合并输入。"""
+    coordinator = getattr(state, "turn_coordinator", None)
+    if coordinator is None:
+        return ChatTurnCancelResponse(discarded=0, cancelled_active=False, remaining=0)
+    result = await coordinator.discard(
+        caller_id=req.caller_id,
+        message_ids=req.message_ids,
+    )
+    return ChatTurnCancelResponse(**result)
 
 
 @router.post("/v1/chat/completions", response_model=None)
@@ -126,20 +157,18 @@ async def chat_completions(
                 image_urls=images_in_last,
             )
 
-    if images_in_last and not state.settings.chat_model_supports_vision:
-        async with VisionClient(state.settings) as vc:
-            vlm_descriptions = await vc.describe_images(images_in_last)
+    if current_user_text or images_in_last:
+        await record_proactive_user_activity(
+            state,
+            req.conversation_id,
+            req.caller_id,
+        )
 
     recent: list[PromptMessage] = [
         PromptMessage(role=m.role, content=m.text_only())
         for m in req.messages[:-1]
         if m.role in {"user", "assistant"}
     ]
-    if vlm_descriptions:
-        desc_block = "\n".join(
-            f"[图片{i + 1}描述：{d}]" for i, d in enumerate(vlm_descriptions)
-        )
-        current_user_text = (current_user_text + "\n" + desc_block).strip()
 
     if turn_snapshot is not None:
         coordinator = getattr(state, "turn_coordinator", None)
@@ -161,6 +190,30 @@ async def chat_completions(
         current_user_text = turn_snapshot.combined_text() or current_user_text
         image_shas = turn_snapshot.combined_image_shas()
         images_in_last = turn_snapshot.combined_image_urls()
+
+    if images_in_last and not state.settings.chat_model_supports_vision:
+        try:
+            async with VisionClient(state.settings) as vc:
+                vlm_descriptions = await asyncio.wait_for(
+                    vc.describe_images(images_in_last),
+                    timeout=_CHAT_VISION_TIMEOUT_SECONDS,
+                )
+        except TimeoutError:
+            logger.warning(
+                "VLM 描图超时 %.1fs，使用占位描述",
+                _CHAT_VISION_TIMEOUT_SECONDS,
+            )
+            state.metrics.record("vision.describe", 0.0, error="TimeoutError")
+            vlm_descriptions = ["[图片：识别超时]"] * len(images_in_last)
+        except Exception:
+            logger.warning("VLM 描图失败，使用占位描述", exc_info=True)
+            state.metrics.record("vision.describe", 0.0, error="Exception")
+            vlm_descriptions = ["[图片：识别失败]"] * len(images_in_last)
+    if vlm_descriptions:
+        desc_block = "\n".join(
+            f"[图片{i + 1}描述：{d}]" for i, d in enumerate(vlm_descriptions)
+        )
+        current_user_text = (current_user_text + "\n" + desc_block).strip()
 
     retrieval_query = current_user_text if current_user_text else "（用户发了一张图片）"
     _retrieval_start = time.perf_counter()
@@ -342,19 +395,29 @@ async def chat_completions(
         detail=f"trace={trace_id},{response_decision.metric_detail()}",
     )
     if state.settings.response_policy_model_enabled:
-        response_decision = await refine_decision_with_llm(
-            base=response_decision,
-            llm=state.response_policy_llm,
-            model=state.settings.resolved_response_policy_model,
-            settings=state.settings,
-            current_user_text=current_user_text,
-            recent=recent,
-            life=life,
-            relationship_context=relationship_block,
-            has_images=bool(images_in_last),
-            trace_id=trace_id,
-            metrics=state.metrics,
-        )
+        try:
+            response_decision = await asyncio.wait_for(
+                refine_decision_with_llm(
+                    base=response_decision,
+                    llm=state.response_policy_llm,
+                    model=state.settings.resolved_response_policy_model,
+                    settings=state.settings,
+                    current_user_text=current_user_text,
+                    recent=recent,
+                    life=life,
+                    relationship_context=relationship_block,
+                    has_images=bool(images_in_last),
+                    trace_id=trace_id,
+                    metrics=state.metrics,
+                ),
+                timeout=_CHAT_RESPONSE_POLICY_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            logger.warning(
+                "互动策略小模型超时 %.1fs，沿用规则层决策",
+                _CHAT_RESPONSE_POLICY_TIMEOUT_SECONDS,
+            )
+            state.metrics.record("response.policy.refined", 0.0, error="TimeoutError")
         state.metrics.record(
             "response.policy.refined",
             0.0,
@@ -389,6 +452,12 @@ async def chat_completions(
                     user_image_shas=image_shas,
                 )
             )
+        await state.proactive_context_cache.append_turn(
+            caller_id=req.caller_id,
+            conversation_id=req.conversation_id,
+            user_text=current_user_text,
+            assistant_text="",
+        )
         state.metrics.record(
             "chat.silenced",
             0.0,
@@ -481,6 +550,14 @@ async def chat_completions(
         frequency_penalty=req.frequency_penalty,
     )
 
+    if await _turn_was_cancelled(state, turn_snapshot):
+        if req.stream:
+            return StreamingResponse(
+                _stream_cancelled(model_name=model_name, trace_id=trace_id),
+                media_type="text/event-stream",
+            )
+        return _cancelled_response(model_name=model_name, trace_id=trace_id)
+
     # 真流式：仅当 RESPONSE_STREAMING_ENABLED=true 时启用。
     # 否则即使客户端传 stream=true 也走非流式路径，最后再包装成 SSE 单 chunk 发出
     # （Afterglow 模拟"真人发消息"，不应该逐字蹦）。
@@ -492,6 +569,7 @@ async def chat_completions(
                 params=params,
                 model_name=model_name,
                 conversation_id=req.conversation_id,
+                caller_id=req.caller_id,
                 user_text=current_user_text,
                 image_shas=image_shas,
                 trace_id=trace_id,
@@ -546,7 +624,7 @@ async def chat_completions(
             and looks_like_sticker_only_intent(stripped)
         ):
             retried = False
-            if state.settings.sticker_reject_retry:
+            if state.settings.sticker_reject_retry and valid_names is not None:
                 hint = build_sticker_retry_hint(stripped, valid_names)
                 retry_messages = [
                     *messages,
@@ -605,6 +683,7 @@ async def chat_completions(
             (time.perf_counter() - _llm_start) * 1000,
             error=e.code,
         )
+        await _ack_turn(state, turn_snapshot)
         raise
 
     if await _turn_was_cancelled(state, turn_snapshot):
@@ -621,11 +700,19 @@ async def chat_completions(
                 user_image_shas=image_shas,
             )
         )
-        await state.relationship_memory.remember_turn(
+        await _remember_relationship_turn(
+            state,
             conversation_id=req.conversation_id,
             user_text=current_user_text,
             assistant_text="" if ai_silenced else assistant_text,
+            trace_id=trace_id,
         )
+    await state.proactive_context_cache.append_turn(
+        caller_id=req.caller_id,
+        conversation_id=req.conversation_id,
+        user_text=current_user_text,
+        assistant_text="" if ai_silenced else assistant_text,
+    )
     await _ack_turn(state, turn_snapshot)
     # Feature #9：从主模型原始输出抽 <schedule-hint>，调用小模型解析为 ScheduleTask。
     # 失败/未启用时为 None；不影响正常回复链路。
@@ -659,6 +746,7 @@ async def chat_completions(
                 finish_reason=(
                     state.settings.silence_finish_reason if ai_silenced else "stop"
                 ),
+                silenced=ai_silenced,
             ),
             media_type="text/event-stream",
         )
@@ -689,6 +777,7 @@ async def _pseudo_stream_chunks(
     policy: PolicyHint,
     schedule_tasks: list[ScheduleTask] | None = None,
     finish_reason: str = "stop",
+    silenced: bool = False,
 ) -> AsyncIterator[bytes]:
     """OpenAI SSE 协议包装：把已经生成好的完整 assistant_text 作为单个 content chunk
     发出，再发 finish + [DONE]。等同非流式行为，但符合 stream=true 客户端协议预期。"""
@@ -718,10 +807,12 @@ async def _pseudo_stream_chunks(
     yield _format_sse(
         _chunk({"role": "assistant"}, extra={"policy": policy.model_dump()})
     )
-    if assistant_text:
+    if assistant_text and not silenced:
         yield _format_sse(_chunk({"content": assistant_text}))
     final = _chunk({}, finish=finish_reason)
     final["policy"] = policy.model_dump()
+    if silenced:
+        final["silenced"] = True
     if schedule_tasks:
         final["schedule_tasks"] = [t.model_dump() for t in schedule_tasks]
     yield _format_sse(final)
@@ -735,6 +826,7 @@ async def _stream_response(
     params: GenerationParams,
     model_name: str,
     conversation_id: str | None,
+    caller_id: str | None,
     user_text: str,
     image_shas: list[str],
     trace_id: str,
@@ -784,6 +876,7 @@ async def _stream_response(
     )
 
     _stream_start = time.perf_counter()
+    tail = ""
     try:
         async for piece in state.llm.stream_chat(
             messages,
@@ -803,13 +896,10 @@ async def _stream_response(
             buffer.append(filtered)
             yield _format_sse(_chunk_dict({"content": filtered}))
         tail = output_filter.flush()
-        if tail:
-            buffer.append(tail)
-            yield _format_sse(_chunk_dict({"content": tail}))
         state.metrics.record(
             "llm.stream",
             (time.perf_counter() - _stream_start) * 1000,
-            detail=f"{model_name},chars={sum(len(p) for p in buffer)}",
+            detail=f"{model_name},chars={sum(len(p) for p in buffer) + len(tail)}",
         )
     except XuwenError as e:
         state.metrics.record(
@@ -827,12 +917,31 @@ async def _stream_response(
             }
         )
         yield b"data: [DONE]\n\n"
+        await _ack_turn(state, turn_snapshot)
         return
+
+    raw_full = output_filter.raw_text()
+    full_text = "".join(buffer) + tail
+    ai_silenced = is_ai_silence_signal(
+        full_text,
+        sentinel=effective_silence_sentinel(state.settings),
+        decision=decision,
+    )
+    if ai_silenced:
+        tail = ""
+        state.metrics.record(
+            "chat.silenced.ai",
+            0.0,
+            detail=f"trace={trace_id},{decision.metric_detail()},stream",
+        )
+    elif tail:
+        buffer.append(tail)
+        yield _format_sse(_chunk_dict({"content": tail}))
 
     # 流式补救：模型整条只发了不存在的 sticker → 所有 chunk 都被剥离 →
     # 用户什么也没看到。这里在 finish chunk 之前补发一段 fallback delta。
-    raw_full = output_filter.raw_text()
-    if not "".join(buffer).strip() and looks_like_sticker_only_intent(raw_full):
+    full_text = "".join(buffer)
+    if not full_text.strip() and not ai_silenced and looks_like_sticker_only_intent(raw_full):
         fallback = fallback_for_rejected_sticker(policy.reply_mode)
         if fallback:
             buffer.append(fallback)
@@ -846,22 +955,13 @@ async def _stream_response(
     # AI 自主沉默：累积完整 buffer == sentinel → finish_reason 改 silenced，
     # 写历史时 assistant_text 置空（与规则层 silence 短路保持一致）。
     full_text = "".join(buffer)
-    ai_silenced = is_ai_silence_signal(
-        full_text,
-        sentinel=effective_silence_sentinel(state.settings),
-        decision=decision,
-    )
-    if ai_silenced:
-        state.metrics.record(
-            "chat.silenced.ai",
-            0.0,
-            detail=f"trace={trace_id},{decision.metric_detail()},stream",
-        )
     finish_reason = state.settings.silence_finish_reason if ai_silenced else "stop"
 
     # Feature #9 Finding 1：真流式同样要把 schedule_tasks 放进收尾 chunk，
     # 与假流式 / 非流式 schema 一致。失败/未启用时 None，不影响协议兼容。
     final_extra: dict[str, Any] = {"policy": policy.model_dump()}
+    if ai_silenced:
+        final_extra["silenced"] = True
     if state.settings.schedule_extract_enabled and not ai_silenced:
         hints = extract_schedule_hints(
             raw_full,
@@ -910,11 +1010,19 @@ async def _stream_response(
                 user_image_shas=image_shas,
             )
         )
-        await state.relationship_memory.remember_turn(
+        await _remember_relationship_turn(
+            state,
             conversation_id=conversation_id,
             user_text=user_text,
             assistant_text=assistant_text,
+            trace_id=trace_id,
         )
+    await state.proactive_context_cache.append_turn(
+        caller_id=caller_id,
+        conversation_id=conversation_id,
+        user_text=user_text,
+        assistant_text=assistant_text,
+    )
     await _ack_turn(state, turn_snapshot)
 
 
@@ -956,11 +1064,9 @@ async def _stream_silenced(
     yield _format_sse(
         _chunk({"role": "assistant"}, extra={"policy": policy.model_dump()})
     )
-    sentinel = settings.silence_response_sentinel
-    if sentinel:
-        yield _format_sse(_chunk({"content": sentinel}))
     final = _chunk({}, finish=settings.silence_finish_reason)
     final["policy"] = policy.model_dump()
+    final["silenced"] = True
     yield _format_sse(final)
     yield b"data: [DONE]\n\n"
 
@@ -986,6 +1092,25 @@ async def _ack_turn(state: AppState, turn_snapshot: TurnSnapshot | None) -> None
     if coordinator is None:
         return
     await coordinator.ack(turn_snapshot)
+
+
+async def _remember_relationship_turn(
+    state: AppState,
+    *,
+    conversation_id: str,
+    user_text: str,
+    assistant_text: str,
+    trace_id: str,
+) -> None:
+    try:
+        await state.relationship_memory.remember_turn(
+            conversation_id=conversation_id,
+            user_text=user_text,
+            assistant_text=assistant_text,
+        )
+    except Exception:
+        logger.warning("关系记忆写入失败，已忽略：trace=%s", trace_id, exc_info=True)
+        state.metrics.record("relationship.remember", 0.0, error="Exception")
 
 
 def _cancelled_response(*, model_name: str, trace_id: str) -> ChatCompletionResponse:

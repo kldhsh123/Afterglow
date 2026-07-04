@@ -119,6 +119,34 @@ def _load_settings(env_file: Path | None) -> Settings:
     return get_settings()
 
 
+async def _rebuild_proactive_profile_from_store(
+    settings: Settings,
+    store: MemoryStore,
+) -> str:
+    """从已入库窗口统一重建主动开聊画像，返回摘要。"""
+    from xuwen.persona.proactive_profile import (
+        PROACTIVE_PROFILE_FILENAME,
+        compute_proactive_profile_from_window_rows,
+        save_proactive_profile,
+    )
+
+    rows = await store.list_dialogue_windows(
+        limit=settings.proactive_profile_window_limit
+    )
+    profile = compute_proactive_profile_from_window_rows(
+        rows,
+        friend_name=settings.friend_name or "TA",
+        self_name=settings.self_name or "我",
+        min_gap_minutes=settings.proactive_learning_min_gap_minutes,
+        timezone=settings.app_timezone,
+    )
+    save_proactive_profile(
+        profile,
+        settings.persona_data_dir / PROACTIVE_PROFILE_FILENAME,
+    )
+    return profile.summary
+
+
 # 中文 / ASCII 双套列名
 _LABELS_CN = {
     "metric": "指标",
@@ -229,6 +257,7 @@ async def _run_import(args: argparse.Namespace) -> int:
                 # 中间文件跳过 circadian 计算，避免被后续文件覆盖；
                 # 最后一个文件触发，画像基于该文件的 cleaned 数据生成。
                 update_circadian=is_last,
+                update_proactive=not multi,
             )
             reports.append((path, report))
             _print_report(report, L, header=str(path) if multi else None)
@@ -237,6 +266,17 @@ async def _run_import(args: argparse.Namespace) -> int:
 
     if multi:
         _print_aggregate(reports, L)
+        try:
+            proactive_summary = await _rebuild_proactive_profile_from_store(
+                settings,
+                store,
+            )
+            console.print(f"[dim]·[/] 已基于已入库窗口重建主动开聊画像：{proactive_summary}")
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "批量导入后重建 proactive profile 失败，已忽略",
+                exc_info=True,
+            )
         # circadian 局限提示：只反映最后一个文件
         console.print(
             "[yellow]提示：[/]作息画像 (circadian_profile.json) 仅基于最后一个文件计算，"

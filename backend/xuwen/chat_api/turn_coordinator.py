@@ -161,3 +161,43 @@ class TurnCoordinator:
             if active is not None and active.generation == snapshot.generation:
                 active.cancel_event.set()
                 self._active.pop(snapshot.caller_id, None)
+
+    async def discard(
+        self,
+        *,
+        caller_id: str,
+        message_ids: list[str] | None = None,
+    ) -> dict[str, int | bool]:
+        """用户明确停止生成时丢弃待回复输入，不再并入下一轮。"""
+        targets = {item for item in (message_ids or []) if item}
+        async with self._lock:
+            queue = self._queues.get(caller_id, [])
+            if targets:
+                remaining = [item for item in queue if item.message_id not in targets]
+                discarded = len(queue) - len(remaining)
+            else:
+                remaining = []
+                discarded = len(queue)
+
+            if remaining:
+                self._queues[caller_id] = remaining
+            else:
+                self._queues.pop(caller_id, None)
+
+            active = self._active.get(caller_id)
+            cancelled_active = False
+            if active is not None:
+                active_ids = set(active.message_ids)
+                should_cancel = not targets or (
+                    bool(active_ids) and active_ids.issubset(targets)
+                )
+                if should_cancel:
+                    active.cancel_event.set()
+                    self._active.pop(caller_id, None)
+                    cancelled_active = True
+
+            return {
+                "discarded": discarded,
+                "cancelled_active": cancelled_active,
+                "remaining": len(remaining),
+            }

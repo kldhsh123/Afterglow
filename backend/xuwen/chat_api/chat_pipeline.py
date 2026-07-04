@@ -176,20 +176,21 @@ def extract_life_marker_async(
     return _LIFE_MARKER_RE.sub("", assistant_text).strip()
 
 
-def available_sticker_names(settings: Settings) -> frozenset[str]:
+def available_sticker_names(settings: Settings) -> frozenset[str] | None:
     """收集 AI 当前实际能用的 sticker 名字集合。
 
     输出层会用这个集合校验 `[sticker:xxx]`：xxx 不在集合内就剥离，
     避免模型自创不存在的 sticker 让前端渲染失败。
 
-    任何异常都返回空集（不做校验，等同当前行为，避免误伤）。
+    读取失败返回 None（不做校验，避免误伤）；读取成功但没有可用 sticker
+    返回空集，输出层会剥离所有 `[sticker:...]`。
     """
     try:
         store = StickerStore(settings)
         return frozenset(s.name for s in store.available_for_ai())
     except Exception:
         logger.warning("收集可用 sticker 名字失败，跳过 sticker 校验", exc_info=True)
-        return frozenset()
+        return None
 
 
 # 当模型只发了不存在的 sticker、被输出过滤拦截后，sanitize 会兜底成 "嗯"。
