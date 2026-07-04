@@ -89,6 +89,7 @@ class ProactiveEngine:
         self.state_path = settings.persona_data_dir / "proactive_poll_state.json"
         self._profile: ProactiveProfile | None = None
         self._profile_loaded = False
+        self._profile_mtime_ns: int | None = None
         self._audit_lock = asyncio.Lock()
         self._state_lock = asyncio.Lock()
         self._audit: deque[dict[str, Any]] = deque(maxlen=settings.proactive_audit_max_records)
@@ -338,6 +339,35 @@ class ProactiveEngine:
             self._candidates.pop(cid, None)
             self._save_poll_state()
 
+    async def finish_candidate_if_still_valid(
+        self,
+        conversation_id: str | None,
+        *,
+        candidate_created_at_ms: int,
+        scheduled_for_ms: int,
+    ) -> bool:
+        """生成完成后复检 pending candidate，避免用户已发言时仍自动发送。"""
+        cid = conversation_id or ""
+        async with self._state_lock:
+            candidate = self._candidates.get(cid)
+            if candidate is None:
+                return False
+            if (
+                candidate.created_at_ms != candidate_created_at_ms
+                or candidate.scheduled_for_ms != scheduled_for_ms
+            ):
+                return False
+            if _user_activity_after_candidate(
+                self._user_activity_ms.get(cid, 0),
+                candidate,
+            ):
+                self._candidates.pop(cid, None)
+                self._save_poll_state()
+                return False
+            self._candidates.pop(cid, None)
+            self._save_poll_state()
+            return True
+
     async def debug_force_candidate_due(
         self,
         conversation_id: str | None,
@@ -434,19 +464,23 @@ class ProactiveEngine:
             friend_name=self.settings.friend_name or "TA",
             self_name=self.settings.self_name or "我",
             min_gap_minutes=self.settings.proactive_learning_min_gap_minutes,
+            timezone=self.settings.app_timezone,
         )
         if rebuilt.sample_size > 0:
             save_proactive_profile(rebuilt, self.profile_path)
             self._profile = rebuilt
             self._profile_loaded = True
+            self._profile_mtime_ns = _file_mtime_ns(self.profile_path)
             return rebuilt
         return profile or rebuilt
 
     def _load_profile_sync(self) -> ProactiveProfile | None:
-        if self._profile_loaded:
+        mtime_ns = _file_mtime_ns(self.profile_path)
+        if self._profile_loaded and self._profile_mtime_ns == mtime_ns:
             return self._profile
         self._profile = load_proactive_profile(self.profile_path)
         self._profile_loaded = True
+        self._profile_mtime_ns = mtime_ns
         return self._profile
 
     async def _recent_live(self, conversation_id: str | None) -> list[dict[str, Any]]:
@@ -826,6 +860,13 @@ def _coerce_positive_ms(value: int | None) -> int:
     except (TypeError, ValueError):
         return 0
     return ts if ts > 0 else 0
+
+
+def _file_mtime_ns(path: Path) -> int | None:
+    try:
+        return path.stat().st_mtime_ns
+    except OSError:
+        return None
 
 
 def _idle_minutes_from_decision(_decision: ProactiveDecision) -> float | None:

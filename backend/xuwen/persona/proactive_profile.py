@@ -11,6 +11,7 @@ from datetime import datetime
 from itertools import pairwise
 from pathlib import Path
 from typing import Any, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from xuwen.core.models import MessageKind, NormalizedMessage, Session
 from xuwen.core.time import now_ms
@@ -116,6 +117,7 @@ def compute_proactive_profile(
     *,
     min_gap_minutes: int = 120,
     sample_limit: int = 12,
+    timezone: str = "UTC",
 ) -> ProactiveProfile:
     """从完整历史 session 学习主动开聊画像。
 
@@ -128,6 +130,7 @@ def compute_proactive_profile(
     )
     samples: list[ProactiveOpeningSample] = []
     self_started = 0
+    tz = _timezone(timezone)
 
     for prev, cur in pairwise(ordered):
         first = _first_human_message(cur.messages)
@@ -144,7 +147,7 @@ def compute_proactive_profile(
         previous_last = _last_human_message(prev.messages)
         previous_role = previous_last.sender_role if previous_last is not None else "unknown"
         previous_tail = previous_last.text.strip() if previous_last is not None else ""
-        dt = datetime.fromtimestamp(first.timestamp_ms / 1000)
+        dt = datetime.fromtimestamp(first.timestamp_ms / 1000, tz=tz)
         samples.append(
             ProactiveOpeningSample(
                 timestamp_ms=first.timestamp_ms,
@@ -175,6 +178,7 @@ def compute_proactive_profile_from_window_rows(
     self_name: str,
     min_gap_minutes: int = 120,
     sample_limit: int = 12,
+    timezone: str = "UTC",
 ) -> ProactiveProfile:
     """从已落库 dialogue_windows 兜底重建画像。
 
@@ -189,6 +193,7 @@ def compute_proactive_profile_from_window_rows(
 
     samples: list[ProactiveOpeningSample] = []
     self_started = 0
+    tz = _timezone(timezone)
     for prev, cur in pairwise(ordered):
         gap = int((cur.start_time_ms - prev.end_time_ms) / 60_000)
         if gap < min_gap_minutes:
@@ -205,7 +210,7 @@ def compute_proactive_profile_from_window_rows(
         previous = prev.last_line
         previous_role = previous[0] if previous is not None else "unknown"
         previous_tail = previous[1] if previous is not None else ""
-        dt = datetime.fromtimestamp(cur.start_time_ms / 1000)
+        dt = datetime.fromtimestamp(cur.start_time_ms / 1000, tz=tz)
         samples.append(
             ProactiveOpeningSample(
                 timestamp_ms=cur.start_time_ms,
@@ -285,6 +290,13 @@ def _window_rows_to_sessions(
         sessions,
         key=lambda s: (s.start_time_ms, s.end_time_ms, s.session_id),
     )
+
+
+def _timezone(name: str) -> ZoneInfo:
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        return ZoneInfo("UTC")
 
 
 def save_proactive_profile(profile: ProactiveProfile, path: Path) -> None:

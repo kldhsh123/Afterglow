@@ -2,6 +2,7 @@
   "name": "afterglow-frontend",
   "version": "0.2.7",
   "private": true,
+  "packageManager": "pnpm@9.15.9",
   "license": "AGPL-3.0-or-later",
   "description": "续温（Afterglow）前端 —— 时光信笺风格的 Vue 3 单页应用",
   "type": "module",

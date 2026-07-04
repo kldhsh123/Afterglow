@@ -571,17 +571,45 @@ def _merge_with_base(
 
     merged_do_not = _merge_unique(base.do_not, extra_do_not)
     merged_instructions = _merge_unique(base.instructions, extra_instructions)
+    new_should_reply = base.should_reply
+    new_use_image = base.use_image
+    new_use_sticker = base.use_sticker
+    new_max_length = base.max_length
+    if new_state == "unsafe":
+        new_should_reply = True
+        new_mode = "serious"
+        new_risk = "high"
+        new_focus = "relationship_memory"
+        new_use_image = False
+        new_use_sticker = False
+        new_max_length = "medium"
+        merged_do_not = _merge_unique(
+            merged_do_not,
+            [
+                "不要调侃、撒娇、接梗、转移话题或刺激用户。",
+                "不要给危险方法、不要淡化风险。",
+                "不要选择沉默、不要输出沉默标记，必须认真回应。",
+            ],
+        )
+        merged_instructions = _merge_unique(
+            merged_instructions,
+            [
+                "认真、稳定、短句陪住用户。",
+                "鼓励用户联系现实中的可信任的人或当地紧急支持。",
+                "如果用户有立即危险，明确建议立刻求助。",
+            ],
+        )
 
     return ResponseDecision(
-        should_reply=base.should_reply,
+        should_reply=new_should_reply,
         reply_mode=new_mode,
         risk_level=new_risk,
         user_state=new_state,  # type: ignore[arg-type]
         retrieval_focus=new_focus,  # type: ignore[arg-type]
-        use_image=base.use_image,
-        use_sticker=base.use_sticker,
+        use_image=new_use_image,
+        use_sticker=new_use_sticker,
         reply_delay_seconds=base.reply_delay_seconds,
-        max_length=base.max_length,
+        max_length=new_max_length,
         do_not=merged_do_not,
         instructions=merged_instructions,
     )

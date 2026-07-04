@@ -214,6 +214,7 @@ async def _run_persona_analysis(json_path: Path, settings: Settings) -> dict[str
     proactive = compute_proactive_profile(
         sessions,
         min_gap_minutes=settings.proactive_learning_min_gap_minutes,
+        timezone=settings.app_timezone,
     )
     save_proactive_profile(proactive, out_dir / PROACTIVE_PROFILE_FILENAME)
 
@@ -251,6 +252,7 @@ async def _rebuild_proactive_profile_from_store(
         friend_name=settings.friend_name or "TA",
         self_name=settings.self_name or "我",
         min_gap_minutes=settings.proactive_learning_min_gap_minutes,
+        timezone=settings.app_timezone,
     )
     save_proactive_profile(
         profile,

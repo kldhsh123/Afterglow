@@ -46,6 +46,7 @@ from xuwen.persona.prompt import build_chat_messages
 
 router = APIRouter(prefix="/v1/companion", tags=["companion"])
 logger = logging.getLogger(__name__)
+_COMPANION_RESPONSE_POLICY_TIMEOUT_SECONDS = 8.0
 
 _ASSUMED_USER_STATE_PATTERNS = (
     "你还没睡",
@@ -278,9 +279,34 @@ async def proactive_poll(
             ),
             state=state,
             trace_id=trace_id,
+            persist=False,
         )
-        status = "silenced" if proactive_response.silenced else "sent"
-        await state.proactive.finish_candidate(scope_id)
+        candidate_valid = await state.proactive.finish_candidate_if_still_valid(
+            scope_id,
+            candidate_created_at_ms=result.candidate_created_at_ms,
+            scheduled_for_ms=result.scheduled_for_ms,
+        )
+        if candidate_valid:
+            if not proactive_response.silenced:
+                await _persist_proactive_response(
+                    req=ProactiveRequest(
+                        conversation_id=req.conversation_id,
+                        caller_id=req.caller_id,
+                        reason=req.reason,
+                        private_context=result.private_context,
+                        topic_hint=result.topic_hint,
+                    ),
+                    state=state,
+                    text=proactive_response.message,
+                )
+            status = "silenced" if proactive_response.silenced else "sent"
+        else:
+            proactive_response = None
+            status = "cancelled"
+            result.should_send = False
+            result.reason = "cancelled_by_user_activity"
+            result.skip_reasons = ["user_activity_during_generation"]
+            result.cancelled_by_user_activity = True
         next_result = await state.proactive.poll(
             conversation_id=scope_id,
             life=life,
@@ -340,6 +366,7 @@ async def _generate_proactive_response(
     *,
     state: AppState,
     trace_id: str,
+    persist: bool = True,
 ) -> ProactiveResponse:
     base_life = state.life.snapshot()
     retrieval_query = "\n".join(
@@ -451,19 +478,33 @@ async def _generate_proactive_response(
         detail=f"trace={trace_id},{response_decision.metric_detail()}",
     )
     if state.settings.response_policy_model_enabled:
-        response_decision = await refine_decision_with_llm(
-            base=response_decision,
-            llm=state.response_policy_llm,
-            model=state.settings.resolved_response_policy_model,
-            settings=state.settings,
-            current_user_text=_proactive_context_text(req),
-            recent=[],
-            life=life,
-            relationship_context=relationship_context,
-            has_images=False,
-            trace_id=trace_id,
-            metrics=state.metrics,
-        )
+        try:
+            response_decision = await asyncio.wait_for(
+                refine_decision_with_llm(
+                    base=response_decision,
+                    llm=state.response_policy_llm,
+                    model=state.settings.resolved_response_policy_model,
+                    settings=state.settings,
+                    current_user_text=_proactive_context_text(req),
+                    recent=[],
+                    life=life,
+                    relationship_context=relationship_context,
+                    has_images=False,
+                    trace_id=trace_id,
+                    metrics=state.metrics,
+                ),
+                timeout=_COMPANION_RESPONSE_POLICY_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            logger.warning(
+                "主动聊天互动策略小模型超时 %.1fs，沿用规则层决策",
+                _COMPANION_RESPONSE_POLICY_TIMEOUT_SECONDS,
+            )
+            state.metrics.record(
+                "companion.response.policy.refined",
+                0.0,
+                error="TimeoutError",
+            )
         state.metrics.record(
             "companion.response.policy.refined",
             0.0,
@@ -606,6 +647,26 @@ async def _generate_proactive_response(
             debug=proactive_debug,
         )
 
+    if persist:
+        await _persist_proactive_response(req=req, state=state, text=text)
+
+    return ProactiveResponse(
+        message=text,
+        life=_life_to_dict(life),
+        relationship_memory=relationship_context,
+        trace_id=trace_id,
+        policy=policy_hint,
+        debug=proactive_debug,
+    )
+
+
+async def _persist_proactive_response(
+    *,
+    req: ProactiveRequest,
+    state: AppState,
+    text: str,
+) -> None:
+    """把已确认发送的主动消息写入历史和主动上下文缓存。"""
     if req.conversation_id and text:
         await state.writeback.enqueue_turn(
             WritebackTurn(
@@ -619,15 +680,6 @@ async def _generate_proactive_response(
         conversation_id=req.conversation_id,
         user_text="",
         assistant_text=text,
-    )
-
-    return ProactiveResponse(
-        message=text,
-        life=_life_to_dict(life),
-        relationship_memory=relationship_context,
-        trace_id=trace_id,
-        policy=policy_hint,
-        debug=proactive_debug,
     )
 
 

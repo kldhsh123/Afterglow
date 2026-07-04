@@ -136,24 +136,34 @@ class LLMClient:
         """
         payload = self._build_payload(messages, params, model=model, stream=True)
         # 重试只覆盖建立流的过程
-        async for attempt in AsyncRetrying(
-            stop=stop_after_attempt(self._max_retries),
-            wait=wait_exponential(multiplier=1.0, min=1.0, max=10.0),
-            retry=retry_if_exception_type((httpx.HTTPError, _RetryableLLMError)),
-            reraise=True,
-        ):
-            with attempt:
-                gen = self._open_stream(
-                    payload,
-                    trace_id=trace_id,
-                    stage=stage,
-                    metrics=metrics,
-                    attempt_number=_attempt_number(attempt.retry_state),
-                )
-                # 先取首个 chunk 以触发可能的早期错误
-                first = await gen.__anext__()
-                break
-        else:  # pragma: no cover - reraise=True 保证不到这里
+        gen: AsyncGenerator[str, None] | None = None
+        first: str | None = None
+        try:
+            async for attempt in AsyncRetrying(
+                stop=stop_after_attempt(self._max_retries),
+                wait=wait_exponential(multiplier=1.0, min=1.0, max=10.0),
+                retry=retry_if_exception_type((httpx.HTTPError, _RetryableLLMError)),
+                reraise=True,
+            ):
+                with attempt:
+                    gen = self._open_stream(
+                        payload,
+                        trace_id=trace_id,
+                        stage=stage,
+                        metrics=metrics,
+                        attempt_number=_attempt_number(attempt.retry_state),
+                    )
+                    # 先取首个 chunk 以触发可能的早期错误
+                    try:
+                        first = await gen.__anext__()
+                    except StopAsyncIteration:
+                        await gen.aclose()
+                        return
+                    break
+        except httpx.HTTPError as e:
+            raise LLMError(f"LLM 流式请求失败：{type(e).__name__}") from e
+
+        if gen is None or first is None:  # pragma: no cover - reraise=True 保证不到这里
             raise LLMError("无法建立流式连接")
 
         async def _emit() -> AsyncIterator[str]:
@@ -347,6 +357,7 @@ class LLMClient:
         pieces = 0
         chars = 0
         preview_parts: list[str] = []
+        stream_error = ""
         async with self._client.stream(
             "POST", self._url, headers=self._headers, json=payload
         ) as resp:
@@ -424,6 +435,17 @@ class LLMClient:
                         yield content
                     # 兼容 reasoning 字段（一些上游会在 thinking 阶段送 delta.reasoning）；本期暂不渲染
                     await asyncio.sleep(0)  # 让出事件循环
+            except httpx.HTTPError as e:
+                stream_error = type(e).__name__
+                if pieces <= 0:
+                    raise _RetryableLLMError(
+                        f"LLM 流式响应建立后中断：{stream_error}",
+                        detail={"request_id": request_id},
+                    ) from e
+                raise LLMError(
+                    f"LLM 流式响应中断：{stream_error}",
+                    detail={"request_id": request_id},
+                ) from e
             finally:
                 _record_model_call(
                     metrics,
@@ -433,7 +455,7 @@ class LLMClient:
                     payload=payload,
                     url=self._url,
                     latency_ms=(time.perf_counter() - start) * 1000,
-                    status="ok",
+                    status="error" if stream_error else "ok",
                     status_code=resp.status_code,
                     upstream_request_id=request_id or "",
                     request=request_summary,
@@ -442,6 +464,7 @@ class LLMClient:
                         "content_chars": chars,
                         "content_preview": _short_text("".join(preview_parts), 240),
                     },
+                    error=stream_error,
                 )
 
 
