@@ -32,6 +32,8 @@ from xuwen.chat_api.turn_coordinator import TurnCoordinator
 from xuwen.chat_api.web_fetch import WebFetchClient
 from xuwen.chat_api.web_search import WebSearchClient
 from xuwen.companion.life import LifeStateManager
+from xuwen.companion.proactive import ProactiveEngine
+from xuwen.companion.proactive_context import ProactiveContextCache
 from xuwen.companion.relationship import RelationshipMemoryManager
 from xuwen.config import Settings, get_settings
 from xuwen.core.metrics import MetricsRecorder
@@ -141,6 +143,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             store=store,
             embedder=embedder,
         )
+        proactive = ProactiveEngine(resolved_settings, store=store)
+        proactive_context_cache = ProactiveContextCache(resolved_settings)
         web_search = (
             WebSearchClient(resolved_settings)
             if resolved_settings.web_access_enabled
@@ -169,6 +173,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             metrics=metrics,
             life=life,
             relationship_memory=relationship_memory,
+            proactive=proactive,
+            proactive_context_cache=proactive_context_cache,
             responses_store=ResponsesStore(
                 capacity=resolved_settings.responses_store_capacity,
             ),

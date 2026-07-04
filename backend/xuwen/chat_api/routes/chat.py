@@ -126,6 +126,10 @@ async def chat_completions(
                 image_urls=images_in_last,
             )
 
+    proactive_scope_id = req.conversation_id or req.caller_id
+    if proactive_scope_id and (current_user_text or images_in_last):
+        await state.proactive.record_user_activity(proactive_scope_id)
+
     if images_in_last and not state.settings.chat_model_supports_vision:
         async with VisionClient(state.settings) as vc:
             vlm_descriptions = await vc.describe_images(images_in_last)
@@ -389,6 +393,12 @@ async def chat_completions(
                     user_image_shas=image_shas,
                 )
             )
+        await state.proactive_context_cache.append_turn(
+            caller_id=req.caller_id,
+            conversation_id=req.conversation_id,
+            user_text=current_user_text,
+            assistant_text="",
+        )
         state.metrics.record(
             "chat.silenced",
             0.0,
@@ -492,6 +502,7 @@ async def chat_completions(
                 params=params,
                 model_name=model_name,
                 conversation_id=req.conversation_id,
+                caller_id=req.caller_id,
                 user_text=current_user_text,
                 image_shas=image_shas,
                 trace_id=trace_id,
@@ -626,6 +637,12 @@ async def chat_completions(
             user_text=current_user_text,
             assistant_text="" if ai_silenced else assistant_text,
         )
+    await state.proactive_context_cache.append_turn(
+        caller_id=req.caller_id,
+        conversation_id=req.conversation_id,
+        user_text=current_user_text,
+        assistant_text="" if ai_silenced else assistant_text,
+    )
     await _ack_turn(state, turn_snapshot)
     # Feature #9：从主模型原始输出抽 <schedule-hint>，调用小模型解析为 ScheduleTask。
     # 失败/未启用时为 None；不影响正常回复链路。
@@ -735,6 +752,7 @@ async def _stream_response(
     params: GenerationParams,
     model_name: str,
     conversation_id: str | None,
+    caller_id: str | None,
     user_text: str,
     image_shas: list[str],
     trace_id: str,
@@ -915,6 +933,12 @@ async def _stream_response(
             user_text=user_text,
             assistant_text=assistant_text,
         )
+    await state.proactive_context_cache.append_turn(
+        caller_id=caller_id,
+        conversation_id=conversation_id,
+        user_text=user_text,
+        assistant_text=assistant_text,
+    )
     await _ack_turn(state, turn_snapshot)
 
 
