@@ -65,20 +65,20 @@ CHAT_PRESETS: list[Preset] = [
 # Embedding 预设
 EMBEDDING_PRESETS: list[Preset] = [
     Preset(
-        id="dashscope",
-        label="阿里云 DashScope（推荐，有免费额度）",
-        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-        default_model="Qwen3-Embedding-8B",
-        apply_url="https://bailian.console.aliyun.com/?apiKey=1",
-        hint="默认 Qwen3-Embedding-8B（4096 维），上下文召回更精准",
+        id="xunfei-qwen8b",
+        label="讯飞 Qwen3-Embedding-8B（推荐，免费并发 20）",
+        base_url="https://maas-api.cn-huabei-1.xf-yun.com/v2",
+        default_model="xop3qwen8bembedding",
+        apply_url="https://console.xfyun.cn/services",
+        hint="免费额度，并发 20，4096 维",
     ),
     Preset(
-        id="siliconflow",
-        label="SiliconFlow（国内，模型多）",
-        base_url="https://api.siliconflow.cn/v1",
-        default_model="Qwen/Qwen3-Embedding-8B",
-        apply_url="https://cloud.siliconflow.cn/account/ak",
-        hint="维度 4096",
+        id="dashscope",
+        label="阿里云 DashScope",
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        default_model="text-embedding-v4",
+        apply_url="https://bailian.console.aliyun.com/?apiKey=1",
+        hint="text-embedding-v4（3072 维），上下文召回更精准",
     ),
     Preset(
         id="custom",
@@ -159,22 +159,22 @@ RERANKER_PRESETS: list[Preset] = [
 # Cross-encoder 专用 reranker 预设：协议二选一（jina-style 或 dashscope）
 CROSS_RERANKER_PRESETS: list[Preset] = [
     Preset(
-        id="dashscope-gte",
-        label="阿里 DashScope gte-rerank（推荐，中文好）",
+        id="xunfei-qwen8b",
+        label="讯飞 Qwen3-Reranker-8B（推荐，免费并发 20）",
+        base_url="https://maas-api.cn-huabei-1.xf-yun.com/v2",
+        default_model="xop3qwen8breranker",
+        apply_url="https://console.xfyun.cn/services",
+        hint="免费额度，并发 20；走 jina 兼容协议",
+        extra={"protocol": "jina"},
+    ),
+    Preset(
+        id="dashscope-qwen3",
+        label="阿里 DashScope qwen3-rerank（中文好）",
         base_url="https://dashscope.aliyuncs.com/api/v1",
-        default_model="gte-rerank-v2",
+        default_model="qwen3-rerank",
         apply_url="https://bailian.console.aliyun.com/?apiKey=1",
         hint="如果 embedding 已用 DashScope 可以复用 key；走 dashscope 原生协议",
         extra={"protocol": "dashscope"},
-    ),
-    Preset(
-        id="siliconflow-bge",
-        label="SiliconFlow bge-reranker-v2-m3（国内托管开源）",
-        base_url="https://api.siliconflow.cn/v1",
-        default_model="BAAI/bge-reranker-v2-m3",
-        apply_url="https://cloud.siliconflow.cn/account/ak",
-        hint="按 token 计费，注册有免费额度；走 jina 兼容协议",
-        extra={"protocol": "jina"},
     ),
     Preset(
         id="jina-v2",
