@@ -93,7 +93,7 @@ Afterglow 是个人工具，但你用它处理的是**真实存在过的、属�
 **它不是另一个"自定义角色 GPT"，也不是微调的替代品**——请先校准期待。
 
 - **比不上微调（fine-tuning）**：本项目完全基于 RAG + Prompt Engineering + Persona 卡片，**不动模型权重**。LoRA / QLoRA 能从你的聊天语料里直接学到深层句法习惯、词频偏好和思维节奏，那是这条技术路径的天花板，**本项目永远达不到**。
-- **但远好过 skill / 角色扮演技能**： ChatGPT GPTs / Coze / Dify / 智谱智能体 这类"prompt + 简单 memory"的角色扮演方案，多数靠几句人设描述 + 短期对话历史，相似度顶天 40-60%。Afterglow 把多个独立机制叠在一起——三索引混合检索、真实历史聊天作为风格示例（按 query 召回 + 注入 prompt 末尾以获得最强 attention）、可选 cross-encoder 精排（如 Qwen3-Reranker-8B）、生活时间线（动态人设）、关系记忆蒸馏、本轮互动决策层（规则 + 小模型微调）——在你**聊天记录足够多 + ta 风格鲜明**时能跑出比 skill 类产品高一档的复刻效果。
+- **但远好过 skill / 角色扮演技能**： ChatGPT GPTs / Coze / Dify / 智谱智能体 这类"prompt + 简单 memory"的角色扮演方案，多数靠几句人设描述 + 短期对话历史，相似度顶天 40-60%。Afterglow 把多个独立机制叠在一起——三索引混合检索、真实历史聊天作为风格示例（按 query 召回 + 注入 prompt 末尾以获得最强 attention）、可选 cross-encoder 精排（如讯飞 `xop3qwen8breranker`）、生活时间线（动态人设）、关系记忆蒸馏、本轮互动决策层（规则 + 小模型微调）——在你**聊天记录足够多 + ta 风格鲜明**时能跑出比 skill 类产品高一档的复刻效果。
 - **但永远不是 ta**：相似度再高也有暴露 AI 痕迹的时刻。如果你的诉求是"几乎认不出是 AI"，请直接走微调路线，门槛和成本都不在同一量级。
 
 ### 代码结构
@@ -113,16 +113,7 @@ Issue 模板参考自一个我已经忘记来源的开源项目；这个模板�
 
 - 项目交流 QQ 群：`330316577`
 - 赞助支持：<https://afdian.com/a/kldhsh123>
-- 我们的长期合作伙伴 [二次元论坛](https://www.ecylt.top/) 的 [二次元 API 中转站](https://api.223387.xyz/) 提供免费的 Embedding 模型 `Qwen3-Embedding-8B` 和 Cross-encoder Reranker 模型 `Qwen3-Reranker-8B`。对于项目的支持，我们非常感谢。
-
-如果需要使用该 Embedding 模型，请在 `backend/.env` 中修改以下配置，并按服务说明填写对应的 `EMBEDDING_API_URL` / `EMBEDDING_API_KEY`：
-
-```env
-EMBEDDING_MODEL=Qwen3-Embedding-8B
-EMBEDDING_DIM=4096
-EMBEDDING_BATCH_SIZE=25
-EMBEDDING_MAX_REQUESTS_PER_MINUTE=100
-```
+- 感谢 [二次元论坛](https://www.ecylt.top/) 与二次元 API 中转站曾经为项目提供模型服务支持。
 
 ---
 
@@ -247,7 +238,7 @@ mindmap
 ### 关键设计
 
 - **三索引混合检索**：response_pairs（用户输入→对方回复）+ 单条朋友发言 + 多轮窗口，RRF 融合。五路向量召回 + relationship_memory + life 在 Layer A 一次 `asyncio.gather` 并发完成，主链路只取最长那条耗时。
-- **可选 Cross-encoder 粗排**：开启 `CROSS_RERANK_ENABLED=true` 后，RRF 召回的候选会先过一道专用 reranker 模型（如 **Qwen3-Reranker-8B**，二次元 API 中转站免费提供）按相关性精排，再注入主聊天 prompt——区分度比 LLM-as-reranker 更细，延迟仅 ~3s。
+- **可选 Cross-encoder 粗排**：开启 `CROSS_RERANK_ENABLED=true` 后，RRF 召回的候选会先过一道专用 reranker 模型（如讯飞免费 `xop3qwen8breranker` 或 DashScope `qwen3-rerank`）按相关性精排，再注入主聊天 prompt——区分度比 LLM-as-reranker 更细，延迟仅 ~3s。
 - **可选 Query 改写**：短句口语（"在吗 / 想你了 / 好累"）走 query rewrite 小模型展开为 1-3 个检索友好的变体，多变体命中按 `(best_rank, distance)` 合并，避免短 query 召回稀疏。
 - **可选自适应切分**：导入期 `CHUNKING_STRATEGY=adaptive` 时按话题边界切聊天记录（启发式 / 小模型可选），比固定 12 条窗口更贴合自然话题；会话级并发可配，大库切分 30 秒内完成。
 - **AI 回复连发分条**：主聊天 LLM 输出含 `\n\n` 时前端拆成多条独立气泡（独立头像 / 时间戳 / 名字），后续段错峰 2-5s 显示，模拟真人 IM 连发节奏。后端协议 100% 标准 OpenAI 兼容，第三方客户端零适配。
@@ -285,11 +276,11 @@ Afterglow 不内置模型，所有 LLM 调用都走你自己配置的 OpenAI 兼
 | 角色 | 必需？ | 作用 | 推荐 | 配置项 |
 |---|---|---|---|---|
 | **主聊天模型** | ✅ 必需 | 生成最终回复，决定"像不像 TA" | **DeepSeek** / **Gemini**  | `OPENAI_BASE_URL` `OPENAI_API_KEY` `CHAT_MODEL` |
-| **Embedding 模型** | ✅ 必需 | 向量化历史聊天与检索 query | Qwen3-Embedding-8B（阿里云 DashScope 免费额度，或合作伙伴二次元 API 中转站免费提供该模型） | `EMBEDDING_API_URL` `EMBEDDING_API_KEY` `EMBEDDING_MODEL` `EMBEDDING_DIM` |
+| **Embedding 模型** | ✅ 必需 | 向量化历史聊天与检索 query | 讯飞 `xop3qwen8bembedding`（免费，并发 20，4096 维）/ DashScope `text-embedding-v4` | `EMBEDDING_API_URL` `EMBEDDING_API_KEY` `EMBEDDING_MODEL` `EMBEDDING_DIM` |
 | **打标小模型** | 🔧 可选 | 给历史 chunk 打 mood / topic / importance 软标签 | **[智谱清言 glm-4-flash](https://www.bigmodel.cn/invite?icode=Q2FUoY2w04wQb%2FoIugMwsA%3D%3D)（免费）** | `LABELING_ENABLED=true` `LABEL_API_*` `LABEL_MODEL` |
 | **生活状态 / 网页意图小模型** | 🔧 可选 | 维护 AI 当前在做什么、判断要不要打开 URL | **[智谱清言 glm-4-flash](https://www.bigmodel.cn/invite?icode=Q2FUoY2w04wQb%2FoIugMwsA%3D%3D)（免费）** | `LIFE_API_*` `LIFE_MODEL` |
 | **互动决策小模型** | 🔧 可选 | 规则层之后再叫一次小模型微调本轮策略 | **[智谱清言 glm-4-flash](https://www.bigmodel.cn/invite?icode=Q2FUoY2w04wQb%2FoIugMwsA%3D%3D)（免费）** 或复用 LIFE_* | `RESPONSE_POLICY_MODEL_ENABLED=true` `RESPONSE_POLICY_*` |
-| **Cross-encoder Reranker** | 🔧 可选 | RRF 召回后按相关性精排，显著提升记忆贴合度 | **Qwen3-Reranker-8B**（二次元 API 中转站 免费）/ bge-reranker-v2-m3 / DashScope gte-rerank | `CROSS_RERANK_ENABLED=true` `CROSS_RERANK_*` |
+| **Cross-encoder Reranker** | 🔧 可选 | RRF 召回后按相关性精排，显著提升记忆贴合度 | 讯飞 `xop3qwen8breranker`（免费，并发 20）/ DashScope `qwen3-rerank` / Jina Reranker | `CROSS_RERANK_ENABLED=true` `CROSS_RERANK_*` |
 | **视觉模型** | 🔧 可选 | 主聊天模型不支持视觉时用 VLM 把图转文字 | Qwen-VL / Gemini Vision | `VISION_API_*` `VISION_MODEL` |
 | **联网检索** | 🔧 可选 | 用户明确要求"搜索 / 最新 / 天气"时调 | Tavily（月度免费额度）/ 自建 SearXNG | `WEB_ACCESS_ENABLED=true` `WEB_SEARCH_*` |
 
@@ -297,8 +288,8 @@ Afterglow 不内置模型，所有 LLM 调用都走你自己配置的 OpenAI 兼
 >
 > - **主聊天模型**：**DeepSeek** 或 **Gemini**——较高参数量才能撑得起"像 TA 说话"的细腻度
 > - **所有小模型**（打标 / 生活状态 / 网页意图 / 互动决策）：**[智谱清言 glm-4-flash](https://www.bigmodel.cn/invite?icode=Q2FUoY2w04wQb%2FoIugMwsA%3D%3D)**——**免费**且性能完全够辅助任务
-> - **Embedding**：**Qwen3-Embedding-8B**（DashScope 免费额度 / 二次元 API 中转站 免费）
-> - **Cross-encoder Reranker**（可选但强烈推荐）：**Qwen3-Reranker-8B**（二次元 API 中转站 免费）—— 让"召回记忆是否真的相关"质量提一档
+> - **Embedding**：讯飞 `xop3qwen8bembedding`——免费，并发 20，4096 维
+> - **Cross-encoder Reranker**（可选但强烈推荐）：讯飞 `xop3qwen8breranker`——免费，并发 20，让"召回记忆是否真的相关"质量提一档
 >
 > 这套组合下你的主要花费只在主聊天模型上，其它链路几乎不消耗额度。
 
@@ -338,9 +329,9 @@ uv run uvicorn xuwen.chat_api.app:create_app --factory --reload
 1. **身份信息** — 上传 QQ / 微信导出 JSON 自动识别 UID，不必手动找 `u_xxx` / `wxid_xxx`；同一个人跨平台的多 UID 支持一并归并
 2. **关系** — 朋友 / 恋人 / 亲人 / 同事 / 自定义
 3. **聊天 AI** — DeepSeek / Gemini / 自定义中转站 / 本地 Ollama，选完填密钥**当场测连通**
-4. **向量服务 + 打标** — DashScope / SiliconFlow / 自定义；默认开启 GLM-4-Flash 打标（小白可关）
+4. **向量服务 + 打标** — 讯飞 / DashScope / 自定义；默认开启 GLM-4-Flash 打标（小白可关）
 5. **可选功能** — 生活时间线 / 视觉理解 / 联网搜索 / 互动决策（默认全关，按需开）
-6. **检索增强（可选）** — Query 改写（短句口语场景）+ Cross-encoder Reranker（如 Qwen3-Reranker-8B）按相关性精排
+6. **检索增强（可选）** — Query 改写（短句口语场景）+ Cross-encoder Reranker（如讯飞 `xop3qwen8breranker`）按相关性精排
 7. **导入聊天记录** — 选切分策略（固定窗口 / 自适应 adaptive，后者按话题边界切分），文件直传后端，进度+耗时+断点续传，自动生成 `persona_card.md` 和作息画像
 8. **访问密码** — 自动生成 `XUWEN_API_KEY`，写入 `.env`
 
