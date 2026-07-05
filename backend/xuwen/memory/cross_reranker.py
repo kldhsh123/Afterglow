@@ -4,7 +4,7 @@
 - 走 RRF 之后、SemanticReranker（LLM 精排）之前，把候选池砍到 cross_rerank_top_n
 - fail-open：网络失败 / 非法响应一律返回原顺序，主链路不受影响
 - 同时支持两种主流协议：
-    * jina：Jina / SiliconFlow / Cohere v2 / 大多数自建 bge-reranker 服务都用这种
+    * jina：Jina / 讯飞 / Cohere v2 / 大多数自建 bge-reranker 服务都用这种
     * dashscope：阿里 DashScope text-rerank 原生 API，结构嵌套在 input/output 下
 
 Cross-encoder 只做相关性筛选，不做"风格证据"判断 —— 那是 SemanticReranker 的活。

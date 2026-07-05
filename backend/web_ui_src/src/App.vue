@@ -325,6 +325,8 @@ function applyEmbPreset(p: Preset) {
   form.EMBEDDING_MODEL = p.default_model
   // 根据默认模型设置默认维度
   if (p.default_model.includes('Qwen3-Embedding-8B')) form.EMBEDDING_DIM = 4096
+  else if (p.default_model === 'xop3qwen8bembedding') form.EMBEDDING_DIM = 4096
+  else if (p.default_model === 'text-embedding-v4') form.EMBEDDING_DIM = 3072
   else if (p.default_model.includes('text-embedding-3-large')) form.EMBEDDING_DIM = 3072
   else if (p.default_model.includes('nomic-embed-text')) form.EMBEDDING_DIM = 768
   else if (p.default_model.startsWith('text-embedding-v')) form.EMBEDDING_DIM = 1024
@@ -1759,7 +1761,7 @@ onMounted(async () => {
                 <div class="text-xs text-ink-soft dark:text-night-text-soft">
                   当前协议：<span class="font-mono">{{ form.CROSS_RERANK_PROTOCOL }}</span>
                   <span v-if="form.CROSS_RERANK_PROTOCOL === 'dashscope'">（阿里 DashScope text-rerank 原生 API）</span>
-                  <span v-else>（Jina / Cohere / SiliconFlow / 自建 bge-reranker 兼容协议）</span>
+                  <span v-else>（Jina / Cohere / 讯飞 / 自建 bge-reranker 兼容协议）</span>
                 </div>
 
                 <label class="block">
@@ -1779,7 +1781,7 @@ onMounted(async () => {
                 <label class="block">
                   <span class="text-sm">模型名</span>
                   <input v-model="form.CROSS_RERANK_MODEL"
-                    placeholder="例如 gte-rerank-v2 / BAAI/bge-reranker-v2-m3"
+                    placeholder="例如 qwen3-rerank / xop3qwen8breranker"
                     class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                            border border-ink/10 dark:border-night-text/10 outline-none
                            focus:ring-2 focus:ring-accent-soft font-mono text-sm" />

@@ -192,9 +192,9 @@ class Settings(BaseSettings):
     image_data_dir: Path = Path(".data/images")
 
     # ----- Embedding -----
-    embedding_api_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    embedding_api_url: str = "https://maas-api.cn-huabei-1.xf-yun.com/v2"
     embedding_api_key: SecretStr = Field(default=SecretStr(""))
-    embedding_model: str = "Qwen3-Embedding-8B"
+    embedding_model: str = "xop3qwen8bembedding"
     embedding_dim: int = 4096
     # 请求格式：array = OpenAI 标准（input 是 string[]，一次多条）
     #         single = 单条模式（input 是 string，一次只能一条），兼容 Gitee AI 等
@@ -202,13 +202,13 @@ class Settings(BaseSettings):
     # 单次请求最多包含的文本数；single 模式下强制为 1
     embedding_batch_size: int = 25
     # Embedding API 最大并发请求数。只限制同时在飞的 HTTP 请求，不等价于每分钟限速。
-    embedding_max_concurrency: int = 4
+    embedding_max_concurrency: int = 20
     # Embedding API 每分钟最多发起多少个 HTTP 请求。0 = 不主动限速。
     embedding_max_requests_per_minute: int = 0
     # 是否在请求体中带 encoding_format="float"，OpenAI 原生支持但部分网关会拒绝
     embedding_include_encoding_format: bool = True
     # 是否在请求体中带 dimensions=EMBEDDING_DIM，告诉上游显式输出指定维度。
-    # 支持 MRL 的服务（OpenAI text-embedding-3 / DashScope text-embedding-v3 /
+    # 支持 MRL 的服务（OpenAI text-embedding-3 / DashScope text-embedding-v4 /
     # Qwen3-Embedding 兼容网关等）必须发这个字段，否则会用上游默认（常被降到 1024）。
     # 极少数老网关不识别该字段会 400；遇到这种情况关掉本开关并把 EMBEDDING_DIM
     # 设成上游默认值即可。
@@ -224,7 +224,7 @@ class Settings(BaseSettings):
     lance_upsert_batch_size: int = 128
     # 表行数低于此值时不建向量索引（暴力扫描更快）；导入完成后会调 ensure_vector_indices
     # 检测每张表是否过了阈值。0 = 永远不自动建索引（只能手动 cli index 触发）。
-    # 实测 4096 维 (Qwen3-Embedding) 全表扫描的盈亏平衡点：~1000 行（暴力扫描 ~150ms，
+    # 实测 3072/4096 维 embedding 全表扫描的盈亏平衡点：~1000 行（暴力扫描 ~150ms，
     # IVF_FLAT 索引 ~30ms）。把阈值压到 1000 让 dialogue_windows/response_pairs 这类
     # 中小表也能走索引；更小的表（如 live_messages ~几十行）继续暴力扫描。
     lance_index_min_rows: int = 1000
@@ -335,7 +335,7 @@ class Settings(BaseSettings):
     # 二者都可独立开关：全关 = 纯 RRF；只开 cross = 纯检索精度；
     # 只开 LLM = 现状；两个都开 = 两阶段，质量上限最高。
     cross_rerank_enabled: bool = False
-    # jina：Jina / SiliconFlow / Cohere v2 / 自建 bge-reranker 服务都用这种
+    # jina：Jina / 讯飞 / Cohere v2 / 自建 bge-reranker 服务都用这种
     # dashscope：阿里 DashScope text-rerank 原生 API（不是 OpenAI 兼容端点）
     cross_rerank_protocol: CrossRerankProtocol = "jina"
     cross_rerank_api_url: str = ""
