@@ -11,7 +11,7 @@
 
 </div>
 
-[![聊天记录支持 QQ / 微信](https://img.shields.io/static/v1?label=聊天记录支持&message=QQ%20%2F%20微信&color=07C160&style=flat-square)](#) [![Website](https://img.shields.io/badge/官网-afterglow.kldhsh.top-8B5CF6?style=flat-square)](https://afterglow.kldhsh.top/) [![License](https://img.shields.io/github/license/kldhsh123/Afterglow?style=flat-square)](https://github.com/kldhsh123/Afterglow/blob/main/LICENSE) [![Last Commit](https://img.shields.io/github/last-commit/kldhsh123/Afterglow?style=flat-square)](https://github.com/kldhsh123/Afterglow/commits/main) [![Release Name](https://img.shields.io/badge/dynamic/json?style=flat-square&label=Release&query=$.name&url=https%3A%2F%2Fapi.github.com%2Frepos%2Fkldhsh123%2FAfterglow%2Freleases%2Flatest&logo=github)](https://github.com/kldhsh123/Afterglow/releases/latest) 
+[![聊天记录支持 QQ](https://img.shields.io/static/v1?label=聊天记录支持&message=QQ&color=07C160&style=flat-square)](#) [![Website](https://img.shields.io/badge/官网-afterglow.kldhsh.top-8B5CF6?style=flat-square)](https://afterglow.kldhsh.top/) [![License](https://img.shields.io/github/license/kldhsh123/Afterglow?style=flat-square)](https://github.com/kldhsh123/Afterglow/blob/main/LICENSE) [![Last Commit](https://img.shields.io/github/last-commit/kldhsh123/Afterglow?style=flat-square)](https://github.com/kldhsh123/Afterglow/commits/main) [![Release Name](https://img.shields.io/badge/dynamic/json?style=flat-square&label=Release&query=$.name&url=https%3A%2F%2Fapi.github.com%2Frepos%2Fkldhsh123%2FAfterglow%2Freleases%2Flatest&logo=github)](https://github.com/kldhsh123/Afterglow/releases/latest) 
 
 ---
 
@@ -83,6 +83,7 @@ Afterglow 是个人工具，但你用它处理的是**真实存在过的、属�
 ## 🔗 相关项目
 
 - [Afterglow-QQBot](https://github.com/kldhsh123/Afterglow-QQBot) — Afterglow 的 QQBot 适配器
+- [Afterglow-WeiXinBot](https://github.com/kldhsh123/Afterglow-WeiXinBot) — Afterglow 的微信 Bot 适配器
 
 ---
 
@@ -134,8 +135,7 @@ Issue 模板参考自一个我已经忘记来源的开源项目；这个模板�
 - **PII 默认脱敏**：手机号 / 邮箱 / 身份证 / 银行卡 / IP 在入库前自动替换为占位符。QQ 号、URL、域名按设计**保留**（uid 需要匹配、URL 是对话语境的一部分）。
 - **`.env` 已在 `.gitignore`**：切勿把含有 API key 的配置文件提交到 git。
 - **后端 API 默认需要鉴权**：除 `/healthz` 外，所有接口默认要求 `XUWEN_API_KEY`，避免模型额度、记忆数据和调试信息被滥用。
-- **导出 JSON 风险提醒**：[QQChatExporter](https://github.com/shuakami/qq-chat-exporter) / [WeFlow](https://github.com/hicccc77/WeFlow) 等导出工具产出的 JSON 含有完整聊天明文（含 wxid / uid 等账号信息），分享给他人前请自行确认。
-- **微信导入提醒**：[WeFlow](https://github.com/hicccc77/WeFlow) 是 Afterglow 所支持的微信导入适配器，Afterglow 的默认微信导入插件依赖此项目。
+- **导出 JSON 风险提醒**：[QQChatExporter](https://github.com/shuakami/qq-chat-exporter) 等导出工具产出的 JSON 含有完整聊天明文（含 uid 等账号信息），分享给他人前请自行确认。
 - **导出时只勾选纯文本**：Afterglow 只消费文本语料，导出工具一律**关闭图片 / 语音 / 视频 / 文件**等附件选项。这样导出的 JSON 体积小、不含媒体二进制，导入也更快。
 
 ---
@@ -169,7 +169,7 @@ flowchart LR
   end
 
   subgraph Ingestion["离线导入流水线"]
-    message["导出的聊天记录 JSON"] --> Plugin["导入 plugin<br/>QQChatExporter / WeFlow"]
+    message["导出的聊天记录 JSON"] --> Plugin["导入 plugin<br/>QQChatExporter"]
     Plugin --> Normalize["NormalizedMessage<br/>角色 / 类型 / 占位符"]
     Normalize --> Clean["清洗 / emoji 与表情占位 / @ 归一"]
     Clean --> Redact["PII 脱敏"]
@@ -267,7 +267,7 @@ mindmap
 | Node.js | ≥ 20 | 前端构建 | **仅用前端时需要**；纯 API 用户可不装 |
 | [uv](https://github.com/astral-sh/uv) | latest | Python 包管理 | 推荐 |
 | [pnpm](https://pnpm.io/) | latest | Node 包管理 | 仅前端 |
-| [QQChatExporter V5](https://github.com/shuakami/qq-chat-exporter) / [WeFlow](https://github.com/hicccc77/WeFlow)（微信，`arkme-json`）导出纯文本 JSON | — | 真人聊天数据源 | 至少一份；plugin 会自动识别格式；[WeFlow](https://github.com/hicccc77/WeFlow) 是当前支持的微信导入方案 |
+| [QQChatExporter V5](https://github.com/shuakami/qq-chat-exporter) 导出纯文本 JSON | — | 真人聊天数据源 | 至少一份；plugin 会自动识别格式 |
 
 ### 1. 准备模型（API）
 
@@ -326,7 +326,7 @@ uv run uvicorn xuwen.chat_api.app:create_app --factory --reload
 
 浏览器打开链接，粘 token，跟着 8 步走完：
 
-1. **身份信息** — 上传 QQ / 微信导出 JSON 自动识别 UID，不必手动找 `u_xxx` / `wxid_xxx`；同一个人跨平台的多 UID 支持一并归并
+1. **身份信息** — 上传 QQ 导出 JSON 自动识别 UID，不必手动找 `u_xxx`；同一个人的多 UID 支持一并归并
 2. **关系** — 朋友 / 恋人 / 亲人 / 同事 / 自定义
 3. **聊天 AI** — DeepSeek / Gemini / 自定义中转站 / 本地 Ollama，选完填密钥**当场测连通**
 4. **向量服务 + 打标** — 讯飞 / DashScope / 自定义；默认开启 GLM-4-Flash 打标（小白可关）
@@ -366,9 +366,8 @@ cp .env.example .env
 
 - **身份信息** —— `SELF_NAME` / `SELF_UID` / `FRIEND_NAME` / `FRIEND_UID`
   - QQ：`SELF_UID` / `FRIEND_UID` 填 QQChatExporter 导出 JSON 里的 `selfUid` / 对方 `sender.uid`（`u_xxx` 形式）
-  - 微信：填 [WeFlow](https://github.com/hicccc77/WeFlow) 导出 JSON 里 `senders[]` 的 `wxid`（`wxid_xxx` 形式）；定位方法见 `backend/README.md`
   - `FRIEND_*` 永远是**你想让 AI 模仿的那个人**，不是你自己
-  - **跨平台 / 多账号**：同一个人有多个 UID（QQ + 微信 / 主号 + 小号），直接在 `SELF_UID` / `FRIEND_UID` 里**用逗号分隔**列上所有 UID，导入时会被视为同一身份。例：`FRIEND_UID=u_qq_friend,wxid_friend_main,wxid_friend_alt`
+  - **多账号**：同一个人有多个 UID（主号 + 小号），直接在 `SELF_UID` / `FRIEND_UID` 里**用逗号分隔**列上所有 UID，导入时会被视为同一身份。例：`FRIEND_UID=u_qq_friend,u_qq_friend_alt`
 - **主聊天模型** —— `OPENAI_BASE_URL` / `OPENAI_API_KEY` / `CHAT_MODEL`
 - **Embedding 模型** —— `EMBEDDING_API_URL` / `EMBEDDING_API_KEY` / `EMBEDDING_MODEL` / `EMBEDDING_DIM` / `EMBEDDING_BATCH_SIZE` / `EMBEDDING_MAX_CONCURRENCY` / `EMBEDDING_MAX_REQUESTS_PER_MINUTE`
 - **本地访问密钥** —— `XUWEN_API_KEY`（长随机串；调用方在 Header 带 `Authorization: Bearer <key>`）
@@ -385,12 +384,12 @@ cp .env.example .env
 # 单文件
 uv run python -m xuwen.ingestion.cli import 路径/到/你的聊天记录.json
 
-# 多文件（同一个朋友在 QQ + 微信都聊过、或者多个账号）
-uv run python -m xuwen.ingestion.cli import qq_导出.json wechat_导出.json 小号_导出.json
+# 多文件（同一个朋友有多个账号或多份导出）
+uv run python -m xuwen.ingestion.cli import qq_导出.json 小号_导出.json
 ```
 
-- CLI 自动按 JSON 顶层特征识别 QQ / [WeFlow](https://github.com/hicccc77/WeFlow) 格式，**可任意混合**
-- 跨平台 / 多账号场景：在 `.env` 用 `SELF_UID=u_qq,wxid_me` 和 `FRIEND_UID=u_qq,wxid_friend`（**逗号分隔**）把全部 UID 列出来
+- CLI 自动识别 QQChatExporter JSON 格式
+- 多账号场景：在 `.env` 用 `SELF_UID=u_qq,u_qq_alt` 和 `FRIEND_UID=u_qq_friend,u_qq_friend_alt`（**逗号分隔**）把全部 UID 列出来
 - 多文件按命令行顺序处理，共享 LanceDB 连接与 Embedding 客户端
 - 开启 `LABELING_ENABLED=true` 时会接着自动打标
 - 中断 / 限流失败不丢导入数据，之后可续跑：`uv run python -m xuwen.ingestion.cli label`
@@ -635,7 +634,7 @@ A：可以。`.env` 设 `ENABLE_PII_REDACTION=false`，或通过 `PII_RULES_PATH
 A：QQ 号在导出文件里到处都是（uid 关联需要）；URL 是对话语境的一部分（朋友分享 B 站视频是有意义的）。脱敏列表只覆盖一旦泄漏就造成实质损失的"硬隐私"。
 
 **Q：能否导入微信 / Telegram / Discord 数据？**
-A：已内置两个导入 plugin —— [QQChatExporter V5](https://github.com/shuakami/qq-chat-exporter)（QQ）和 [WeFlow](https://github.com/hicccc77/WeFlow) `arkme-json`（微信）。[WeFlow](https://github.com/hicccc77/WeFlow) 是 Afterglow 所支持的微信导入适配器，Afterglow 的默认微信导入插件依赖此项目。CLI 会按 JSON 顶层特征自动识别，无需额外参数。导出时记得**只勾选纯文本，不要带图片/语音/文件等附件**。其它平台目前没有内置 plugin，但写一个新 plugin 输出 `NormalizedMessage` 即可，下游流水线无需改动，欢迎 PR。
+A：目前 README 暂时只推荐 QQChatExporter V5 导出的 QQ 聊天记录。微信历史聊天导入说明已暂时移除，因为目前还没有足够稳定、好用的微信聊天记录导出项目，详见 [#14](https://github.com/kldhsh123/Afterglow/issues/14)。其它平台目前没有内置推荐流程，但写一个新 plugin 输出 `NormalizedMessage` 即可，下游流水线无需改动，欢迎 PR。
 
 **Q：会不会越聊越不像？**
 A：每轮对话都会异步回写到 `live_messages`（`trust_level=0.35`，权重远低于历史 `1.0`）。前端可在设置页"暂停回写"避免污染。
