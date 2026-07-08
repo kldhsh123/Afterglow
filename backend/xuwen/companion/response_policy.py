@@ -262,6 +262,10 @@ def decide_response_policy(
     if has_images:
         focus = "user_new"
         instructions.append("用户发了图片，优先回应图片内容或图片带来的情绪。")
+        instructions.append(
+            "只能基于系统提供的图片输入或图片描述回应；不要假装移动手机、凑近看、拿远看、"
+            "放大图片或调整摄像头。不清楚时直接说细节看不出来。"
+        )
 
     if _contains_any(text, _ANGRY_PATTERNS):
         risk = "medium"

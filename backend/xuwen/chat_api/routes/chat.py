@@ -717,21 +717,40 @@ async def chat_completions(
     # Feature #9：从主模型原始输出抽 <schedule-hint>，调用小模型解析为 ScheduleTask。
     # 失败/未启用时为 None；不影响正常回复链路。
     schedule_tasks_field = None
-    if state.settings.schedule_extract_enabled and not ai_silenced:
-        hints = extract_schedule_hints(
-            raw_assistant_text,
-            max_hints=state.settings.schedule_max_hints_per_turn,
+    schedule_hints = extract_schedule_hints(
+        raw_assistant_text,
+        max_hints=state.settings.schedule_max_hints_per_turn,
+    )
+    schedule_reason = "ok"
+    schedule_start = time.perf_counter()
+    if ai_silenced:
+        schedule_reason = "ai_silenced"
+    elif not state.settings.schedule_extract_enabled:
+        schedule_reason = "disabled"
+    elif not schedule_hints:
+        schedule_reason = "no_hints_from_main_model"
+    else:
+        tasks = await extract_schedule_tasks(
+            schedule_hints,
+            llm=state.schedule_extractor_llm,
+            settings=state.settings,
+            now=local_now(state.settings.app_timezone),
+            trace_id=trace_id,
+            metrics=state.metrics,
         )
-        if hints:
-            tasks = await extract_schedule_tasks(
-                hints,
-                llm=state.schedule_extractor_llm,
-                settings=state.settings,
-                now=local_now(state.settings.app_timezone),
-                trace_id=trace_id,
-                metrics=state.metrics,
-            )
-            schedule_tasks_field = tasks or None
+        schedule_tasks_field = tasks or None
+        if not tasks:
+            schedule_reason = "extractor_returned_empty"
+    _record_schedule_debug(
+        state,
+        trace_id=trace_id,
+        enabled=state.settings.schedule_extract_enabled,
+        stream=req.stream,
+        reason=schedule_reason,
+        hints=schedule_hints,
+        task_count=len(schedule_tasks_field or []),
+        latency_ms=(time.perf_counter() - schedule_start) * 1000,
+    )
 
     # 假流式：客户端传 stream=true 但后端配置不启用真流式 → 把完整内容包装成
     # 单个 content chunk + 收尾，按 OpenAI SSE 协议返回，客户端无感。
@@ -962,22 +981,41 @@ async def _stream_response(
     final_extra: dict[str, Any] = {"policy": policy.model_dump()}
     if ai_silenced:
         final_extra["silenced"] = True
-    if state.settings.schedule_extract_enabled and not ai_silenced:
-        hints = extract_schedule_hints(
-            raw_full,
-            max_hints=state.settings.schedule_max_hints_per_turn,
+    schedule_hints = extract_schedule_hints(
+        raw_full,
+        max_hints=state.settings.schedule_max_hints_per_turn,
+    )
+    schedule_reason = "ok"
+    schedule_start = time.perf_counter()
+    if ai_silenced:
+        schedule_reason = "ai_silenced"
+    elif not state.settings.schedule_extract_enabled:
+        schedule_reason = "disabled"
+    elif not schedule_hints:
+        schedule_reason = "no_hints_from_main_model"
+    else:
+        stream_tasks = await extract_schedule_tasks(
+            schedule_hints,
+            llm=state.schedule_extractor_llm,
+            settings=state.settings,
+            now=local_now(state.settings.app_timezone),
+            trace_id=trace_id,
+            metrics=state.metrics,
         )
-        if hints:
-            stream_tasks = await extract_schedule_tasks(
-                hints,
-                llm=state.schedule_extractor_llm,
-                settings=state.settings,
-                now=local_now(state.settings.app_timezone),
-                trace_id=trace_id,
-                metrics=state.metrics,
-            )
-            if stream_tasks:
-                final_extra["schedule_tasks"] = [t.model_dump() for t in stream_tasks]
+        if stream_tasks:
+            final_extra["schedule_tasks"] = [t.model_dump() for t in stream_tasks]
+        else:
+            schedule_reason = "extractor_returned_empty"
+    _record_schedule_debug(
+        state,
+        trace_id=trace_id,
+        enabled=state.settings.schedule_extract_enabled,
+        stream=True,
+        reason=schedule_reason,
+        hints=schedule_hints,
+        task_count=len(final_extra.get("schedule_tasks") or []),
+        latency_ms=(time.perf_counter() - schedule_start) * 1000,
+    )
 
     if await _turn_was_cancelled(state, turn_snapshot):
         yield _format_sse(_chunk_dict({}, finish="cancelled"))
@@ -1153,6 +1191,37 @@ async def _stream_cancelled(
 
 def _format_sse(payload: dict[str, Any]) -> bytes:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode()
+
+
+def _record_schedule_debug(
+    state: AppState,
+    *,
+    trace_id: str,
+    enabled: bool,
+    stream: bool,
+    reason: str,
+    hints: list[str],
+    task_count: int,
+    latency_ms: float,
+) -> None:
+    hint_preview = "|".join(_compact_debug_text(h, 80) for h in hints[:3])
+    state.metrics.record(
+        "schedule.extract",
+        latency_ms,
+        detail=(
+            f"trace={trace_id},enabled={enabled},stream={stream},"
+            f"reason={reason},hints={len(hints)},tasks={task_count},"
+            f"model={state.settings.resolved_schedule_model or ''},"
+            f"hint_preview={hint_preview}"
+        ),
+    )
+
+
+def _compact_debug_text(text: str, limit: int) -> str:
+    compact = " ".join(text.split()).replace(",", "，")
+    if len(compact) <= limit:
+        return compact
+    return compact[: limit - 1] + "…"
 
 
 def _record_web_search_skipped(

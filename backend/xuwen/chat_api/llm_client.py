@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from collections.abc import AsyncGenerator, AsyncIterator
 from dataclasses import dataclass
@@ -29,6 +30,10 @@ from xuwen.core.errors import LLMError
 from xuwen.core.metrics import MetricsRecorder
 from xuwen.ingestion.embedder import _resolve_endpoint
 
+_SCHEDULE_HINT_RE = re.compile(
+    r"<schedule-hint>\s*(.*?)\s*</schedule-hint>",
+    re.DOTALL | re.IGNORECASE,
+)
 
 class _RetryableLLMError(LLMError):
     """仅供 tenacity 内部触发重试。"""
@@ -511,6 +516,7 @@ def _request_summary(payload: dict[str, Any]) -> dict[str, Any]:
     messages = payload.get("messages")
     message_summaries: list[dict[str, Any]] = []
     role_counts: dict[str, int] = {}
+    all_texts: list[str] = []
     total_chars = 0
     image_count = 0
     if isinstance(messages, list):
@@ -520,6 +526,7 @@ def _request_summary(payload: dict[str, Any]) -> dict[str, Any]:
             role = str(msg.get("role") or "")
             role_counts[role] = role_counts.get(role, 0) + 1
             text, images = _message_text_and_images(msg.get("content"))
+            all_texts.append(text)
             total_chars += len(text)
             image_count += images
             message_summaries.append(
@@ -530,6 +537,7 @@ def _request_summary(payload: dict[str, Any]) -> dict[str, Any]:
                     "preview": _short_text(text, 300),
                 }
             )
+    full_text = "\n".join(all_texts)
     return {
         "model": payload.get("model"),
         "stream": payload.get("stream"),
@@ -542,6 +550,7 @@ def _request_summary(payload: dict[str, Any]) -> dict[str, Any]:
         "role_counts": role_counts,
         "total_text_chars": total_chars,
         "image_count": image_count,
+        "schedule": _schedule_request_debug(full_text),
         "messages": message_summaries,
     }
 
@@ -567,6 +576,7 @@ def _response_summary(text: str) -> dict[str, Any]:
     return {
         "raw_chars": len(text),
         "raw_preview": _short_text(text, 240),
+        "schedule": _schedule_response_debug(text),
     }
 
 
@@ -583,6 +593,7 @@ def _content_response_summary(text: str, data: dict[str, Any]) -> dict[str, Any]
         {
             "content_chars": len(text),
             "content_preview": _short_text(text, 240),
+            "schedule": _schedule_response_debug(text),
         }
     )
     usage = data.get("usage")
@@ -593,6 +604,40 @@ def _content_response_summary(text: str, data: dict[str, Any]) -> dict[str, Any]
             if key in usage
         }
     return summary
+
+
+def _schedule_request_debug(text: str) -> dict[str, Any]:
+    """调试定时任务链路：主模型请求是否注入了内部协议指令。"""
+    lower = text.lower()
+    return {
+        "prompt_has_schedule_instruction": "【定时任务" in text
+        or "<schedule-hint>" in lower,
+        "schedule_hint_tag_mentions": lower.count("<schedule-hint>"),
+    }
+
+
+def _schedule_response_debug(text: str) -> dict[str, Any]:
+    """调试定时任务链路：主模型 raw 回复是否吐出了 hint。"""
+    hints = _extract_schedule_hints_for_debug(text)
+    lower = text.lower()
+    return {
+        "hint_count": len(hints),
+        "hint_previews": [_short_text(h, 120) for h in hints],
+        "has_open_tag": "<schedule-hint>" in lower,
+        "has_close_tag": "</schedule-hint>" in lower,
+    }
+
+
+def _extract_schedule_hints_for_debug(text: str) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for raw in _SCHEDULE_HINT_RE.findall(text):
+        hint = " ".join(str(raw).split())
+        if not hint or hint in seen:
+            continue
+        seen.add(hint)
+        result.append(hint)
+    return result
 
 
 def _short_text(text: str, limit: int) -> str:
