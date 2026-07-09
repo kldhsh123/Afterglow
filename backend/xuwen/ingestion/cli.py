@@ -416,6 +416,7 @@ async def _run_import_images(args: argparse.Namespace) -> int:
     tbl.add_row("唯一图片", str(report.unique_images))
     tbl.add_row("生成/复用摘要", str(report.described_images))
     tbl.add_row("复用重复 sha", str(report.reused_descriptions))
+    tbl.add_row("识别失败跳过", str(report.skipped_failed_descriptions))
     tbl.add_row("已存在关联", str(report.skipped_existing_rows))
     tbl.add_row("写入图片索引", str(report.upserted_rows))
     console.print(tbl)

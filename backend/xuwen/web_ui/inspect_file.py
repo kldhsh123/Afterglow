@@ -64,10 +64,12 @@ def inspect_chat_file(path: Path) -> InspectResult:
 
 def _looks_like_afterglow(data: dict[str, Any]) -> bool:
     afterglow = data.get("afterglow")
+    fmt = str(afterglow.get("format") or "").lower() if isinstance(afterglow, dict) else ""
+    version = str(afterglow.get("version") or "") if isinstance(afterglow, dict) else ""
     return (
         isinstance(afterglow, dict)
-        and afterglow.get("format") == "afterglow-chat"
-        and str(afterglow.get("version") or "").startswith("1.")
+        and fmt == "afterglow-chat"
+        and version.startswith("1.")
     )
 
 
