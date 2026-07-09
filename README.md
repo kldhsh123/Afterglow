@@ -409,7 +409,7 @@ uv run python -m xuwen.ingestion.cli import qq_导出.json 小号_导出.json
 ```
 
 ```bash
-uv run python -m xuwen.ingestion.cli import-images 路径/到/导出目录 --plugin afterglow_v1
+uv run python -m xuwen.ingestion.cli import-images 路径/到/导出目录
 ```
 
 图片导入会按 sha256 去重保存原图，调用视觉模型生成摘要并写入 `history_images`。后续召回使用
