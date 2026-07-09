@@ -34,6 +34,7 @@ _FAILED_DESCRIPTION_PREFIXES = (
     "[图片：识别超时",
     "[图片：无描述",
 )
+_EXISTING_SHA_REUSE_LIMIT = 5000
 
 
 @dataclass(slots=True, frozen=True)
@@ -146,11 +147,10 @@ async def import_history_images(
 
     try:
         chunk_ids = [f"image-{r.message.message_id}-{r.sha[:16]}" for r in resolved]
-        existing = await store.existing_ids(TABLE_HISTORY_IMAGES, chunk_ids)
+        existing_rows = await store.list_history_images_by_ids(chunk_ids)
         reusable_existing = await _reusable_existing_image_ids(
             store,
-            zip(resolved, chunk_ids, strict=False),
-            existing,
+            existing_rows,
         )
         pending = [
             r
@@ -360,7 +360,10 @@ async def _describe_unique_images(
         unique.setdefault(ref.sha, ref)
 
     for sha, ref in unique.items():
-        existing_rows = await store.list_history_images_by_sha(sha, limit=1)
+        existing_rows = await store.list_history_images_by_sha(
+            sha,
+            limit=_EXISTING_SHA_REUSE_LIMIT,
+        )
         existing = next(
             (
                 description
@@ -381,8 +384,7 @@ async def _describe_unique_images(
 
 async def _reusable_existing_image_ids(
     store: MemoryStore,
-    candidates: Iterable[tuple[_ResolvedImageRef, str]],
-    existing_ids: set[str],
+    existing_rows: Iterable[dict[str, Any]],
 ) -> set[str]:
     """返回可直接跳过的已有图片行。
 
@@ -390,17 +392,17 @@ async def _reusable_existing_image_ids(
     后续成功时用真实摘要覆盖旧行。
     """
     reusable: set[str] = set()
-    for ref, chunk_id in candidates:
-        if chunk_id not in existing_ids:
-            continue
-        rows = await store.list_history_images_by_sha(ref.sha, limit=500)
-        row = next((r for r in rows if str(r.get("id") or "") == chunk_id), None)
-        if row is None:
+    failed_ids: list[str] = []
+    for row in existing_rows:
+        chunk_id = str(row.get("id") or "")
+        if not chunk_id or bool(row.get("deleted")):
             continue
         if _usable_image_description(str(row.get("description") or "")):
             reusable.add(chunk_id)
         else:
-            await store.soft_delete(TABLE_HISTORY_IMAGES, chunk_id)
+            failed_ids.append(chunk_id)
+    if failed_ids:
+        await store.soft_delete_ids(TABLE_HISTORY_IMAGES, failed_ids)
     return reusable
 
 
