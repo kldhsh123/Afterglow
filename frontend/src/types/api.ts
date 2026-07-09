@@ -62,15 +62,16 @@ export interface ChatMessage {
 
 export interface MemorySource {
   chunk_id: string
-  kind: 'friend' | 'window' | 'live' | 'response_pair'
+  kind: 'friend' | 'window' | 'live' | 'response_pair' | 'history_image'
   text: string
   score: number
   rank: number
   timestamp_ms: number
   session_id?: string
   sender_name?: string
-  source?: 'human_original' | 'user_new' | 'ai_generated' | 'history' | 'live'
+  source?: 'human_original' | 'human_original_image' | 'user_new' | 'ai_generated' | 'history' | 'live'
   warmth?: number
+  image_sha?: string
 }
 
 export interface MemoryStats {
@@ -88,6 +89,7 @@ export interface MemorySearchResponse {
   response_pairs?: MemorySource[]
   friend_examples: MemorySource[]
   dialogue_windows: MemorySource[]
+  history_images?: MemorySource[]
   recent_live?: MemorySource[]
   trace_id?: string
 }

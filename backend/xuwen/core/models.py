@@ -116,7 +116,14 @@ class FriendMessageChunk:
     dialogue_snippet: str       # 前文 + 当前发言（用于 embedding）
     context_before: str         # 前 N 条上下文（仅元数据）
     context_after: str          # 后 M 条上下文（仅元数据）
-    source: Literal["history", "live", "human_original", "user_new", "ai_generated"] = "history"
+    source: Literal[
+        "history",
+        "live",
+        "human_original",
+        "human_original_image",
+        "user_new",
+        "ai_generated",
+    ] = "history"
     trust_level: float = 1.0    # 0~1，越高越信任
     warmth: float = 0.0         # 暖度评分，影响检索 boost
     tags: list[str] = field(default_factory=list)
@@ -136,7 +143,14 @@ class DialogueWindowChunk:
     end_time_ms: int
     message_count: int
     has_media: bool
-    source: Literal["history", "live", "human_original", "user_new", "ai_generated"] = "history"
+    source: Literal[
+        "history",
+        "live",
+        "human_original",
+        "human_original_image",
+        "user_new",
+        "ai_generated",
+    ] = "history"
     trust_level: float = 1.0
     tags: list[str] = field(default_factory=list)
 
@@ -159,9 +173,46 @@ class ResponsePairChunk:
     end_seq: int
     start_time_ms: int
     end_time_ms: int
-    source: Literal["history", "live", "human_original", "user_new", "ai_generated"] = "history"
+    source: Literal[
+        "history",
+        "live",
+        "human_original",
+        "human_original_image",
+        "user_new",
+        "ai_generated",
+    ] = "history"
     trust_level: float = 1.0
     warmth: float = 0.0
+    tags: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class HistoryImageChunk:
+    """索引 D：历史聊天图片的离线视觉摘要。
+
+    这是 VLM 在导入期生成的图片内容描述，不是真人原话，因此不参与 persona /
+    风格蒸馏。召回时作为历史上下文事实使用，并携带 image_sha 供前端溯源展示。
+    """
+
+    chunk_id: str
+    message_id: str
+    session_id: str
+    seq: int
+    timestamp_ms: int
+    sender_uid: str
+    sender_name: str
+    sender_role: SenderRole
+    image_sha: str
+    image_name: str
+    mime: str
+    size: int
+    description: str
+    context_before: str = ""
+    context_after: str = ""
+    vision_model: str = ""
+    vision_prompt_version: str = "v1"
+    source: Literal["human_original_image"] = "human_original_image"
+    trust_level: float = 0.8
     tags: list[str] = field(default_factory=list)
 
 
@@ -204,7 +255,7 @@ class ScoredChunk:
     """
 
     chunk_id: str
-    kind: Literal["friend", "window", "live", "response_pair"]
+    kind: Literal["friend", "window", "live", "response_pair", "history_image"]
     text: str
     score: float
     rank: int
@@ -212,7 +263,14 @@ class ScoredChunk:
     session_id: str = ""
     sender_name: str = ""
     sender_role: SenderRole = "other"
-    source: Literal["history", "live", "human_original", "user_new", "ai_generated"] = "history"
+    source: Literal[
+        "history",
+        "live",
+        "human_original",
+        "human_original_image",
+        "user_new",
+        "ai_generated",
+    ] = "history"
     warmth: float = 0.0
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -233,8 +291,9 @@ class RetrievalQuery:
 class RetrievalResult:
     """retriever 返回的融合结果。"""
 
-    friend_examples: list[ScoredChunk]
-    dialogue_windows: list[ScoredChunk]
-    recent_live: list[ScoredChunk]
-    response_pairs: list[ScoredChunk]
-    fused: list[ScoredChunk]
+    friend_examples: list[ScoredChunk] = field(default_factory=list)
+    dialogue_windows: list[ScoredChunk] = field(default_factory=list)
+    history_images: list[ScoredChunk] = field(default_factory=list)
+    recent_live: list[ScoredChunk] = field(default_factory=list)
+    response_pairs: list[ScoredChunk] = field(default_factory=list)
+    fused: list[ScoredChunk] = field(default_factory=list)

@@ -94,11 +94,22 @@ async function attachMemorySources(assistantId: string, query: string) {
   if (!query.trim()) return
   try {
     const result = await searchMemory(query, 6, chat.conversationId)
-    const sources = result.fused.length > 0 ? result.fused : result.friend_examples
+    const sources = selectMemorySources(result)
     if (sources.length > 0) chat.attachMemorySources(assistantId, sources)
   } catch {
     /* 静默失败 —— 没有溯源也不影响聊天 */
   }
+}
+
+function selectMemorySources(result: Awaited<ReturnType<typeof searchMemory>>): NonNullable<ChatMessage['memorySources']> {
+  const selected = [...(result.fused.length > 0 ? result.fused : result.friend_examples)]
+  const seen = new Set(selected.map((s) => s.chunk_id))
+  for (const item of result.history_images || []) {
+    if (seen.has(item.chunk_id)) continue
+    selected.push(item)
+    seen.add(item.chunk_id)
+  }
+  return selected.slice(0, 8)
 }
 
 async function stopActiveGeneration(options: { discardBackend?: boolean } = {}) {

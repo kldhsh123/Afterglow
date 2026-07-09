@@ -285,6 +285,7 @@ class Settings(BaseSettings):
     response_pair_top_k: int = 24
     friend_top_k: int = 32
     window_top_k: int = 16
+    history_image_top_k: int = 8
     live_top_k: int = 12
     final_context_k: int = 12
     rrf_k: int = 60
@@ -301,6 +302,7 @@ class Settings(BaseSettings):
     warmth_boost: float = 0.12
     live_source_weight: float = 1.08
     history_source_weight: float = 1.0
+    history_image_source_weight: float = 0.75
     ai_generated_source_weight: float = 0.25
     # false：ai_generated 只在同一 conversation_id 内参与语义检索；
     # true：允许 AI 生成回复跨会话长期累积并参与 live 语义检索。
@@ -434,8 +436,11 @@ class Settings(BaseSettings):
 
     # ----- 调试端点 -----
     # /debug/* 是否开放（暴露 LanceDB 统计、调用延迟分布、配置快照）。
-    # 默认 true，本地工具开调试很方便。生产环境/对外暴露时可关闭。
-    debug_endpoints_enabled: bool = True
+    # 默认关闭；需要诊断时显式开启，避免默认暴露运行时统计和模型链路信息。
+    debug_endpoints_enabled: bool = False
+    # 是否在模型请求链路调试记录里保存完整 prompt/response 文本。
+    # 默认关闭：只保存 chars/preview，避免内存占用和聊天原文暴露。
+    debug_model_full_payloads_enabled: bool = False
     # 每类调用的环形缓冲容量
     metrics_capacity: int = 100
 

@@ -29,6 +29,7 @@ async def stats(state: AppState = Depends(get_state)) -> MemoryStatsResponse:
     return MemoryStatsResponse(
         friend_messages=s.friend_messages,
         dialogue_windows=s.dialogue_windows,
+        history_images=s.history_images,
         response_pairs=s.response_pairs,
         live_messages=s.live_messages,
         relationship_memories=s.relationship_memories,
@@ -90,6 +91,7 @@ async def search(
         response_pairs=[to_search_hit(c) for c in result.response_pairs],
         friend_examples=[to_search_hit(c) for c in result.friend_examples],
         dialogue_windows=[to_search_hit(c) for c in result.dialogue_windows],
+        history_images=[to_search_hit(c) for c in result.history_images],
         recent_live=[to_search_hit(c) for c in result.recent_live],
         trace_id=trace_id,
     )
@@ -101,6 +103,7 @@ def _empty_search_response(trace_id: str = "") -> MemorySearchResponse:
         response_pairs=[],
         friend_examples=[],
         dialogue_windows=[],
+        history_images=[],
         recent_live=[],
         trace_id=trace_id,
     )
