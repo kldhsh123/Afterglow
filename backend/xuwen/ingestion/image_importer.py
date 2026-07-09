@@ -14,7 +14,7 @@ import hashlib
 import mimetypes
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from xuwen.chat_api.vision_client import VisionClient
 from xuwen.config import Settings
@@ -29,6 +29,11 @@ from xuwen.memory.store import MemoryStore
 
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
 _PROMPT_VERSION = "v1"
+_FAILED_DESCRIPTION_PREFIXES = (
+    "[图片：识别失败",
+    "[图片：识别超时",
+    "[图片：无描述",
+)
 
 
 @dataclass(slots=True, frozen=True)
@@ -39,6 +44,7 @@ class ImageImportReport:
     unique_images: int
     described_images: int
     reused_descriptions: int
+    skipped_failed_descriptions: int
     skipped_existing_rows: int
     upserted_rows: int
 
@@ -141,7 +147,16 @@ async def import_history_images(
     try:
         chunk_ids = [f"image-{r.message.message_id}-{r.sha[:16]}" for r in resolved]
         existing = await store.existing_ids(TABLE_HISTORY_IMAGES, chunk_ids)
-        pending = [r for r, cid in zip(resolved, chunk_ids, strict=False) if cid not in existing]
+        reusable_existing = await _reusable_existing_image_ids(
+            store,
+            zip(resolved, chunk_ids, strict=False),
+            existing,
+        )
+        pending = [
+            r
+            for r, cid in zip(resolved, chunk_ids, strict=False)
+            if cid not in reusable_existing
+        ]
 
         descriptions = await _describe_unique_images(
             pending,
@@ -175,7 +190,8 @@ async def import_history_images(
         unique_images=len(unique_shas),
         described_images=len({r.sha for r in pending if r.sha in descriptions}),
         reused_descriptions=max(0, reused),
-        skipped_existing_rows=len(existing),
+        skipped_failed_descriptions=sum(1 for r in pending if r.sha not in descriptions),
+        skipped_existing_rows=len(reusable_existing),
         upserted_rows=upserted,
     )
 
@@ -199,7 +215,9 @@ def _extract_image_refs(payload: dict[str, Any]) -> list[_ImageRef]:
 
 def _looks_like_afterglow(payload: dict[str, Any]) -> bool:
     afterglow = payload.get("afterglow")
-    return isinstance(afterglow, dict) and afterglow.get("format") == "afterglow-chat"
+    fmt = str(afterglow.get("format") or "").lower() if isinstance(afterglow, dict) else ""
+    version = str(afterglow.get("version") or "") if isinstance(afterglow, dict) else ""
+    return isinstance(afterglow, dict) and fmt == "afterglow-chat" and version.startswith("1.")
 
 
 def _looks_like_qq(payload: dict[str, Any]) -> bool:
@@ -344,15 +362,55 @@ async def _describe_unique_images(
     for sha, ref in unique.items():
         existing_rows = await store.list_history_images_by_sha(sha, limit=1)
         existing = next(
-            (str(r.get("description") or "") for r in existing_rows if r.get("description")),
+            (
+                description
+                for r in existing_rows
+                if (description := _usable_image_description(str(r.get("description") or "")))
+            ),
             "",
         )
         if existing:
             descriptions[sha] = existing
             continue
         data_url = _data_url_for_file(ref.path, ref.mime, settings)
-        descriptions[sha] = (await vision_client.describe_images([data_url]))[0]
+        description = _usable_image_description((await vision_client.describe_images([data_url]))[0])
+        if description:
+            descriptions[sha] = description
     return descriptions
+
+
+async def _reusable_existing_image_ids(
+    store: MemoryStore,
+    candidates: Iterable[tuple[_ResolvedImageRef, str]],
+    existing_ids: set[str],
+) -> set[str]:
+    """返回可直接跳过的已有图片行。
+
+    失败占位不能阻止重跑：如果旧导入缓存了失败标记，就让该图片继续 pending，
+    后续成功时用真实摘要覆盖旧行。
+    """
+    reusable: set[str] = set()
+    for ref, chunk_id in candidates:
+        if chunk_id not in existing_ids:
+            continue
+        rows = await store.list_history_images_by_sha(ref.sha, limit=500)
+        row = next((r for r in rows if str(r.get("id") or "") == chunk_id), None)
+        if row is None:
+            continue
+        if _usable_image_description(str(row.get("description") or "")):
+            reusable.add(chunk_id)
+        else:
+            await store.soft_delete(TABLE_HISTORY_IMAGES, chunk_id)
+    return reusable
+
+
+def _usable_image_description(description: str) -> str:
+    desc = description.strip()
+    if not desc:
+        return ""
+    if any(desc.startswith(prefix) for prefix in _FAILED_DESCRIPTION_PREFIXES):
+        return ""
+    return desc
 
 
 def _data_url_for_file(path: Path, mime: str, settings: Settings) -> str:

@@ -140,8 +140,8 @@ uv run python -m xuwen.ingestion.cli import 路径/到/你的_导出.json
 # uv run python -m xuwen.ingestion.cli import qq_导出.json wechat_导出.json 小号_导出.json
 # 自动识别格式：Afterglow v1 / QQChatExporter V5 / WeFlow 微信。
 # 也可显式指定：--plugin afterglow_v1 / qqexporter_v5 / wechat_weflow。
-# QQChatExporter 普通导出建议在高级选项勾选"仅保留文件元数据，不下载文件"。
-# 默认建议只导入文本；图片可在文本导入完成后用 import-images 手动离线处理。
+# 默认建议先做轻量文本导入；QQChatExporter 可勾选"仅保留文件元数据，不下载文件"。
+# 需要历史图片检索时，必须另外保留实际包含 resources/images/ 原图的导出目录。
 # 多文件场景下：
 #   - circadian_profile.json 仅基于最后一个文件生成（把最近 / 最具代表性的对话放最后）
 #   - scripts/analyze_persona.py 当前也只接受单个 JSON，挑代表性最强的一份单独跑
@@ -198,12 +198,12 @@ Afterglow 用 `SELF_UID` / `FRIEND_UID` 在导入时区分"哪条消息是你说
 > CLI 会把逗号分隔的 UID 全部视为同一个人。
 > （历史上还有一对兼容字段 `SELF_UIDS` / `FRIEND_UIDS`，效果完全等价，新配置无需用到。）
 
-> **QQ 默认建议：文本 + 文件元数据**。普通文本导入不读取图片 / 语音 / 视频 / 文件；
+> **QQ 默认建议：轻量文本导入**。普通文本导入不读取图片 / 语音 / 视频 / 文件；
 > QQChatExporter 请在高级选项勾选"仅保留文件元数据，不下载文件"，让 JSON 保留图片文件名引用但
 > 不下载附件。这样 JSON 更小、导入更快，也更不容易意外泄漏附件内容。
 
-> **历史图片是可选后处理**：如果你确实需要导入历史图片，请保留导出目录的 `resources/images/`
-> 并在文本导入完成后手动运行 `import-images`。图片内容会在导入期由 `VISION_MODEL` 总结为文字摘要，
+> **历史图片是可选后处理**：如果你确实需要导入历史图片，请另外保留实际包含 `resources/images/`
+> 原图的导出目录，并在文本导入完成后手动运行 `import-images`。图片内容会在导入期由 `VISION_MODEL` 总结为文字摘要，
 > 后续聊天召回只使用这个摘要和 `image_sha`，不会每次聊天都把历史原图重新发给模型。
 
 ### QQ（QQChatExporter V5）

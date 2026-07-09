@@ -240,9 +240,9 @@ uv run python -m xuwen.ingestion.cli import-images export-dir --plugin afterglow
 image_sha”写入 `history_images` 表。召回时默认使用已生成的图片摘要，不会在聊天请求里重复把历史
 原图发给主模型或 VLM。
 
-QQChatExporter 普通文本导入建议在高级选项勾选“仅保留文件元数据，不下载文件”；这会保留图片
-文件名引用但不会生成 `resources/images` 原图目录。只有需要运行 `import-images` 时，提交目录才
-必须实际包含 `resources/images` 下的图片文件。
+QQChatExporter 普通文本导入建议在高级选项勾选“仅保留文件元数据，不下载文件”；这只适合轻量
+文本入库，会保留图片文件名引用但不会生成 `resources/images` 原图目录。只有需要运行
+`import-images` 时，提交目录才必须实际包含 `resources/images` 下的图片文件。
 
 ## 测试与质量检查
 

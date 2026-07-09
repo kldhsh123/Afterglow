@@ -136,7 +136,8 @@ Issue 模板参考自一个我已经忘记来源的开源项目；这个模板�
 - **`.env` 已在 `.gitignore`**：切勿把含有 API key 的配置文件提交到 git。
 - **后端 API 默认需要鉴权**：除 `/healthz` 外，所有接口默认要求 `XUWEN_API_KEY`，避免模型额度、记忆数据和调试信息被滥用。
 - **导出 JSON 风险提醒**：[QQChatExporter](https://github.com/shuakami/qq-chat-exporter) 等导出工具产出的 JSON 含有完整聊天明文（含 uid 等账号信息），分享给他人前请自行确认。
-- **默认导出文本 + 文件元数据**：普通聊天导入只消费文本语料。QQChatExporter 请在高级选项勾选"仅保留文件元数据，不下载文件"，让 JSON 保留图片文件名引用但不下载附件。确需历史图片时，可在文本导入完成后用 `import-images` 对实际包含图片的 `resources/images` 做离线视觉摘要导入。
+- **默认只做轻量文本导入**：普通聊天导入只消费文本语料。QQChatExporter 可在高级选项勾选"仅保留文件元数据，不下载文件"，让 JSON 保留图片文件名引用但不下载附件，JSON 更小、导入更快。
+- **历史图片需要单独保留原图**：只有确需图片检索时，才导出或保留实际包含 `resources/images/` 的目录，并在文本导入完成后用 `import-images` 做离线视觉摘要导入。
 
 ---
 
@@ -389,7 +390,8 @@ uv run python -m xuwen.ingestion.cli import qq_导出.json 小号_导出.json
 ```
 
 - CLI 自动识别 Afterglow v1 / QQChatExporter / WeFlow 微信 JSON 格式
-- QQChatExporter 普通导出建议在高级选项勾选"仅保留文件元数据，不下载文件"
+- 默认只做轻量文本导入时，QQChatExporter 建议在高级选项勾选"仅保留文件元数据，不下载文件"
+- 需要历史图片检索时，必须另外保留实际包含 `resources/images/` 原图的导出目录
 - 多账号场景：在 `.env` 用 `SELF_UID=u_qq,u_qq_alt` 和 `FRIEND_UID=u_qq_friend,u_qq_friend_alt`（**逗号分隔**）把全部 UID 列出来
 - 多文件按命令行顺序处理，共享 LanceDB 连接与 Embedding 客户端
 - 开启 `LABELING_ENABLED=true` 时会接着自动打标
