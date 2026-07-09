@@ -26,7 +26,7 @@ class IdentityCandidate:
 
 @dataclass
 class InspectResult:
-    format: Literal["qqexporter_v5", "wechat_weflow", "unknown"]
+    format: Literal["afterglow_v1", "qqexporter_v5", "wechat_weflow", "unknown"]
     candidates: list[IdentityCandidate]
     total_messages: int
     error: str = ""
@@ -35,6 +35,7 @@ class InspectResult:
 def inspect_chat_file(path: Path) -> InspectResult:
     """读 JSON 顶部，识别双方候选身份。
 
+    Afterglow v1：直接读 participants。
     QQ：直接读 chatInfo.{selfUid,selfName}；再扫前若干条 messages 找一个非 self 的 sender 作 friend。
     微信：读 senders 数组；用首条 isSend=1 的 senderID 反查 self。
     """
@@ -44,6 +45,8 @@ def inspect_chat_file(path: Path) -> InspectResult:
     except Exception as e:
         return InspectResult(format="unknown", candidates=[], total_messages=0, error=str(e))
 
+    if _looks_like_afterglow(data):
+        return _inspect_afterglow(data)
     if _looks_like_qq(data):
         return _inspect_qq(data)
     if _looks_like_wechat(data):
@@ -52,7 +55,63 @@ def inspect_chat_file(path: Path) -> InspectResult:
         format="unknown",
         candidates=[],
         total_messages=len(data.get("messages") or []),
-        error="无法识别格式。请确认是 QQChatExporter V5 或微信 WeFlow 导出的 JSON。",
+        error="无法识别格式。请确认是 Afterglow v1、QQChatExporter V5 或微信 WeFlow 导出的 JSON。",
+    )
+
+
+# ---------- Afterglow v1 ----------
+
+
+def _looks_like_afterglow(data: dict[str, Any]) -> bool:
+    afterglow = data.get("afterglow")
+    fmt = str(afterglow.get("format") or "").lower() if isinstance(afterglow, dict) else ""
+    version = str(afterglow.get("version") or "") if isinstance(afterglow, dict) else ""
+    return (
+        isinstance(afterglow, dict)
+        and fmt == "afterglow-chat"
+        and version.startswith("1.")
+    )
+
+
+def _inspect_afterglow(data: dict[str, Any]) -> InspectResult:
+    conversation = data.get("conversation")
+    if isinstance(conversation, dict):
+        conv_type = str(conversation.get("type") or "private").lower()
+        if conv_type != "private":
+            return InspectResult(
+                format="unknown",
+                candidates=[],
+                total_messages=len(data.get("messages") or []),
+                error="Afterglow v1 当前只支持 private 私聊导入。",
+            )
+
+    candidates: list[IdentityCandidate] = []
+    participants = data.get("participants")
+    if isinstance(participants, list):
+        for p in participants:
+            if not isinstance(p, dict):
+                continue
+            uid = str(p.get("uid") or "")
+            if not uid:
+                continue
+            role_raw = str(p.get("role") or "").lower()
+            if role_raw in {"self", "friend"}:
+                role: Literal["self", "friend", "unknown"] = role_raw  # type: ignore[assignment]
+            else:
+                role = "unknown"
+            candidates.append(
+                IdentityCandidate(
+                    name=str(p.get("name") or uid),
+                    uid=uid,
+                    role_hint=role,
+                )
+            )
+
+    candidates.sort(key=lambda c: 0 if c.role_hint == "self" else 1)
+    return InspectResult(
+        format="afterglow_v1",
+        candidates=candidates,
+        total_messages=len(data.get("messages") or []),
     )
 
 

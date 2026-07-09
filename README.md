@@ -136,7 +136,8 @@ Issue 模板参考自一个我已经忘记来源的开源项目；这个模板�
 - **`.env` 已在 `.gitignore`**：切勿把含有 API key 的配置文件提交到 git。
 - **后端 API 默认需要鉴权**：除 `/healthz` 外，所有接口默认要求 `XUWEN_API_KEY`，避免模型额度、记忆数据和调试信息被滥用。
 - **导出 JSON 风险提醒**：[QQChatExporter](https://github.com/shuakami/qq-chat-exporter) 等导出工具产出的 JSON 含有完整聊天明文（含 uid 等账号信息），分享给他人前请自行确认。
-- **导出时只勾选纯文本**：Afterglow 只消费文本语料，导出工具一律**关闭图片 / 语音 / 视频 / 文件**等附件选项。这样导出的 JSON 体积小、不含媒体二进制，导入也更快。
+- **默认只做轻量文本导入**：普通聊天导入只消费文本语料。QQChatExporter 可在高级选项勾选"仅保留文件元数据，不下载文件"，让 JSON 保留图片文件名引用但不下载附件，JSON 更小、导入更快。
+- **历史图片需要单独保留原图**：只有确需图片检索时，才导出或保留实际包含 `resources/images/` 的目录，并在文本导入完成后用 `import-images` 做离线视觉摘要导入。
 
 ---
 
@@ -388,11 +389,31 @@ uv run python -m xuwen.ingestion.cli import 路径/到/你的聊天记录.json
 uv run python -m xuwen.ingestion.cli import qq_导出.json 小号_导出.json
 ```
 
-- CLI 自动识别 QQChatExporter JSON 格式
+- CLI 自动识别 Afterglow v1 / QQChatExporter / WeFlow 微信 JSON 格式
+- 默认只做轻量文本导入时，QQChatExporter 建议在高级选项勾选"仅保留文件元数据，不下载文件"
+- 需要历史图片检索时，必须另外保留实际包含 `resources/images/` 原图的导出目录
 - 多账号场景：在 `.env` 用 `SELF_UID=u_qq,u_qq_alt` 和 `FRIEND_UID=u_qq_friend,u_qq_friend_alt`（**逗号分隔**）把全部 UID 列出来
 - 多文件按命令行顺序处理，共享 LanceDB 连接与 Embedding 客户端
 - 开启 `LABELING_ENABLED=true` 时会接着自动打标
 - 中断 / 限流失败不丢导入数据，之后可续跑：`uv run python -m xuwen.ingestion.cli label`
+
+可选：离线导入历史图片。先完成上面的文本导入，再确认 `.env` 已配置 `VISION_ENABLED=true`
+和 `VISION_API_URL` / `VISION_API_KEY` / `VISION_MODEL`。提交的是导出目录，不是单个 JSON：
+
+```text
+导出目录/
+  chat.json
+  resources/
+    images/
+      xxx.jpg
+```
+
+```bash
+uv run python -m xuwen.ingestion.cli import-images 路径/到/导出目录 --plugin afterglow_v1
+```
+
+图片导入会按 sha256 去重保存原图，调用视觉模型生成摘要并写入 `history_images`。后续召回使用
+已入库的图片摘要和 `image_sha`，不会每次聊天重复把历史原图发给模型。
 
 > **⚠️ 多文件场景的两个局限（重要）**
 >
@@ -516,6 +537,10 @@ docker compose pull && docker compose up -d
 # 导入聊天记录（把待导入 JSON 放到挂载目录下任何子路径）
 docker compose run --rm backend \
   python -m xuwen.ingestion.cli import .imports/qq.json
+
+# 可选：离线导入历史图片（目录内需有一个 JSON 和 resources/images）
+docker compose run --rm backend \
+  python -m xuwen.ingestion.cli import-images .imports/export-dir --plugin afterglow_v1
 
 # 大库建索引
 docker compose run --rm backend python -m xuwen.ingestion.cli index

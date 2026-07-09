@@ -55,6 +55,7 @@ def empty_retrieval_result() -> RetrievalResult:
     return RetrievalResult(
         friend_examples=[],
         dialogue_windows=[],
+        history_images=[],
         recent_live=[],
         response_pairs=[],
         fused=[],
@@ -122,7 +123,12 @@ def render_life_memory_context(
     """
     lines: list[str] = []
     seen: set[str] = set()
-    for chunk in [*retrieved.response_pairs, *retrieved.friend_examples, *retrieved.dialogue_windows]:
+    for chunk in [
+        *retrieved.response_pairs,
+        *retrieved.friend_examples,
+        *retrieved.dialogue_windows,
+        *retrieved.history_images,
+    ]:
         line = _life_memory_line(chunk, settings)
         if not line or line in seen:
             continue

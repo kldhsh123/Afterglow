@@ -27,16 +27,23 @@ from lancedb.table import Table
 
 from xuwen.config import Settings
 from xuwen.core.errors import StoreError
-from xuwen.core.models import DialogueWindowChunk, FriendMessageChunk, ResponsePairChunk
+from xuwen.core.models import (
+    DialogueWindowChunk,
+    FriendMessageChunk,
+    HistoryImageChunk,
+    ResponsePairChunk,
+)
 from xuwen.core.time import now_ms
 from xuwen.memory.schema import (
     TABLE_DIALOGUE_WINDOWS,
     TABLE_FRIEND_MESSAGES,
+    TABLE_HISTORY_IMAGES,
     TABLE_LIVE_MESSAGES,
     TABLE_RELATIONSHIP_MEMORIES,
     TABLE_RESPONSE_PAIRS,
     dialogue_windows_schema,
     friend_messages_schema,
+    history_images_schema,
     live_messages_schema,
     relationship_memories_schema,
     response_pairs_schema,
@@ -53,6 +60,7 @@ _INDEXABLE_VECTOR_TABLES = (
     TABLE_FRIEND_MESSAGES,
     TABLE_DIALOGUE_WINDOWS,
     TABLE_RESPONSE_PAIRS,
+    TABLE_HISTORY_IMAGES,
     TABLE_LIVE_MESSAGES,
 )
 
@@ -64,6 +72,7 @@ class MemoryStats:
     friend_messages: int
     dialogue_windows: int
     response_pairs: int
+    history_images: int
     live_messages: int
     relationship_memories: int = 0
 
@@ -157,6 +166,8 @@ class MemoryStore:
             db.create_table(TABLE_DIALOGUE_WINDOWS, schema=dialogue_windows_schema(dim))
         if TABLE_RESPONSE_PAIRS not in existing:
             db.create_table(TABLE_RESPONSE_PAIRS, schema=response_pairs_schema(dim))
+        if TABLE_HISTORY_IMAGES not in existing:
+            db.create_table(TABLE_HISTORY_IMAGES, schema=history_images_schema(dim))
         if TABLE_LIVE_MESSAGES not in existing:
             db.create_table(TABLE_LIVE_MESSAGES, schema=live_messages_schema(dim))
         if TABLE_RELATIONSHIP_MEMORIES not in existing:
@@ -306,6 +317,20 @@ class MemoryStore:
             response_pairs_schema(self.settings.embedding_dim),
         )
 
+    async def upsert_history_image_chunks(
+        self,
+        chunks: Iterable[HistoryImageChunk],
+        embeddings: dict[str, list[float]],
+    ) -> int:
+        rows = self._build_history_image_rows(chunks, embeddings)
+        if not rows:
+            return 0
+        return await self._upsert_rows(
+            TABLE_HISTORY_IMAGES,
+            rows,
+            history_images_schema(self.settings.embedding_dim),
+        )
+
     async def append_live_messages(self, rows: list[dict[str, Any]]) -> int:
         if not rows:
             return 0
@@ -377,6 +402,34 @@ class MemoryStore:
                     "soft_delete",
                     table,
                     start,
+                    status="error",
+                    detail=type(e).__name__,
+                )
+                raise
+
+    async def soft_delete_ids(self, table: str, ids: Iterable[str]) -> int:
+        """批量软删除多行：把 deleted 置 true。"""
+        ids_list = [str(i) for i in ids if i]
+        if not ids_list:
+            return 0
+        async with self._write_lock:
+            start = time.perf_counter()
+            tbl = self._table(table)
+            total = 0
+            try:
+                for row_id in ids_list:
+                    # LanceDB 当前版本对 update(where="id IN (...)") 可能表现不稳定；
+                    # 这里保留批量接口和单次锁持有，但使用等值更新避免挂起。
+                    tbl.update(where=f"id = {_quote_lance(row_id)}", values={"deleted": True})
+                    total += 1
+                self._record_db_perf("soft_delete_ids", table, start, rows=total)
+                return total
+            except Exception as e:
+                self._record_db_perf(
+                    "soft_delete_ids",
+                    table,
+                    start,
+                    rows=total,
                     status="error",
                     detail=type(e).__name__,
                 )
@@ -566,6 +619,64 @@ class MemoryStore:
             self._vector_search, TABLE_RESPONSE_PAIRS, vector, top_k, extra_filter
         )
 
+    async def search_history_images(
+        self,
+        vector: list[float],
+        top_k: int,
+        *,
+        extra_filter: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return await asyncio.to_thread(
+            self._vector_search, TABLE_HISTORY_IMAGES, vector, top_k, extra_filter
+        )
+
+    async def list_history_images_by_sha(self, sha: str, limit: int = 100) -> list[dict[str, Any]]:
+        """查找已有图片摘要，用于 import-images 重跑时复用 description。"""
+        tbl = self._table(TABLE_HISTORY_IMAGES)
+        safe_sha = _quote_lance(sha)
+        try:
+            query = (
+                tbl.search()
+                .where(f"image_sha = {safe_sha} AND deleted = false")
+                .limit(max(1, limit))
+            )
+            cols = [c for c in self._non_vector_columns(TABLE_HISTORY_IMAGES, tbl) if c != "_distance"]
+            if cols:
+                query = query.select(cols)
+            arrow_tbl = await asyncio.to_thread(query.to_arrow)
+            rows = cast(list[dict[str, Any]], arrow_tbl.to_pylist())
+            return rows
+        except Exception as e:
+            logger.warning("查询 history_images by sha 失败：%s", type(e).__name__)
+            return []
+
+    async def list_history_images_by_ids(self, ids: Iterable[str]) -> list[dict[str, Any]]:
+        """按 chunk id 批量读取已有图片行，用于 import-images 重跑分类。"""
+        ids_list = [str(i) for i in ids if i]
+        if not ids_list:
+            return []
+        tbl = self._table(TABLE_HISTORY_IMAGES)
+        rows: list[dict[str, Any]] = []
+        _IN_BATCH = 500
+        try:
+            cols = [c for c in self._non_vector_columns(TABLE_HISTORY_IMAGES, tbl) if c != "_distance"]
+            for offset in range(0, len(ids_list), _IN_BATCH):
+                slice_ids = ids_list[offset : offset + _IN_BATCH]
+                id_list_sql = ", ".join(_quote_lance(i) for i in slice_ids)
+                query = (
+                    tbl.search()
+                    .where(f"id IN ({id_list_sql})")
+                    .limit(len(slice_ids))
+                )
+                if cols:
+                    query = query.select(cols)
+                arrow_tbl = await asyncio.to_thread(query.to_arrow)
+                rows.extend(cast(list[dict[str, Any]], arrow_tbl.to_pylist()))
+            return rows
+        except Exception as e:
+            logger.warning("批量查询 history_images by ids 失败：%s", type(e).__name__)
+            return []
+
     async def search_relationship_memories(
         self,
         vector: list[float],
@@ -722,6 +833,7 @@ class MemoryStore:
                 friend_messages=self._safe_count(db, TABLE_FRIEND_MESSAGES),
                 dialogue_windows=self._safe_count(db, TABLE_DIALOGUE_WINDOWS),
                 response_pairs=self._safe_count(db, TABLE_RESPONSE_PAIRS),
+                history_images=self._safe_count(db, TABLE_HISTORY_IMAGES),
                 live_messages=self._safe_count(db, TABLE_LIVE_MESSAGES),
                 relationship_memories=self._safe_count(db, TABLE_RELATIONSHIP_MEMORIES),
             )
@@ -733,6 +845,7 @@ class MemoryStore:
                     stats.friend_messages
                     + stats.dialogue_windows
                     + stats.response_pairs
+                    + stats.history_images
                     + stats.live_messages
                     + stats.relationship_memories
                 ),
@@ -1034,6 +1147,47 @@ class MemoryStore:
                     "source": c.source,
                     "trust_level": c.trust_level,
                     "warmth": c.warmth,
+                    "tags": c.tags,
+                    "deleted": False,
+                    "created_at_ms": ts,
+                }
+            )
+        return rows
+
+    def _build_history_image_rows(
+        self,
+        chunks: Iterable[HistoryImageChunk],
+        embeddings: dict[str, list[float]],
+    ) -> list[dict[str, Any]]:
+        ts = now_ms()
+        rows: list[dict[str, Any]] = []
+        for c in chunks:
+            vec = embeddings.get(c.chunk_id)
+            if vec is None:
+                raise StoreError(f"history image {c.chunk_id} 缺少向量")
+            self._check_dim(vec)
+            rows.append(
+                {
+                    "id": c.chunk_id,
+                    "vector": vec,
+                    "description": c.description,
+                    "message_id": c.message_id,
+                    "session_id": c.session_id,
+                    "seq": c.seq,
+                    "timestamp_ms": c.timestamp_ms,
+                    "sender_uid": c.sender_uid,
+                    "sender_name": c.sender_name,
+                    "sender_role": c.sender_role,
+                    "image_sha": c.image_sha,
+                    "image_name": c.image_name,
+                    "mime": c.mime,
+                    "size": c.size,
+                    "context_before": c.context_before,
+                    "context_after": c.context_after,
+                    "vision_model": c.vision_model,
+                    "vision_prompt_version": c.vision_prompt_version,
+                    "source": c.source,
+                    "trust_level": c.trust_level,
                     "tags": c.tags,
                     "deleted": False,
                     "created_at_ms": ts,

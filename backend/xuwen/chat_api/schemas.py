@@ -197,6 +197,7 @@ class ChatCompletionResponse(BaseModel):
 class MemoryStatsResponse(BaseModel):
     friend_messages: int
     dialogue_windows: int
+    history_images: int = 0
     response_pairs: int = 0
     live_messages: int
     relationship_memories: int = 0
@@ -212,7 +213,7 @@ class MemorySearchRequest(BaseModel):
 
 class MemorySearchHit(BaseModel):
     chunk_id: str
-    kind: Literal["friend", "window", "live", "response_pair"]
+    kind: Literal["friend", "window", "live", "response_pair", "history_image"]
     text: str
     score: float
     rank: int
@@ -221,6 +222,7 @@ class MemorySearchHit(BaseModel):
     sender_name: str = ""
     source: MemorySource = "history"
     warmth: float = 0.0
+    image_sha: str = ""
 
 
 class MemorySearchResponse(BaseModel):
@@ -228,6 +230,7 @@ class MemorySearchResponse(BaseModel):
     response_pairs: list[MemorySearchHit] = []
     friend_examples: list[MemorySearchHit]
     dialogue_windows: list[MemorySearchHit]
+    history_images: list[MemorySearchHit] = []
     recent_live: list[MemorySearchHit] = []
     trace_id: str = ""
 
@@ -403,4 +406,5 @@ def to_search_hit(chunk: Any) -> MemorySearchHit:
         sender_name=chunk.sender_name,
         source=chunk.source,
         warmth=float(chunk.warmth),
+        image_sha=str(chunk.metadata.get("image_sha") or ""),
     )
