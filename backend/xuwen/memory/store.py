@@ -416,14 +416,12 @@ class MemoryStore:
             start = time.perf_counter()
             tbl = self._table(table)
             total = 0
-            _IN_BATCH = 500
             try:
-                for offset in range(0, len(ids_list), _IN_BATCH):
-                    slice_ids = ids_list[offset : offset + _IN_BATCH]
-                    id_list_sql = ", ".join(_quote_lance(i) for i in slice_ids)
-                    where = f"id IN ({id_list_sql})"
-                    tbl.update(where=where, values={"deleted": True})
-                    total += len(slice_ids)
+                for row_id in ids_list:
+                    # LanceDB 当前版本对 update(where="id IN (...)") 可能表现不稳定；
+                    # 这里保留批量接口和单次锁持有，但使用等值更新避免挂起。
+                    tbl.update(where=f"id = {_quote_lance(row_id)}", values={"deleted": True})
+                    total += 1
                 self._record_db_perf("soft_delete_ids", table, start, rows=total)
                 return total
             except Exception as e:

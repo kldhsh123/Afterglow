@@ -12,9 +12,10 @@ from __future__ import annotations
 import base64
 import hashlib
 import mimetypes
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from xuwen.chat_api.vision_client import VisionClient
 from xuwen.config import Settings
@@ -251,12 +252,12 @@ def _extract_qq_refs(payload: dict[str, Any]) -> list[_ImageRef]:
         candidates: list[str] = []
         for resource in content.get("resources") or []:
             if isinstance(resource, dict) and str(resource.get("type") or "").lower() == "image":
-                candidates.append(_first_resource_name(resource))
+                candidates.append(_local_resource_name(resource))
         for element in content.get("elements") or []:
             if not isinstance(element, dict) or str(element.get("type") or "").lower() != "image":
                 continue
             data = element.get("data") if isinstance(element.get("data"), dict) else {}
-            candidates.append(_first_resource_name(data))
+            candidates.append(_local_resource_name(data))
         for value in candidates:
             name = _safe_name(value)
             if message_id and name:
@@ -273,8 +274,8 @@ def _extract_qq_refs(payload: dict[str, Any]) -> list[_ImageRef]:
     return out
 
 
-def _first_resource_name(raw: dict[str, Any]) -> str:
-    for key in ("filename", "url", "localPath"):
+def _local_resource_name(raw: dict[str, Any]) -> str:
+    for key in ("filename", "localPath"):
         value = str(raw.get(key) or "")
         if value:
             return value
