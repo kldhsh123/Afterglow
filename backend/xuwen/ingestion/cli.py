@@ -298,19 +298,7 @@ async def _run_import(args: argparse.Namespace) -> int:
             "建议把数据量最大或最具代表性的对话放在最后一位。"
         )
 
-    # 导入完成后自动尝试建索引：仅在表行数过阈值时才真正动手，否则跳过
-    if settings.lance_index_min_rows > 0:
-        store_for_index = MemoryStore(settings)
-        await store_for_index.connect()
-        store_for_index.ensure_tables()
-        index_report = await store_for_index.ensure_vector_indices()
-        built = [t for t, s in index_report.items() if s.startswith("built")]
-        if built:
-            console.print(
-                f"[dim]·[/] 已自动为 {len(built)} 张表建立向量索引："
-                + ", ".join(built)
-            )
-        # 其它状态（skip_small / already_indexed / error）不喧宾夺主，cli index 子命令可详查
+    await _auto_build_vector_indices(settings)
 
     return 0
 
@@ -420,7 +408,25 @@ async def _run_import_images(args: argparse.Namespace) -> int:
     tbl.add_row("已存在关联", str(report.skipped_existing_rows))
     tbl.add_row("写入图片索引", str(report.upserted_rows))
     console.print(tbl)
+    await _auto_build_vector_indices(settings)
     return 0
+
+
+async def _auto_build_vector_indices(settings: Settings) -> None:
+    """导入完成后自动尝试建索引；小表/已有索引会由 store 内部跳过。"""
+    if settings.lance_index_min_rows <= 0:
+        return
+    store_for_index = MemoryStore(settings)
+    await store_for_index.connect()
+    store_for_index.ensure_tables()
+    index_report = await store_for_index.ensure_vector_indices()
+    built = [t for t, s in index_report.items() if s.startswith("built")]
+    if built:
+        console.print(
+            f"[dim]·[/] 已自动为 {len(built)} 张表建立向量索引："
+            + ", ".join(built)
+        )
+    # 其它状态（skip_small / already_indexed / error）不喧宾夺主，cli index 子命令可详查
 
 
 async def _run_label(args: argparse.Namespace) -> int:
