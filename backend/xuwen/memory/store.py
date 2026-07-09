@@ -407,6 +407,36 @@ class MemoryStore:
                 )
                 raise
 
+    async def soft_delete_ids(self, table: str, ids: Iterable[str]) -> int:
+        """批量软删除多行：把 deleted 置 true。"""
+        ids_list = [str(i) for i in ids if i]
+        if not ids_list:
+            return 0
+        async with self._write_lock:
+            start = time.perf_counter()
+            tbl = self._table(table)
+            total = 0
+            _IN_BATCH = 500
+            try:
+                for offset in range(0, len(ids_list), _IN_BATCH):
+                    slice_ids = ids_list[offset : offset + _IN_BATCH]
+                    id_list_sql = ", ".join(_quote_lance(i) for i in slice_ids)
+                    where = f"id IN ({id_list_sql})"
+                    tbl.update(where=where, values={"deleted": True})
+                    total += len(slice_ids)
+                self._record_db_perf("soft_delete_ids", table, start, rows=total)
+                return total
+            except Exception as e:
+                self._record_db_perf(
+                    "soft_delete_ids",
+                    table,
+                    start,
+                    rows=total,
+                    status="error",
+                    detail=type(e).__name__,
+                )
+                raise
+
     async def existing_ids(self, table: str, ids: Iterable[str]) -> set[str]:
         """返回 ids 中已经存在于 table 的子集。
 
@@ -620,6 +650,33 @@ class MemoryStore:
             return rows
         except Exception as e:
             logger.warning("查询 history_images by sha 失败：%s", type(e).__name__)
+            return []
+
+    async def list_history_images_by_ids(self, ids: Iterable[str]) -> list[dict[str, Any]]:
+        """按 chunk id 批量读取已有图片行，用于 import-images 重跑分类。"""
+        ids_list = [str(i) for i in ids if i]
+        if not ids_list:
+            return []
+        tbl = self._table(TABLE_HISTORY_IMAGES)
+        rows: list[dict[str, Any]] = []
+        _IN_BATCH = 500
+        try:
+            cols = [c for c in self._non_vector_columns(TABLE_HISTORY_IMAGES, tbl) if c != "_distance"]
+            for offset in range(0, len(ids_list), _IN_BATCH):
+                slice_ids = ids_list[offset : offset + _IN_BATCH]
+                id_list_sql = ", ".join(_quote_lance(i) for i in slice_ids)
+                query = (
+                    tbl.search()
+                    .where(f"id IN ({id_list_sql})")
+                    .limit(len(slice_ids))
+                )
+                if cols:
+                    query = query.select(cols)
+                arrow_tbl = await asyncio.to_thread(query.to_arrow)
+                rows.extend(cast(list[dict[str, Any]], arrow_tbl.to_pylist()))
+            return rows
+        except Exception as e:
+            logger.warning("批量查询 history_images by ids 失败：%s", type(e).__name__)
             return []
 
     async def search_relationship_memories(
