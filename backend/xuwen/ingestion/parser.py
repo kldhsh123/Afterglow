@@ -22,10 +22,12 @@ from xuwen.ingestion.plugins import (
     register_plugin,
     select_plugin,
 )
+from xuwen.ingestion.plugins.afterglow_v1 import AfterglowV1Plugin
 from xuwen.ingestion.plugins.qqexporter_v5 import QQExporterV5Plugin
 from xuwen.ingestion.plugins.wechat_weflow import WeChatWeFlowPlugin
 
 # 注册内置 plugins（每次 import 都幂等替换）
+register_plugin(AfterglowV1Plugin())
 register_plugin(QQExporterV5Plugin())
 register_plugin(WeChatWeFlowPlugin())
 

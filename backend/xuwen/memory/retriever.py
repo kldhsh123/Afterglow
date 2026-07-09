@@ -128,6 +128,7 @@ class HybridRetriever:
         top_k_friend = query.top_k_friend or self.settings.friend_top_k
         top_k_pair = self.settings.response_pair_top_k
         top_k_window = query.top_k_window or self.settings.window_top_k
+        top_k_history_image = self.settings.history_image_top_k
         final_k = query.final_k or self.settings.final_context_k
         now = query.now_ms or now_ms()
 
@@ -153,6 +154,11 @@ class HybridRetriever:
             vectors,
             top_k_window * overfetch,
         )
+        history_image_raw_task = _search_variants(
+            self.store.search_history_images,
+            vectors,
+            top_k_history_image * overfetch,
+        )
         live_semantic_task = _search_variants(
             self.store.search_live,
             vectors,
@@ -170,6 +176,7 @@ class HybridRetriever:
             pair_raw,
             friend_raw,
             window_raw,
+            history_image_raw,
             live_semantic_raw,
             recent_live_raw,
         ) = await _timed_gather(
@@ -178,6 +185,7 @@ class HybridRetriever:
             pair_raw_task,
             friend_raw_task,
             window_raw_task,
+            history_image_raw_task,
             live_semantic_task,
             recent_live_task,
             trace_id=trace_id,
@@ -194,6 +202,10 @@ class HybridRetriever:
             window_raw,
             friend_names=self.settings.all_friend_names or ["TA"],
             limit=top_k_window,
+        )
+        history_image_rows = _filter_history_image_rows(
+            history_image_raw,
+            limit=top_k_history_image,
         )
         live_rows: list[dict[str, Any]] = _filter_live_rows(recent_live_raw, limit=20)
         # 把语义召回的 live 行合并到 live_rows（保证 fused 也能命中 live）
@@ -215,6 +227,10 @@ class HybridRetriever:
         dialogue_windows = [
             _row_to_scored(r, rank=i + 1, kind="window") for i, r in enumerate(window_rows)
         ]
+        history_images = [
+            _row_to_scored(r, rank=i + 1, kind="history_image")
+            for i, r in enumerate(history_image_rows)
+        ]
         recent_live = [
             _row_to_scored(r, rank=i + 1, kind="live") for i, r in enumerate(live_rows)
         ]
@@ -229,6 +245,7 @@ class HybridRetriever:
             response_pairs=response_pairs,
             friend_examples=friend_examples,
             dialogue_windows=dialogue_windows,
+            history_images=history_images,
             recent_live=recent_live,
             settings=self.settings,
             now_ms=now,
@@ -241,7 +258,8 @@ class HybridRetriever:
             trace_id=trace_id,
             detail=(
                 f"pair={len(pair_rows)},friend={len(friend_rows)},"
-                f"window={len(window_rows)},live={len(live_rows)},pool={len(fused_pool)}"
+                f"window={len(window_rows)},image={len(history_image_rows)},"
+                f"live={len(live_rows)},pool={len(fused_pool)}"
             ),
         )
 
@@ -292,6 +310,7 @@ class HybridRetriever:
         return RetrievalResult(
             friend_examples=[*response_pairs[:4], *friend_examples],
             dialogue_windows=dialogue_windows,
+            history_images=history_images,
             recent_live=recent_live,
             response_pairs=response_pairs,
             fused=fused,
@@ -504,6 +523,23 @@ def _filter_live_rows(
     return out
 
 
+def _filter_history_image_rows(
+    rows: list[dict[str, Any]],
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """过滤空图片摘要。"""
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        desc = str(row.get("description") or "").strip()
+        if not desc:
+            continue
+        out.append(row)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _compute_live_filter(
     query: RetrievalQuery,
     settings: Settings,
@@ -583,6 +619,8 @@ def _row_to_scored(row: dict[str, Any], *, rank: int, kind: str) -> ScoredChunk:
             row.get("dialogue_snippet")
             or f"用户: {row.get('text') or ''}\n回复: {row.get('friend_reply') or ''}"
         )
+    elif kind == "history_image":
+        text = str(row.get("description") or "")
     else:
         text = str(row.get("text") or "")
 
@@ -600,6 +638,7 @@ def _row_to_scored(row: dict[str, Any], *, rank: int, kind: str) -> ScoredChunk:
         ),
         session_id=str(row.get("session_id") or ""),
         sender_name=str(row.get("sender_name") or ""),
+        sender_role=str(row.get("sender_role") or "other"),  # type: ignore[arg-type]
         source=str(row.get("source") or "history"),  # type: ignore[arg-type]
         warmth=float(row.get("warmth") or 0.0),
         metadata=metadata,
@@ -611,6 +650,7 @@ def _fuse(
     response_pairs: list[ScoredChunk],
     friend_examples: list[ScoredChunk],
     dialogue_windows: list[ScoredChunk],
+    history_images: list[ScoredChunk],
     recent_live: list[ScoredChunk],
     settings: Settings,
     now_ms: int,
@@ -646,6 +686,8 @@ def _fuse(
         _add(c)
     for c in dialogue_windows:
         _add(c)
+    for c in history_images:
+        _add(c)
     # live 语义召回也参与 fused，让"刚才聊到哪了"能被主 prompt 拿到。
     # 但权重受 source_weight 控制，ai_generated 默认 0.25 远低于真人原始。
     for c in recent_live:
@@ -659,6 +701,8 @@ def _fuse(
         # source weight
         if chunk.source == "ai_generated":
             src_w = settings.ai_generated_source_weight
+        elif chunk.source == "human_original_image":
+            src_w = settings.history_image_source_weight
         elif chunk.source in {"live", "user_new"}:
             src_w = settings.live_source_weight
         else:

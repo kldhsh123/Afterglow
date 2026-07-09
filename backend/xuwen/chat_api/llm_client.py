@@ -223,7 +223,11 @@ class LLMClient:
         attempt_number: int,
     ) -> str:
         start = time.perf_counter()
-        request_summary = _request_summary(payload)
+        include_full_payloads = self.settings.debug_model_full_payloads_enabled
+        request_summary = _request_summary(
+            payload,
+            include_full=include_full_payloads,
+        )
         try:
             resp = await self._client.post(self._url, headers=self._headers, json=payload)
         except httpx.HTTPError as e:
@@ -257,7 +261,7 @@ class LLMClient:
                 status_code=resp.status_code,
                 upstream_request_id=request_id or "",
                 request=request_summary,
-                response=_response_summary(resp.text),
+                response=_response_summary(resp.text, include_full=include_full_payloads),
                 error=f"HTTP {resp.status_code}",
             )
             raise _RetryableLLMError(
@@ -277,7 +281,7 @@ class LLMClient:
                 status_code=resp.status_code,
                 upstream_request_id=request_id or "",
                 request=request_summary,
-                response=_response_summary(resp.text),
+                response=_response_summary(resp.text, include_full=include_full_payloads),
                 error=f"HTTP {resp.status_code}",
             )
             raise LLMError(
@@ -300,7 +304,7 @@ class LLMClient:
                 status_code=resp.status_code,
                 upstream_request_id=request_id or "",
                 request=request_summary,
-                response=_response_summary(resp.text),
+                response=_response_summary(resp.text, include_full=include_full_payloads),
                 error="invalid_json",
             )
             raise LLMError(
@@ -343,7 +347,7 @@ class LLMClient:
             status_code=resp.status_code,
             upstream_request_id=request_id or "",
             request=request_summary,
-            response=_content_response_summary(text, data),
+            response=_content_response_summary(text, data, include_full=include_full_payloads),
         )
         return text
 
@@ -358,10 +362,15 @@ class LLMClient:
     ) -> AsyncGenerator[str, None]:
         """打开 SSE 流并逐条 yield delta.content。"""
         start = time.perf_counter()
-        request_summary = _request_summary(payload)
+        include_full_payloads = self.settings.debug_model_full_payloads_enabled
+        request_summary = _request_summary(
+            payload,
+            include_full=include_full_payloads,
+        )
         pieces = 0
         chars = 0
         preview_parts: list[str] = []
+        full_parts: list[str] = []
         stream_error = ""
         async with self._client.stream(
             "POST", self._url, headers=self._headers, json=payload
@@ -381,7 +390,10 @@ class LLMClient:
                     status_code=resp.status_code,
                     upstream_request_id=request_id or "",
                     request=request_summary,
-                    response=_response_summary(body.decode("utf-8", errors="replace")),
+                    response=_response_summary(
+                        body.decode("utf-8", errors="replace"),
+                        include_full=include_full_payloads,
+                    ),
                     error=f"HTTP {resp.status_code}",
                 )
                 raise _RetryableLLMError(
@@ -402,7 +414,10 @@ class LLMClient:
                     status_code=resp.status_code,
                     upstream_request_id=request_id or "",
                     request=request_summary,
-                    response=_response_summary(body.decode("utf-8", errors="replace")),
+                    response=_response_summary(
+                        body.decode("utf-8", errors="replace"),
+                        include_full=include_full_payloads,
+                    ),
                     error=f"HTTP {resp.status_code}",
                 )
                 raise LLMError(
@@ -437,6 +452,8 @@ class LLMClient:
                         chars += len(content)
                         if sum(len(p) for p in preview_parts) < 240:
                             preview_parts.append(content)
+                        if include_full_payloads:
+                            full_parts.append(content)
                         yield content
                     # 兼容 reasoning 字段（一些上游会在 thinking 阶段送 delta.reasoning）；本期暂不渲染
                     await asyncio.sleep(0)  # 让出事件循环
@@ -464,11 +481,13 @@ class LLMClient:
                     status_code=resp.status_code,
                     upstream_request_id=request_id or "",
                     request=request_summary,
-                    response={
-                        "stream_chunks": pieces,
-                        "content_chars": chars,
-                        "content_preview": _short_text("".join(preview_parts), 240),
-                    },
+                    response=_stream_response_summary(
+                        stream_chunks=pieces,
+                        content_chars=chars,
+                        content_preview=_short_text("".join(preview_parts), 240),
+                        content_text="".join(full_parts),
+                        include_full=include_full_payloads,
+                    ),
                     error=stream_error,
                 )
 
@@ -512,7 +531,7 @@ def _record_model_call(
     )
 
 
-def _request_summary(payload: dict[str, Any]) -> dict[str, Any]:
+def _request_summary(payload: dict[str, Any], *, include_full: bool) -> dict[str, Any]:
     messages = payload.get("messages")
     message_summaries: list[dict[str, Any]] = []
     role_counts: dict[str, int] = {}
@@ -529,14 +548,15 @@ def _request_summary(payload: dict[str, Any]) -> dict[str, Any]:
             all_texts.append(text)
             total_chars += len(text)
             image_count += images
-            message_summaries.append(
-                {
-                    "role": role,
-                    "chars": len(text),
-                    "image_count": images,
-                    "preview": _short_text(text, 300),
-                }
-            )
+            item = {
+                "role": role,
+                "chars": len(text),
+                "image_count": images,
+                "preview": _short_text(text, 300),
+            }
+            if include_full:
+                item["text"] = text
+            message_summaries.append(item)
     full_text = "\n".join(all_texts)
     return {
         "model": payload.get("model"),
@@ -572,12 +592,15 @@ def _message_text_and_images(content: object) -> tuple[str, int]:
     return "\n".join(texts), images
 
 
-def _response_summary(text: str) -> dict[str, Any]:
-    return {
+def _response_summary(text: str, *, include_full: bool) -> dict[str, Any]:
+    summary = {
         "raw_chars": len(text),
         "raw_preview": _short_text(text, 240),
         "schedule": _schedule_response_debug(text),
     }
+    if include_full:
+        summary["raw_text"] = text
+    return summary
 
 
 def _json_response_summary(data: dict[str, Any]) -> dict[str, Any]:
@@ -587,7 +610,12 @@ def _json_response_summary(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _content_response_summary(text: str, data: dict[str, Any]) -> dict[str, Any]:
+def _content_response_summary(
+    text: str,
+    data: dict[str, Any],
+    *,
+    include_full: bool,
+) -> dict[str, Any]:
     summary = _json_response_summary(data)
     summary.update(
         {
@@ -596,6 +624,8 @@ def _content_response_summary(text: str, data: dict[str, Any]) -> dict[str, Any]
             "schedule": _schedule_response_debug(text),
         }
     )
+    if include_full:
+        summary["content_text"] = text
     usage = data.get("usage")
     if isinstance(usage, dict):
         summary["usage"] = {
@@ -603,6 +633,24 @@ def _content_response_summary(text: str, data: dict[str, Any]) -> dict[str, Any]
             for key in ("prompt_tokens", "completion_tokens", "total_tokens")
             if key in usage
         }
+    return summary
+
+
+def _stream_response_summary(
+    *,
+    stream_chunks: int,
+    content_chars: int,
+    content_preview: str,
+    content_text: str,
+    include_full: bool,
+) -> dict[str, Any]:
+    summary: dict[str, Any] = {
+        "stream_chunks": stream_chunks,
+        "content_chars": content_chars,
+        "content_preview": content_preview,
+    }
+    if include_full:
+        summary["content_text"] = content_text
     return summary
 
 

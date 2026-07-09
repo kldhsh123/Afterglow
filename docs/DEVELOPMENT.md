@@ -65,6 +65,7 @@ backend/xuwen/
 
 | name | display_name | 输入格式 | 识别特征 |
 |---|---|---|---|
+| `afterglow_v1` | Afterglow Chat v1 | Afterglow 专用私聊 JSON | `afterglow.format = "afterglow-chat"` 且 `afterglow.version` 为 `1.x` |
 | `qqexporter_v5` | QQChatExporter V5 | QQ 导出 JSON | `metadata.name` 含 `qqchatexporter` 或 `chatInfo.selfUid` 存在 |
 | `wechat_weflow` | WeChat ([WeFlow](https://github.com/hicccc77/WeFlow) arkme-json) | 微信 [WeFlow](https://github.com/hicccc77/WeFlow) 导出 JSON | `weflow.format = "arkme-json"` 或 `session + senders + messages` 同时存在 |
 
@@ -168,6 +169,81 @@ uv run python -m xuwen.ingestion.cli import export.json --plugin qqexporter_v5
 uv run python -m xuwen.ingestion.cli import export.json --plugin wechat_weflow
 ```
 
+### Afterglow Chat v1
+
+Afterglow v1 是给第三方中间件使用的稳定中间格式，目前只支持私聊：
+
+```json
+{
+  "afterglow": {"format": "afterglow-chat", "version": "1.0"},
+  "conversation": {"id": "conv-001", "type": "private", "title": "可选"},
+  "participants": [
+    {"uid": "me", "name": "我", "role": "self"},
+    {"uid": "friend", "name": "TA", "role": "friend"}
+  ],
+  "messages": [
+    {
+      "id": "m1",
+      "seq": 1,
+      "timestamp_ms": 1783625485000,
+      "sender_uid": "friend",
+      "sender_name": "TA",
+      "sender_role": "friend",
+      "kind": "text",
+      "raw_type": "text",
+      "text": "今天怎么样"
+    }
+  ]
+}
+```
+
+消息字段：
+
+- `timestamp_ms` 必须是毫秒时间戳。
+- `sender_role` 可为 `self` / `friend` / `system` / `other`；缺失时按 `participants` 和 `.env` UID 兜底。
+- `kind` 复用 `text` / `reply` / `placeholder` / `recalled` / `system` / `unknown`。
+- 图片消息在普通文本导入中只保留占位和引用，不调用视觉模型：
+
+```json
+{
+  "id": "m2",
+  "seq": 2,
+  "timestamp_ms": 1783625493000,
+  "sender_uid": "friend",
+  "sender_role": "friend",
+  "kind": "placeholder",
+  "raw_type": "image",
+  "text": "[图片: a.jpg]",
+  "placeholders": ["[图片]"],
+  "attachments": [{"type": "image", "name": "a.jpg"}]
+}
+```
+
+图片应放在导出目录的 `resources/images/` 下：
+
+```text
+export-dir/
+  chat.json
+  resources/
+    images/
+      a.jpg
+```
+
+文本导入完成后，手动运行图片导入：
+
+```bash
+uv run python -m xuwen.ingestion.cli import-images export-dir --plugin afterglow_v1
+```
+
+`import-images` 会按图片 bytes 计算 SHA-256 去重，把原图保存到 `.data/images/<sha>.<ext>`，
+对每个唯一 SHA 只调用一次 `VISION_MODEL` 生成摘要，再把“图片摘要 + 消息时间/发送者/上下文 +
+image_sha”写入 `history_images` 表。召回时默认使用已生成的图片摘要，不会在聊天请求里重复把历史
+原图发给主模型或 VLM。
+
+QQChatExporter 普通文本导入建议在高级选项勾选“仅保留文件元数据，不下载文件”；这会保留图片
+文件名引用但不会生成 `resources/images` 原图目录。只有需要运行 `import-images` 时，提交目录才
+必须实际包含 `resources/images` 下的图片文件。
+
 ## 测试与质量检查
 
 后端常用命令：
@@ -186,6 +262,9 @@ pnpm build
 ```
 
 ## 调试建议
+
+调试端点默认关闭。需要运行时诊断时，在 `backend/.env` 里临时设置
+`DEBUG_ENDPOINTS_ENABLED=true` 并重启后端；排查完成后建议关回 `false`。
 
 运行时诊断：
 
