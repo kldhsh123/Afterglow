@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 记忆溯源浮窗：展示召回的历史片段。
-// 优先级：fused（最终融合） / friend_examples / dialogue_windows
+// 优先级：fused（最终融合） / friend_examples / dialogue_windows / history_images
 // UI：居中半透明卡片，按 ESC 或点遮罩关闭，含 GSAP 进出动效。
 
 import { computed, onMounted, watch, ref } from 'vue'
@@ -58,6 +58,14 @@ function fmtTime(ts: number): string {
     minute: '2-digit',
   })
 }
+
+function sourceLabel(kind: string): string {
+  if (kind === 'window') return '当时的多轮对话'
+  if (kind === 'friend') return '当时的一句话'
+  if (kind === 'response_pair') return '当时的问答'
+  if (kind === 'history_image') return '历史图片描述'
+  return '最近的对话'
+}
 </script>
 
 <template>
@@ -105,9 +113,13 @@ function fmtTime(ts: number): string {
                 {{ i + 1 }}
               </span>
               <span>{{ fmtTime(s.timestamp_ms) }}</span>
-              <span v-if="s.kind === 'window'" class="opacity-70">· 当时的多轮对话</span>
-              <span v-else-if="s.kind === 'friend'" class="opacity-70">· 当时的一句话</span>
-              <span v-else class="opacity-70">· 最近的对话</span>
+              <span class="opacity-70">· {{ sourceLabel(s.kind) }}</span>
+            </div>
+            <div
+              v-if="s.kind === 'history_image' && s.image_sha"
+              class="mb-2 text-xs text-ink-soft dark:text-night-text-soft break-all"
+            >
+              image_sha {{ s.image_sha }}
             </div>
             <p class="text-sm whitespace-pre-line leading-relaxed">{{ s.text }}</p>
           </div>

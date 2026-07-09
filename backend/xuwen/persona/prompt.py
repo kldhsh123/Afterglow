@@ -126,7 +126,10 @@ def _render_system_prompt(
             retrieved.friend_examples,
             settings,
         ),
-        retrieved_dialogue_windows=_render_dialogue_windows(retrieved.dialogue_windows),
+        retrieved_dialogue_windows=_join_blocks(
+            _render_dialogue_windows(retrieved.dialogue_windows),
+            _render_history_images(retrieved.history_images),
+        ),
         recent_conversation=_render_recent(recent, settings),
         current_user_message=current_user_message,
         today=current_date,
@@ -239,6 +242,24 @@ def _render_dialogue_windows(chunks: list[ScoredChunk], max_items: int = 4) -> s
         when = _human_time(c.timestamp_ms)
         lines.append(f"[{i}] {when}\n{snippet}")
     return "\n\n".join(lines)
+
+
+def _render_history_images(chunks: list[ScoredChunk], max_items: int = 4) -> str:
+    if not chunks:
+        return ""
+    lines: list[str] = ["【历史图片描述】（由视觉模型离线生成，不是真人原话）"]
+    for i, c in enumerate(chunks[:max_items], 1):
+        desc = c.text.strip()
+        if not desc:
+            continue
+        when = _human_time(c.timestamp_ms)
+        speaker = c.sender_name or "TA"
+        lines.append(f"[图{i}] {when}｜{speaker}\n{desc}")
+    return "\n\n".join(lines)
+
+
+def _join_blocks(*blocks: str) -> str:
+    return "\n\n".join(block.strip() for block in blocks if block.strip())
 
 
 def _render_recent(recent: list[ChatMessage], settings: Settings) -> str:

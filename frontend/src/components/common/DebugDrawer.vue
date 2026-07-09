@@ -41,6 +41,8 @@ const dbSlowest = computed(() => (database.value.slowest ?? []) as DbRecord[])
 const calls = computed(() => (stats.value?.calls ?? {}) as Record<string, CallStats>)
 const modelChain = computed(() => ((stats.value?.model_chain ?? []) as ModelCall[]).slice().reverse())
 const life = computed(() => (stats.value?.life ?? {}) as LifeDebug)
+const debugConfig = computed(() => (config.value?.debug ?? {}) as Record<string, unknown>)
+const modelFullPayloadsEnabled = computed(() => Boolean(debugConfig.value.model_full_payloads_enabled))
 
 watch(
   () => props.open,
@@ -59,16 +61,32 @@ async function refresh() {
     stats.value = s
     config.value = c
   } catch (e) {
-    errorMsg.value = (e as Error).message
+    errorMsg.value = debugEndpointErrorMessage(e)
   } finally {
     loading.value = false
   }
 }
 
+function debugEndpointErrorMessage(e: unknown): string {
+  const message = e instanceof Error ? e.message : String(e)
+  if (/404|not found/i.test(message)) {
+    return '调试端点未启用。请在 .env 设置 DEBUG_ENDPOINTS_ENABLED=true 并重启后端。'
+  }
+  return message
+}
+
 async function runSearch() {
   const q = query.value.trim()
   if (!q) {
-    searchResult.value = { fused: [], response_pairs: [], friend_examples: [], dialogue_windows: [], recent_live: [], trace_id: '' }
+    searchResult.value = {
+      fused: [],
+      response_pairs: [],
+      friend_examples: [],
+      dialogue_windows: [],
+      history_images: [],
+      recent_live: [],
+      trace_id: '',
+    }
     return
   }
   searchLoading.value = true
@@ -221,6 +239,9 @@ const MemoryGroup = defineComponent({
                     h('span', { class: 'text-ink-soft dark:text-night-text-soft' }, `score ${item.score.toFixed(4)}`),
                   ]),
                   h('div', { class: 'text-xs text-ink-soft dark:text-night-text-soft' }, `${item.source || 'history'} · ${item.chunk_id}`),
+                  item.image_sha
+                    ? h('div', { class: 'text-xs text-ink-soft dark:text-night-text-soft' }, `image_sha ${item.image_sha}`)
+                    : null,
                   h('pre', { class: 'mt-1 whitespace-pre-wrap break-words text-xs' }, item.text),
                 ]),
               ),
@@ -259,8 +280,11 @@ const LogList = defineComponent({
 const ModelChainList = defineComponent({
   props: {
     items: { type: Array as () => ModelCall[], required: true },
+    fullPayloadsEnabled: { type: Boolean, required: true },
   },
   setup(props) {
+    const fullRecord = ref<ModelCall | null>(null)
+
     return () =>
       h('div', { class: 'space-y-2' }, [
         props.items.length === 0
@@ -268,34 +292,93 @@ const ModelChainList = defineComponent({
           : h(
               'div',
               { class: 'space-y-2' },
-              props.items.slice(0, 20).map((item) =>
-                h('div', { class: 'debug-hit space-y-1' }, [
-                  h('div', { class: 'flex items-center justify-between gap-2 text-xs' }, [
-                    h('span', { class: item.status === 'error' ? 'text-warning font-medium' : 'font-medium' }, `${item.stage} · ${item.model}`),
-                    h('span', { class: 'text-ink-soft dark:text-night-text-soft' }, `${item.latency_ms}ms · attempt ${item.attempt}`),
-                  ]),
-                  h('div', { class: 'grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1 text-xs' }, [
-                    h('span', { class: 'text-ink-soft dark:text-night-text-soft' }, 'trace'),
-                    h('span', { class: 'truncate' }, item.trace_id || '-'),
-                    h('span', { class: 'text-ink-soft dark:text-night-text-soft' }, 'url'),
-                    h('span', { class: 'truncate' }, item.url),
-                    h('span', { class: 'text-ink-soft dark:text-night-text-soft' }, 'status'),
-                    h('span', null, `${item.status}${item.status_code ? ` · HTTP ${item.status_code}` : ''}${item.stream ? ' · stream' : ''}`),
-                    item.upstream_request_id
-                      ? [
-                          h('span', { class: 'text-ink-soft dark:text-night-text-soft' }, 'upstream'),
-                          h('span', { class: 'truncate' }, item.upstream_request_id),
-                        ]
-                      : null,
-                  ]),
-                  item.error ? h('div', { class: 'text-xs text-warning' }, item.error) : null,
-                  h('details', { class: 'text-xs' }, [
-                    h('summary', { class: 'cursor-pointer text-ink-soft dark:text-night-text-soft' }, 'request / response 摘要'),
-                    h('pre', { class: 'debug-pre mt-2' }, JSON.stringify({ request: item.request, response: item.response }, null, 2)),
-                  ]),
-                ]),
-              ),
+              props.items.slice(0, 20).map((item) => {
+                return h('div', { class: 'debug-hit space-y-1' }, [
+                    h('div', { class: 'flex items-center justify-between gap-2 text-xs' }, [
+                      h('span', { class: item.status === 'error' ? 'text-warning font-medium' : 'font-medium' }, `${item.stage} · ${item.model}`),
+                      h('span', { class: 'text-ink-soft dark:text-night-text-soft' }, `${item.latency_ms}ms · attempt ${item.attempt}`),
+                    ]),
+                    h('div', { class: 'grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1 text-xs' }, [
+                      h('span', { class: 'text-ink-soft dark:text-night-text-soft' }, 'trace'),
+                      h('span', { class: 'truncate' }, item.trace_id || '-'),
+                      h('span', { class: 'text-ink-soft dark:text-night-text-soft' }, 'url'),
+                      h('span', { class: 'truncate' }, item.url),
+                      h('span', { class: 'text-ink-soft dark:text-night-text-soft' }, 'status'),
+                      h('span', null, `${item.status}${item.status_code ? ` · HTTP ${item.status_code}` : ''}${item.stream ? ' · stream' : ''}`),
+                      item.upstream_request_id
+                        ? [
+                            h('span', { class: 'text-ink-soft dark:text-night-text-soft' }, 'upstream'),
+                            h('span', { class: 'truncate' }, item.upstream_request_id),
+                          ]
+                        : null,
+                    ]),
+                    item.error ? h('div', { class: 'text-xs text-warning' }, item.error) : null,
+                    h('details', { class: 'text-xs' }, [
+                      h('summary', { class: 'cursor-pointer text-ink-soft dark:text-night-text-soft' }, 'request / response 摘要'),
+                      h('div', { class: 'mt-2 flex items-center justify-between gap-2' }, [
+                        h('span', { class: 'text-ink-soft dark:text-night-text-soft' }, '摘要字段'),
+                        h(
+                          'button',
+                          {
+                            class: 'debug-small-button',
+                            type: 'button',
+                            onClick: () => {
+                              fullRecord.value = item
+                            },
+                          },
+                          '查看完整字段',
+                        ),
+                      ]),
+                      h('pre', { class: 'debug-pre mt-2' }, JSON.stringify({ request: item.request, response: item.response }, null, 2)),
+                    ]),
+                  ])
+              }),
             ),
+        fullRecord.value
+          ? h('div', { class: 'fixed inset-0 z-[60] p-4 sm:p-6' }, [
+              h('button', {
+                class: 'absolute inset-0 bg-ink/30 dark:bg-black/60',
+                'aria-label': '关闭完整字段窗口',
+                onClick: () => {
+                  fullRecord.value = null
+                },
+              }),
+              h(
+                'div',
+                {
+                  class: 'relative mx-auto flex h-full w-full max-w-6xl flex-col overflow-hidden rounded-xl border border-ink/10 dark:border-night-text/10 bg-paper-soft dark:bg-night-bg-soft shadow-letter-strong',
+                  role: 'dialog',
+                  'aria-modal': 'true',
+                },
+                [
+                  h('header', { class: 'flex items-center justify-between gap-3 border-b border-ink/10 dark:border-night-text/10 px-4 py-3' }, [
+                    h('div', { class: 'min-w-0' }, [
+                      h('div', { class: 'text-sm font-medium' }, '模型请求完整字段'),
+                      h('div', { class: 'truncate text-xs text-ink-soft dark:text-night-text-soft' }, `${fullRecord.value.stage} · ${fullRecord.value.model} · trace ${fullRecord.value.trace_id || '-'}`),
+                    ]),
+                    h(
+                      'button',
+                      {
+                        class: 'debug-icon',
+                        type: 'button',
+                        title: '关闭',
+                        onClick: () => {
+                          fullRecord.value = null
+                        },
+                      },
+                      [h(X, { size: 18 })],
+                    ),
+                  ]),
+                  props.fullPayloadsEnabled
+                    ? h('div', { class: 'border-b border-ink/10 dark:border-night-text/10 px-4 py-2 text-xs text-ink-soft dark:text-night-text-soft' }, '完整正文记录已开启')
+                    : h('div', { class: 'border-b border-ink/10 dark:border-night-text/10 px-4 py-2 text-xs text-warning' }, '完整正文记录未开启；如需查看完整 prompt/response，请设置 DEBUG_MODEL_FULL_PAYLOADS_ENABLED=true 并重启后端。'),
+                  h('div', { class: 'min-h-0 flex-1 overflow-auto p-4' }, [
+                    h('pre', { class: 'debug-pre min-h-full whitespace-pre-wrap break-words text-xs' }, JSON.stringify(fullRecord.value, null, 2)),
+                  ]),
+                ],
+              ),
+            ])
+          : null,
       ])
   },
 })
@@ -328,6 +411,10 @@ const ModelChainList = defineComponent({
               </button>
             </div>
           </div>
+          <div class="debug-notice mt-3">
+            调试端点默认关闭；需要查看运行时统计和模型链路时，设置
+            <code>DEBUG_ENDPOINTS_ENABLED=true</code> 并重启后端。
+          </div>
           <p v-if="copied" class="mt-2 text-xs text-accent dark:text-night-accent">诊断包已复制</p>
           <p v-if="errorMsg" class="mt-2 text-xs text-warning">{{ errorMsg }}</p>
         </header>
@@ -352,6 +439,7 @@ const ModelChainList = defineComponent({
               <MemoryGroup title="问答响应 response_pairs" :items="searchResult.response_pairs || []" />
               <MemoryGroup title="朋友单条 friend_examples" :items="searchResult.friend_examples" />
               <MemoryGroup title="对话窗口 dialogue_windows" :items="searchResult.dialogue_windows" />
+              <MemoryGroup title="历史图片 history_images" :items="searchResult.history_images || []" />
               <MemoryGroup title="最近对话 recent_live（不参与 fused）" :items="searchResult.recent_live || []" />
             </div>
           </section>
@@ -390,7 +478,7 @@ const ModelChainList = defineComponent({
 
           <section class="debug-section">
             <div class="debug-title"><Activity :size="16" />模型请求完整链路</div>
-            <ModelChainList :items="modelChain" />
+            <ModelChainList :items="modelChain" :full-payloads-enabled="modelFullPayloadsEnabled" />
           </section>
 
           <section class="debug-section">
@@ -528,8 +616,17 @@ const ModelChainList = defineComponent({
 .debug-title {
   @apply flex items-center gap-2 text-sm font-medium;
 }
+.debug-notice {
+  @apply rounded-lg border border-warning/20 bg-warning/5 px-3 py-2 text-xs leading-relaxed text-ink-soft dark:border-warning/30 dark:bg-warning/10 dark:text-night-text-soft;
+}
+.debug-notice code {
+  @apply font-mono text-warning;
+}
 .debug-button {
   @apply inline-flex items-center justify-center rounded-lg px-3 py-2 text-sm bg-accent text-paper dark:bg-night-accent dark:text-night-bg disabled:opacity-50;
+}
+.debug-small-button {
+  @apply inline-flex items-center justify-center rounded-lg border border-ink/10 dark:border-night-text/10 px-2 py-1 text-xs text-ink-soft dark:text-night-text-soft hover:text-ink dark:hover:text-night-text disabled:opacity-50;
 }
 .debug-input,
 .debug-textarea {

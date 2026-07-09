@@ -5,6 +5,7 @@
 
 来源类型：
 - human_original：导入的真人原始聊天（最高信任，唯一允许参与 persona / 风格蒸馏的来源）。
+- human_original_image：导入历史图片的 VLM 摘要（事实证据，不参与风格蒸馏）。
 - user_new：新会话里用户输入（用于"用户最近发生了什么"事实记忆，不参与风格）。
 - ai_generated：AI 分身生成的回复（仅用于连续性检索；默认不跨会话长期累积）。
 - history：旧版兼容标记，等同 human_original（旧库不需要重导）。
@@ -19,6 +20,7 @@ from xuwen.config import Settings
 
 MemorySource = Literal[
     "human_original",
+    "human_original_image",
     "user_new",
     "ai_generated",
     "history",
@@ -55,6 +57,8 @@ def source_weight(source: str, settings: Settings) -> float:
     """
     if source in {"human_original", "history"}:
         return settings.history_source_weight
+    if source == "human_original_image":
+        return settings.history_image_source_weight
     if source == "live":
         return settings.live_source_weight
     if source == "user_new":
@@ -69,6 +73,7 @@ def label_for_ui(source: str) -> str:
     """前端记忆溯源的可读标签。"""
     return {
         "human_original": "真人历史片段",
+        "human_original_image": "历史图片描述",
         "history": "真人历史片段",
         "user_new": "你最近说过",
         "ai_generated": "此前 AI 回复",
