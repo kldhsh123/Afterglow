@@ -28,6 +28,7 @@ from xuwen.chat_api.chat_pipeline import (
 )
 from xuwen.chat_api.companion_prompt import (
     build_persona_card_with_companion_context,
+    empty_retrieval_result,
     render_life_memory_context_from_recent,
 )
 from xuwen.chat_api.image_store import ImageError, save_data_url
@@ -364,7 +365,7 @@ async def chat_completions(
     )
     
     # 处理可能的异常结果，提供降级值
-    retrieved = results[0] if not isinstance(results[0], BaseException) else RetrievalResult.empty()
+    retrieved = results[0] if not isinstance(results[0], BaseException) else empty_retrieval_result()
     if isinstance(results[0], BaseException):
         logger.error("检索失败，降级为空结果", exc_info=results[0])
         state.metrics.record("retrieval.layer_a", 0.0, error=type(results[0]).__name__)
@@ -373,9 +374,9 @@ async def chat_completions(
     if isinstance(results[1], BaseException):
         logger.error("关系记忆加载失败，降级为空", exc_info=results[1])
     
-    life = results[2] if not isinstance(results[2], BaseException) else None
+    life = results[2] if not isinstance(results[2], BaseException) else state.life.snapshot()
     if isinstance(results[2], BaseException):
-        logger.error("生活状态加载失败，降级为 None", exc_info=results[2])
+        logger.error("生活状态加载失败，降级为当前快照", exc_info=results[2])
 
     # 模型名固定使用后端配置的 CHAT_MODEL；req.model 接受但忽略
     model_name = state.settings.chat_model

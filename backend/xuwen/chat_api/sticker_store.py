@@ -101,7 +101,8 @@ class StickerStore:
 
     def _save(self) -> None:
         with self._lock:
-            data = [s.to_dict() for s in self._cache.values() if self._cache is not None else []]
+            cache = self._cache or {}
+            data = [s.to_dict() for s in cache.values()]
             self._index_path.write_text(
                 json.dumps(data, ensure_ascii=False, indent=2),
                 encoding="utf-8",

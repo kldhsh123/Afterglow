@@ -47,6 +47,8 @@ from xuwen.memory.schema import (
 )
 from xuwen.memory.store import MemoryStore
 
+logger = logging.getLogger(__name__)
+
 # 单路 upsert 流水线深度：embed 一批后异步丢后台 upsert，最多积压这么多个未完成
 # task。LanceDB 写锁让真正在执行的始终只有 1 个，剩下的排队，主要影响内存中暂存
 # 的 embeddings 数量。4 × 100 条 × 4096 维 ≈ 6 MB / track，整体可控。

@@ -310,10 +310,12 @@ class LifeStateManager:
             }
             state["current"] = current
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.path.write_text(
-                json.dumps(state, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
+            # 使用线程锁保护并发写入
+            with self._write_lock:
+                self.path.write_text(
+                    json.dumps(state, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
         except Exception:
             logger.warning("life fallback current 写盘失败", exc_info=True)
 
@@ -327,20 +329,24 @@ class LifeStateManager:
                     rng = random.Random(f"{today}:{self.settings.friend_name or 'TA'}")
                     state["daily_plan"] = _generate_daily_plan(today, rng)
                     self.path.parent.mkdir(parents=True, exist_ok=True)
-                    self.path.write_text(
-                        json.dumps(state, ensure_ascii=False, indent=2),
-                        encoding="utf-8",
-                    )
+                    # 使用线程锁保护并发写入
+                    with self._write_lock:
+                        self.path.write_text(
+                            json.dumps(state, ensure_ascii=False, indent=2),
+                            encoding="utf-8",
+                        )
                 return state
         except (FileNotFoundError, json.JSONDecodeError):
             pass
 
         data = _generate_daily_state(today, self.settings.friend_name or "TA")
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        # 使用线程锁保护并发写入
+        with self._write_lock:
+            self.path.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
         return data
 
     def apply_marker_patch(
