@@ -55,9 +55,11 @@ export async function jsonRequest<T>(
     && body
     && typeof body === 'object'
     && !Array.isArray(body)
-    && typeof body.trace_id !== 'string'
   ) {
-    body.trace_id = traceId
+    const bodyObj = body as Record<string, unknown>
+    if (typeof bodyObj.trace_id !== 'string') {
+      bodyObj.trace_id = traceId
+    }
   }
   return body as T
 }

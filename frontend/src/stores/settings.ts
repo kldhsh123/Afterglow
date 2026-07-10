@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { computed, ref, watch } from 'vue'
+import { computed, onScopeDispose, ref, watch } from 'vue'
 
 export type ThemeMode = 'light' | 'dark' | 'system'
 
@@ -112,10 +112,19 @@ export const useSettingsStore = defineStore('settings', () => {
   }, { immediate: true })
 
   // 监听系统主题
+  let mediaQueryListener: ((e: MediaQueryListEvent) => void) | null = null
   if (typeof window !== 'undefined' && window.matchMedia) {
     const mql = window.matchMedia('(prefers-color-scheme: dark)')
-    mql.addEventListener?.('change', () => {
+    mediaQueryListener = () => {
       if (theme.value === 'system') applyDarkClass()
+    }
+    mql.addEventListener?.('change', mediaQueryListener)
+    
+    // 清理监听器
+    onScopeDispose(() => {
+      if (mediaQueryListener) {
+        mql.removeEventListener?.('change', mediaQueryListener)
+      }
     })
   }
 

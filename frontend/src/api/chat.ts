@@ -165,8 +165,9 @@ function parseEvent(raw: string, handlers: StreamHandlers): void {
       if (typeof content === 'string' && content) {
         handlers.onChunk(content)
       }
-    } catch {
-      // 单行 JSON 解析失败时忽略，让其它行继续
+    } catch (error) {
+      // 单行 JSON 解析失败时记录并忽略，让其它行继续
+      console.warn('SSE JSON 解析失败:', line, error)
       continue
     }
   }
