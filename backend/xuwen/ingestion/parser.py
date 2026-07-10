@@ -42,7 +42,10 @@ def load_qq_json(path: str | Path) -> dict[str, Any]:
         raise ParseError(f"找不到 JSON 文件：{p}")
     try:
         with p.open("r", encoding="utf-8") as f:
-            return cast(dict[str, Any], json.load(f))
+            data = json.load(f)
+            if not isinstance(data, dict):
+                raise ParseError(f"JSON 根节点必须是对象，实际是 {type(data).__name__}")
+            return data
     except json.JSONDecodeError as e:
         raise ParseError(f"JSON 解析失败：{e}") from e
 

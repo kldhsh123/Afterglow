@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -88,9 +89,9 @@ async def import_history(
         if stage_cb is not None:
             try:
                 stage_cb(msg)
-            except Exception:
+            except Exception as e:
                 # stage 回调失败不能影响导入主链路
-                pass
+                logger.warning(f"stage_cb 回调异常: {e}", exc_info=True)
 
     start = time.perf_counter()
     _stage("正在解析消息")
@@ -132,8 +133,8 @@ async def import_history(
                 if split_progress_cb is not None:
                     try:
                         split_progress_cb(done, total)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"split_progress_cb 回调异常: {e}", exc_info=True)
 
             windows = await build_adaptive_windows(
                 sessions,

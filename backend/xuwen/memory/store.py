@@ -150,6 +150,22 @@ class MemoryStore:
         path.mkdir(parents=True, exist_ok=True)
         # lancedb.connect 是同步的，直接调用即可
         self._db = lancedb.connect(str(path))
+    
+    async def close(self) -> None:
+        """关闭数据库连接并清理缓存。"""
+        if self._db is not None:
+            # LanceDB 连接没有显式 close 方法，但我们清理缓存和引用
+            self._table_handles.clear()
+            self._non_vector_cols.clear()
+            self._nprobes_cache.clear()
+            self._db = None
+    
+    def __del__(self) -> None:
+        """析构时确保资源清理。"""
+        if self._db is not None:
+            self._table_handles.clear()
+            self._non_vector_cols.clear()
+            self._nprobes_cache.clear()
 
     def ensure_tables(self) -> None:
         """初次启动建表。已存在则跳过。

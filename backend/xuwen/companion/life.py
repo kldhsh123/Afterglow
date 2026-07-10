@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import random
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, cast
@@ -121,6 +122,7 @@ class LifeStateManager:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.path = settings.persona_data_dir / "life_state.json"
+        self._write_lock = threading.Lock()
 
     def _load_circadian_profile(self) -> CircadianProfile | None:
         """加载作息画像；文件不存在则返回 None，调用方走默认作息。"""
@@ -165,15 +167,18 @@ class LifeStateManager:
                 recent_timeline_summary=timeline_summary,
             )
 
-        slot_state = state["slots"][slot]
+        slot_state = state.get("slots", {}).get(slot, {})
+        if not slot_state:
+            # 如果没有该时段的数据，创建默认值
+            slot_state = {"activity": "在处理自己的事", "meal": "还没特别吃什么", "topic": "今天怎么过"}
         availability = _normalize_availability((plan_event or {}).get("availability"))
         return LifeSnapshot(
-            date=state["date"],
+            date=state.get("date", ""),
             time_slot=slot,
-            current_activity=str((plan_event or {}).get("activity") or slot_state["activity"]),
-            recent_meal=str(slot_state["meal"]),
-            mood=str(state["mood"]),
-            topic_seed=str((plan_event or {}).get("topic") or slot_state["topic"]),
+            current_activity=str((plan_event or {}).get("activity") or slot_state.get("activity", "在处理自己的事")),
+            recent_meal=str(slot_state.get("meal", "还没特别吃什么")),
+            mood=str(state.get("mood", "普通")),
+            topic_seed=str((plan_event or {}).get("topic") or slot_state.get("topic", "今天怎么过")),
             availability=availability,
             next_update_at=str(
                 (plan_event or {}).get("to") or _format_dt(_default_next_update(now, availability))
@@ -476,10 +481,12 @@ class LifeStateManager:
             timeline.append(event)
             del timeline[:-_TIMELINE_LIMIT]
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(
-            json.dumps(state, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        # 使用线程锁保护并发写入
+        with self._write_lock:
+            self.path.write_text(
+                json.dumps(state, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
         return LifeSnapshot(
             date=str(state["date"]),
             time_slot=slot,

@@ -356,11 +356,26 @@ async def chat_completions(
     # Layer A：只放"无论是否回复都需要"的预决策任务（检索 / 关系记忆 / life）。
     # Web Search / URL Resolve 涉及外部 API 调用 + 用户隐私文本外发，必须等 decision
     # 确认 should_reply=True 才能启动；否则用户说"别回我"也会触发搜索调用（隐私 + 费用泄漏）。
-    retrieved, relationship_block, life = await asyncio.gather(
+    results = await asyncio.gather(
         _retrieve_with_metrics(),
         _relationship_context_or_empty(),
         _life_in_parallel(),
+        return_exceptions=True,
     )
+    
+    # 处理可能的异常结果，提供降级值
+    retrieved = results[0] if not isinstance(results[0], BaseException) else RetrievalResult.empty()
+    if isinstance(results[0], BaseException):
+        logger.error("检索失败，降级为空结果", exc_info=results[0])
+        state.metrics.record("retrieval.layer_a", 0.0, error=type(results[0]).__name__)
+    
+    relationship_block = results[1] if not isinstance(results[1], BaseException) else ""
+    if isinstance(results[1], BaseException):
+        logger.error("关系记忆加载失败，降级为空", exc_info=results[1])
+    
+    life = results[2] if not isinstance(results[2], BaseException) else None
+    if isinstance(results[2], BaseException):
+        logger.error("生活状态加载失败，降级为 None", exc_info=results[2])
 
     # 模型名固定使用后端配置的 CHAT_MODEL；req.model 接受但忽略
     model_name = state.settings.chat_model

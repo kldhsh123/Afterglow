@@ -17,6 +17,7 @@ import base64
 import hashlib
 import json
 import re
+import threading
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -68,40 +69,43 @@ class StickerStore:
         self._dir = settings.sticker_data_dir
         self._index_path = self._dir / "index.json"
         self._cache: dict[str, Sticker] | None = None
+        self._lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # 加载 / 保存
     # ------------------------------------------------------------------
 
     def _load(self) -> dict[str, Sticker]:
-        if self._cache is not None:
-            return self._cache
-        self._dir.mkdir(parents=True, exist_ok=True)
-        if not self._index_path.exists():
-            self._cache = {}
-            return self._cache
-        try:
-            raw = json.loads(self._index_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as e:
-            raise StickerError(f"表情包索引损坏：{e}") from e
-        if not isinstance(raw, list):
-            self._cache = {}
-            return self._cache
-        self._cache = {}
-        for entry in raw:
+        with self._lock:
+            if self._cache is not None:
+                return self._cache
+            self._dir.mkdir(parents=True, exist_ok=True)
+            if not self._index_path.exists():
+                self._cache = {}
+                return self._cache
             try:
-                s = Sticker(**entry)
-                self._cache[s.name] = s
-            except (TypeError, ValueError):
-                continue
-        return self._cache
+                raw = json.loads(self._index_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as e:
+                raise StickerError(f"表情包索引损坏：{e}") from e
+            if not isinstance(raw, list):
+                self._cache = {}
+                return self._cache
+            self._cache = {}
+            for entry in raw:
+                try:
+                    s = Sticker(**entry)
+                    self._cache[s.name] = s
+                except (TypeError, ValueError):
+                    continue
+            return self._cache
 
     def _save(self) -> None:
-        data = [s.to_dict() for s in self._load().values()]
-        self._index_path.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        with self._lock:
+            data = [s.to_dict() for s in self._cache.values() if self._cache is not None else []]
+            self._index_path.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
 
     # ------------------------------------------------------------------
     # CRUD

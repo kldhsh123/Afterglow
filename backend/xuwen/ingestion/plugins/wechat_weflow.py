@@ -69,7 +69,7 @@ class WeChatWeFlowPlugin:
             and isinstance(payload.get("messages"), list)
         ):
             senders = payload["senders"]
-            if senders and isinstance(senders[0], dict) and "wxid" in senders[0]:
+            if senders and len(senders) > 0 and isinstance(senders[0], dict) and "wxid" in senders[0]:
                 return True
         return False
 
