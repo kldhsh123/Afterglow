@@ -15,6 +15,13 @@
 
 ---
 
+> [!IMPORTANT]
+> **我们需要你的回音** 💌  
+> 无论你是遇到了部署报错、发现了 Bug，还是 Afterglow 帮你在某个瞬间找回了熟悉的温度，我都非常想听听你的体验。  
+> *（我们会将您的故事以您所要求的匿名，或者显示名称展示在项目的[官方网站](https://afterglow.kldhsh.top/#testimonials)上。）*
+> 
+> 👉 **[点击这里，前往 Discussions 留下你的反馈与故事](https://github.com/kldhsh123/Afterglow/discussions/new?category=general)**
+
 ## ⚠️ 使用前请认真读完
 
 > 如果一段已经结束的对话，能用 ta 原来的语气继续下去，那这段对话还算结束吗？
