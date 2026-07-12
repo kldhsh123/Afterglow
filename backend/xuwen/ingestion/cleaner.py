@@ -24,6 +24,8 @@ from xuwen.config import Settings
 from xuwen.core.models import MessageKind, NormalizedMessage
 from xuwen.persona.pii_rules import PIIRule, load_rules, redact
 
+JSON_EMOJI_MODES = ("raw", "normalized")
+
 # 控制字符（除常见空白）
 _CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 
@@ -38,6 +40,11 @@ _QQ_NATIVE_FACE_RE = re.compile(r"\[/[^\]\n]{1,16}\]")
 # QQ 导出里也会出现 `[[狗狗可怜]]` / `[[爱心]]` 这种双中括号表情 token。
 # 这同样只是客户端表情名，不应作为可复读文本进入向量库。
 _QQ_DOUBLE_BRACKET_FACE_RE = re.compile(r"\[\[[^\]\n]{1,32}\]\]")
+
+# 腾讯不同客户端会把表情导出为任意中英文名称，例如 `[Toasted]`、`[emoji]`。
+# 无法可靠维护完整名称表，因此约定：单层方括号内 1-12 个字符均视为表情；
+# 项目已知的媒体/系统占位符由 _RESERVED_BRACKET_TOKENS 保留原类型。
+_SHORT_BRACKET_FACE_RE = re.compile(r"\[[^\[\]\n]{1,12}\]")
 
 # 微信内置 emoji token：`[微笑]` `[捂脸]` `[害羞]` `[破涕为笑]` 等。
 # 微信本地表情名都是 1-4 个中文字 + 方括号；不是图片，也不是 Unicode emoji，
@@ -74,8 +81,20 @@ def _build_mention_pattern(names: list[str]) -> re.Pattern[str] | None:
 class Cleaner:
     """聊天文本清洗器。"""
 
-    def __init__(self, settings: Settings, rules: list[PIIRule] | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        rules: list[PIIRule] | None = None,
+        *,
+        json_emoji_mode: str = "raw",
+    ) -> None:
+        if json_emoji_mode not in JSON_EMOJI_MODES:
+            raise ValueError(
+                f"json_emoji_mode 必须是 {' / '.join(JSON_EMOJI_MODES)}，"
+                f"实际为 {json_emoji_mode!r}"
+            )
         self.settings = settings
+        self.json_emoji_mode = json_emoji_mode
         if settings.enable_pii_redaction:
             self.rules = rules if rules is not None else load_rules(settings.pii_rules_path)
         else:
@@ -150,9 +169,15 @@ class Cleaner:
         都归一化为 [表情]，
         避免模型学到这种字面 token。系统占位符（[图片] / [位置] / ...）保留原样。"""
         text = _BRACKET_MEDIA_RE.sub(lambda m: f"[{m.group(1)}]", text)
+        if self.json_emoji_mode == "normalized":
+            return text.replace("[/表情]", "[表情]")
         text = _QQ_NATIVE_FACE_RE.sub("[表情]", text)
         text = _QQ_DOUBLE_BRACKET_FACE_RE.sub("[表情]", text)
         text = _WECHAT_EMOJI_RE.sub(
+            lambda m: m.group(0) if m.group(0) in _RESERVED_BRACKET_TOKENS else "[表情]",
+            text,
+        )
+        text = _SHORT_BRACKET_FACE_RE.sub(
             lambda m: m.group(0) if m.group(0) in _RESERVED_BRACKET_TOKENS else "[表情]",
             text,
         )

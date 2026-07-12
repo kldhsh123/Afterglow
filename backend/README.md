@@ -140,6 +140,10 @@ uv run python -m xuwen.ingestion.cli import 路径/到/你的_导出.json
 # uv run python -m xuwen.ingestion.cli import qq_导出.json wechat_导出.json 小号_导出.json
 # 自动识别格式：Afterglow v1 / QQChatExporter V5 / WeFlow 微信。
 # 也可显式指定：--plugin afterglow_v1 / qqexporter_v5 / wechat_weflow。
+# 表情占位符模式默认为 raw：方括号内 1-12 个字符会被视为表情。
+# 若已自行把所有文字表情统一为 [/表情]，可使用：
+# uv run python -m xuwen.ingestion.cli import 已处理.json --json-emoji-mode normalized
+# normalized 只识别 [/表情]，其他方括号文本会保留。
 # 默认建议先做轻量文本导入；QQChatExporter 可勾选"仅保留文件元数据，不下载文件"。
 # 需要历史图片检索时，必须另外保留实际包含 resources/images/ 原图的导出目录。
 # 多文件场景下：
@@ -163,6 +167,8 @@ uv run python -m xuwen.ingestion.cli stats
 #    persona 是离线统计画像，只提供长期语气参考；当天状态由 life_state.json 决定。
 #    会生成 persona_card.md / persona_report.json / persona_style_profile.json。
 uv run python scripts/analyze_persona.py 路径/到/你的聊天记录.json
+# --json-emoji-mode 必须与导入时一致；例如：
+# uv run python scripts/analyze_persona.py 已处理.json --json-emoji-mode normalized
 
 # 6. 启动 chat API（OpenAI 兼容）
 uv run uvicorn xuwen.chat_api.app:create_app --factory --reload
