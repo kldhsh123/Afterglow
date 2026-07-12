@@ -20,6 +20,7 @@ WebSearchProvider = Literal["tavily", "searxng"]
 RerankMode = Literal["auto", "always", "never"]
 CrossRerankProtocol = Literal["jina", "dashscope"]
 ChunkingStrategy = Literal["fixed", "adaptive"]
+ChatApiProtocol = Literal["chat_completions", "responses"]
 
 # 关系类型到自然语言描述的默认映射（仅在用户未自定义 RELATIONSHIP_DESCRIPTION 时使用）
 _RELATIONSHIP_DEFAULTS: dict[RelationshipType, str] = {
@@ -111,6 +112,7 @@ class Settings(BaseSettings):
     openai_api_key: SecretStr = Field(default=SecretStr(""))
     openai_base_url: str = "https://api.openai.com/v1"
     chat_model: str = "gpt-4o-mini"
+    chat_api_protocol: ChatApiProtocol = "chat_completions"
 
     # ----- 联网检索（默认关闭）-----
     # 后端在调用主模型前可选查询 Tavily / SearXNG，并把摘要注入 prompt。

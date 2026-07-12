@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ValidationError
 
-from xuwen.config import Settings
+from xuwen.config import ChatApiProtocol, Settings
 from xuwen.web_ui.connectivity import (
     TestResult,
     test_embedding,
@@ -277,6 +277,7 @@ class TestChatPayload(BaseModel):
     base_url: str
     api_key: str
     model: str
+    protocol: ChatApiProtocol = "chat_completions"
 
 
 class TestEmbeddingPayload(BaseModel):
@@ -294,7 +295,12 @@ def _test_result_to_dict(r: TestResult) -> dict[str, Any]:
 
 @router.post("/test/chat")
 async def post_test_chat(payload: TestChatPayload) -> dict[str, Any]:
-    result = await test_openai_chat(payload.base_url, payload.api_key, payload.model)
+    result = await test_openai_chat(
+        payload.base_url,
+        payload.api_key,
+        payload.model,
+        payload.protocol,
+    )
     return _test_result_to_dict(result)
 
 

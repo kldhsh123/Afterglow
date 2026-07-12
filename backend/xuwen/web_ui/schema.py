@@ -65,6 +65,7 @@ _TITLES: dict[str, str] = {
     "OPENAI_API_KEY": "聊天 AI 密钥",
     "OPENAI_BASE_URL": "聊天 AI 接口地址",
     "CHAT_MODEL": "聊天 AI 模型名",
+    "CHAT_API_PROTOCOL": "主模型 API 协议",
     "EMBEDDING_API_KEY": "向量服务密钥",
     "EMBEDDING_API_URL": "向量服务接口地址",
     "EMBEDDING_MODEL": "向量模型名",

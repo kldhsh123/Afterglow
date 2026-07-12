@@ -4,6 +4,10 @@ Afterglow 后端是一个 FastAPI 服务。主要集成入口是 OpenAI 兼容�
 `/v1/chat/completions`；其它接口用于主动发起话题、记忆调试、本地初始化、
 表情包、图片、文档提取和诊断。
 
+客户端调用 Afterglow 的入口协议与主模型上游协议相互独立：客户端可以调用
+`/v1/chat/completions` 或 `/v1/responses`，后端再按 `CHAT_API_PROTOCOL` 使用上游
+`/chat/completions` 或 `/responses` 生成最终文本。
+
 默认地址：
 
 ```text

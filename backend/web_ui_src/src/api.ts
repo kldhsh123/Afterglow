@@ -176,10 +176,15 @@ export const api = {
       body: JSON.stringify({ values, dry_run: false }),
     }),
   presets: () => jsonRequest<PresetsResponse>('/presets'),
-  testChat: (base_url: string, api_key: string, model: string) =>
+  testChat: (
+    base_url: string,
+    api_key: string,
+    model: string,
+    protocol: 'chat_completions' | 'responses' = 'chat_completions',
+  ) =>
     jsonRequest<TestResult>('/test/chat', {
       method: 'POST',
-      body: JSON.stringify({ base_url, api_key, model }),
+      body: JSON.stringify({ base_url, api_key, model, protocol }),
     }),
   testEmbedding: (
     base_url: string,

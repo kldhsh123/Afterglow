@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
@@ -110,8 +110,9 @@ async def test_openai_chat(
     base_url: str,
     api_key: str,
     model: str,
+    protocol: Literal["chat_completions", "responses"] = "chat_completions",
 ) -> TestResult:
-    """对 OpenAI 兼容 /chat/completions 发一次最短请求。"""
+    """按所选协议对主模型发一次最短请求。"""
     if not base_url:
         return TestResult(ok=False, message="未填写接口地址")
     if not api_key:
@@ -119,13 +120,28 @@ async def test_openai_chat(
     if not model:
         return TestResult(ok=False, message="未填写模型名")
 
-    url = base_url.rstrip("/") + "/chat/completions"
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": "ping"}],
-        "max_tokens": 1,
-        "stream": False,
-    }
+    root = base_url.rstrip("/")
+    for suffix in ("/chat/completions", "/responses"):
+        if root.endswith(suffix):
+            root = root[: -len(suffix)]
+            break
+    if protocol == "responses":
+        url = root + "/responses"
+        payload = {
+            "model": model,
+            "input": [{"role": "user", "content": "ping"}],
+            "max_output_tokens": 1,
+            "stream": False,
+            "store": False,
+        }
+    else:
+        url = root + "/chat/completions"
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": "ping"}],
+            "max_tokens": 1,
+            "stream": False,
+        }
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
