@@ -1,0 +1,38 @@
+name: "[review issue] Issue AI Checker"
+run-name: "[review issue] #${{ github.event.issue.number }} ${{ github.event.issue.title }}"
+
+on:
+  issues:
+    types: [opened, reopened]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: review-issue-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  check-issue:
+    if: ${{ github.event.issue.pull_request == null }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Check issue template compliance
+        uses: ./
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          config-path: .github/issue-ai-checker.json
+          model-base-url: ${{ vars.ISSUE_AI_BASE_URL }}
+          model: ${{ vars.ISSUE_AI_MODEL }}
+          model-temperature: ${{ vars.ISSUE_AI_TEMPERATURE }}
+          model-max-tokens: ${{ vars.ISSUE_AI_MAX_TOKENS }}
+          model-timeout-ms: ${{ vars.ISSUE_AI_TIMEOUT_MS }}
+          model-api-key: ${{ secrets.ISSUE_AI_API_KEY }}
+          model-extra-headers-json: ${{ secrets.ISSUE_AI_EXTRA_HEADERS_JSON }}

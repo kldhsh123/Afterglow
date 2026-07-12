@@ -135,39 +135,39 @@ function parseEvent(raw: string, handlers: StreamHandlers): void {
     if (!trimmed.startsWith('data:')) continue
     const payload = trimmed.slice(5).trim()
     if (!payload || payload === '[DONE]') continue
+    let parsed: any
     try {
-      const parsed = JSON.parse(payload)
-      if (parsed?.error?.message) {
-        if (typeof parsed.error.trace_id === 'string') handlers.onTrace?.(parsed.error.trace_id)
-        handlers.onError?.(new ChatStreamError(parsed.error.message))
-        return
-      }
-      if (typeof parsed?.trace_id === 'string') handlers.onTrace?.(parsed.trace_id)
-      if (isPolicyHint(parsed?.policy)) {
-        handlers.onPolicy?.(parsed.policy)
-        // policy 阶段就能判沉默：should_reply=false 表示规则层已经决定不回。
-        // 提前触发可避免后续 sentinel chunk 短暂上屏。
-        if (parsed.policy.should_reply === false) handlers.onSilenced?.()
-      }
-      if (parsed?.silenced === true) {
-        handlers.onSilenced?.()
-        continue
-      }
-      const choice = parsed?.choices?.[0]
-      // finish_reason 由后端 _stream_silenced / AI 自主沉默时打到 'silenced'。
-      // 注意：不依赖 sentinel 字符串本身（后端可配置），只看 finish_reason。
-      if (choice?.finish_reason === 'silenced') {
-        handlers.onSilenced?.()
-        continue
-      }
-      const delta = choice?.delta
-      const content = delta?.content
-      if (typeof content === 'string' && content) {
-        handlers.onChunk(content)
-      }
-    } catch {
-      // 单行 JSON 解析失败时忽略，让其它行继续
+      parsed = JSON.parse(payload)
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : String(e)
+      throw new ChatStreamError(`服务端返回了格式错误的 SSE 数据：${detail}`)
+    }
+    if (parsed?.error?.message) {
+      if (typeof parsed.error.trace_id === 'string') handlers.onTrace?.(parsed.error.trace_id)
+      throw new ChatStreamError(parsed.error.message)
+    }
+    if (typeof parsed?.trace_id === 'string') handlers.onTrace?.(parsed.trace_id)
+    if (isPolicyHint(parsed?.policy)) {
+      handlers.onPolicy?.(parsed.policy)
+      // policy 阶段就能判沉默：should_reply=false 表示规则层已经决定不回。
+      // 提前触发可避免后续 sentinel chunk 短暂上屏。
+      if (parsed.policy.should_reply === false) handlers.onSilenced?.()
+    }
+    if (parsed?.silenced === true) {
+      handlers.onSilenced?.()
       continue
+    }
+    const choice = parsed?.choices?.[0]
+    // finish_reason 由后端 _stream_silenced / AI 自主沉默时打到 'silenced'。
+    // 注意：不依赖 sentinel 字符串本身（后端可配置），只看 finish_reason。
+    if (choice?.finish_reason === 'silenced') {
+      handlers.onSilenced?.()
+      continue
+    }
+    const delta = choice?.delta
+    const content = delta?.content
+    if (typeof content === 'string' && content) {
+      handlers.onChunk(content)
     }
   }
 }

@@ -1,0 +1,16 @@
+{
+  "_meta": {
+    "invalidFallback": "仅当模型判定 issue 无效但没有返回 suggestedComment/reason 时作为兜底文案。",
+    "missingHeader": "仅在兜底的未通过评论中，用于列出模型返回的缺失字段前。"
+  },
+  "closeInstruction": "该 issue 会被自动关闭。你可以根据上面的建议修改内容，然后重新打开 issue 触发再次检查。",
+  "validFallback": "该 issue 已通过模板检查。",
+  "invalidFallback": "该 issue 缺少模板要求的有效信息。",
+  "missingHeader": "需要补充或修改：",
+  "labelModeInstruction": "请编辑 issue 补充这些信息。重新打开后会再次检查。",
+  "manualReviewInstruction": "如果你认为机器人判断有误，请回复：\n{{manualReviewTrigger}}\n然后重新打开此 issue。",
+  "manualReviewConfirmation": "已请求人工核查。此 issue 将不再由 AI 模板检查器处理。",
+  "noConfiguredLabels": "未配置",
+  "maxChecksReached": "该 issue 已经针对 \"{{templateName}}\" 模板检查了 {{maxChecks}} 次。\n\n自动模板检查不会再处理此 issue。请等待维护者人工核查。",
+  "unmatchedTemplate": "该 issue 没有匹配到已配置的模板标签，因此 AI 模板检查无法运行。\n\n预期至少包含这些模板标签之一：{{expectedLabels}}。\n\n请通过仓库的 issue 表单创建 issue，或请维护者添加正确的模板标签。"
+}

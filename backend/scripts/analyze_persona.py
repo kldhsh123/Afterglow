@@ -68,7 +68,7 @@ def main(argv: list[str] | None = None) -> int:
     cleaned = cleaner.clean_many(parsed)
     sessions = split_sessions(cleaned, settings)
 
-    console.print(f"会话数：{len(sessions)}，朋友消息数：" + str(
+    console.print(f"会话数：{len(sessions)}，清洗后朋友消息总数：" + str(
         sum(1 for s in sessions for m in s.messages if m.is_friend)
     ))
 
