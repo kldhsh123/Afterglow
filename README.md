@@ -9,10 +9,11 @@
 
 <p>
   <a href="https://afterglow.kldhsh.top/">官网</a> ·
-  <a href="docs/wiki/Getting-Started.md">快速开始</a> ·
+  <a href="https://github.com/kldhsh123/Afterglow/wiki/快速开始">快速开始</a> ·
   <a href="#整体架构">整体架构</a> ·
-  <a href="docs/wiki/Home.md">使用文档</a> ·
+  <a href="https://github.com/kldhsh123/Afterglow/wiki">使用文档</a> ·
   <a href="https://qm.qq.com/cgi-bin/qm/qr?k=7rvmrvR100Is9aAp0ZsjmfiG7e0Cv6ZB&amp;jump_from=webapi&amp;authKey=mEN/epjvPHcT+Sb61/XO0Mi5egs2xJBhZm9Wm5MmgEWrpNa0ZOY3fzUf+pvqfijD">QQ 群</a> ·
+  <a href="https://afdian.com/a/kldhsh123">赞助支持</a> ·
   <a href="https://github.com/kldhsh123/Afterglow/releases/latest">下载版本</a>
 </p>
 
@@ -39,7 +40,7 @@
 > [!IMPORTANT]
 > Afterglow 生成的是 **AI 续写**，不是原型人物本人。请在取得必要授权、理解隐私外发范围，并能清楚区分 AI 与现实人物的前提下使用。严禁冒名顶替、骚扰、诈骗、公开传播私人聊天，或把生成内容伪装成本人的话。
 >
-> 如果你正处于剧烈丧失、抑郁或自伤风险中，请优先联系现实中的亲友和专业支持。完整说明见[负责任使用与数据隐私](docs/wiki/Safety-and-Privacy.md)。
+> 如果你正处于剧烈丧失、抑郁或自伤风险中，请优先联系现实中的亲友和专业支持。完整说明见[负责任使用与数据隐私](https://github.com/kldhsh123/Afterglow/wiki/负责任使用与数据隐私)。
 
 ## 它是什么
 
@@ -57,6 +58,11 @@ Afterglow 是一个本地运行的 AI 朋友系统。它把真实聊天记录清
 | 记忆分层 | 区分真人历史、用户新消息和 AI 回复，默认防止 AI 内容污染长期人格 |
 | 开放接入 | 同时提供 OpenAI Chat Completions 与 Responses API，可接入第三方客户端 |
 | 本地优先 | LanceDB、本地 persona 和资源缓存，支持 PII 脱敏、Bearer 鉴权与全离线模型服务 |
+
+## 项目生态
+
+- [Afterglow-QQBot](https://github.com/kldhsh123/Afterglow-QQBot)：QQBot 适配器
+- [Afterglow-WeiXinBot](https://github.com/kldhsh123/Afterglow-WeiXinBot)：微信 Bot 适配器
 
 ## 整体架构
 
@@ -132,7 +138,7 @@ flowchart LR
 - **在线对话**：HybridRetriever 并发执行五路向量召回并读取 Recent Live；外层再与关系记忆、生活状态并发，经互动决策组装 Prompt。
 - **本地持久化**：向量、persona、作息、生活状态、图片与表情资源默认保存在本机。
 
-完整能力地图和关键设计见[架构文档](docs/wiki/Architecture.md)。
+完整能力地图和关键设计见[架构文档](https://github.com/kldhsh123/Afterglow/wiki/整体架构)。
 
 ## 快速开始
 
@@ -152,7 +158,7 @@ docker compose logs backend | grep -iE "token|/config/"
 docker compose restart backend
 ```
 
-完整的挂载、升级和运维说明见 [Docker 部署](docs/wiki/Docker.md)。
+完整的挂载、升级和运维说明见 [Docker 部署](https://github.com/kldhsh123/Afterglow/wiki/Docker部署与运维)。
 
 ### 源码运行
 
@@ -166,7 +172,7 @@ uv run uvicorn xuwen.chat_api.app:create_app --factory --reload
 
 终端会在缺少关键配置时打印一次性 token。打开 `http://127.0.0.1:8000/config/`，完成身份、模型、聊天导入与访问密码配置，然后重启后端。
 
-完整步骤、前端启动和第三方客户端接入见[快速开始](docs/wiki/Getting-Started.md)。
+完整步骤、前端启动和第三方客户端接入见[快速开始](https://github.com/kldhsh123/Afterglow/wiki/快速开始)。
 
 ## 支持的聊天格式
 
@@ -176,25 +182,20 @@ uv run uvicorn xuwen.chat_api.app:create_app --factory --reload
 | [WeFlow Releases](https://github.com/hicccc77/weflow-releases/) | arkme-json、ChatLab JSONL | 微信导入；当前发布版非开源，请评估隐私与安全风险 |
 | Afterglow Chat v1 | JSON、typed / bare JSONL | 稳定、平台无关的专用中间格式 |
 
-其它来源可以转换为 [Afterglow Chat v1](docs/wiki/Afterglow-Chat-Format.md) 快速接入。长期维护或公开分发时，仍建议实现独立 ingestion plugin 并提交 PR。
+其它来源可以转换为 [Afterglow Chat v1](https://github.com/kldhsh123/Afterglow/wiki/Afterglow专用导入格式) 快速接入。长期维护或公开分发时，仍建议实现独立 ingestion plugin 并提交 PR。
 
 ## 文档
 
-- **开始使用**：[快速开始](docs/wiki/Getting-Started.md) · [配置参考](docs/wiki/Configuration.md) · [Docker](docs/wiki/Docker.md) · [故障排查](docs/wiki/Troubleshooting.md)
-- **数据导入**：[导入聊天记录](docs/wiki/Importing-Chat-History.md) · [Afterglow Chat v1](docs/wiki/Afterglow-Chat-Format.md) · [人格模板](docs/wiki/Persona-Templates.md)
-- **原理与参考**：[整体架构](docs/wiki/Architecture.md) · [后端 API](docs/wiki/API.md) · [FAQ](docs/wiki/FAQ.md) · [安全与隐私](docs/wiki/Safety-and-Privacy.md)
-- **开发贡献**：[开发文档](docs/wiki/Development.md) · [贡献指南](CONTRIBUTING.md) · [文档维护](docs/wiki/Documentation-Maintenance.md)
+- **开始使用**：[快速开始](https://github.com/kldhsh123/Afterglow/wiki/快速开始) · [配置参考](https://github.com/kldhsh123/Afterglow/wiki/配置参考) · [后端环境变量](https://github.com/kldhsh123/Afterglow/wiki/后端环境变量) · [Docker](https://github.com/kldhsh123/Afterglow/wiki/Docker部署与运维) · [故障排查](https://github.com/kldhsh123/Afterglow/wiki/故障排查)
+- **数据导入**：[导入聊天记录](https://github.com/kldhsh123/Afterglow/wiki/导入聊天记录) · [Afterglow Chat v1](https://github.com/kldhsh123/Afterglow/wiki/Afterglow专用导入格式) · [人格模板](https://github.com/kldhsh123/Afterglow/wiki/自定义人格模板)
+- **原理与参考**：[整体架构](https://github.com/kldhsh123/Afterglow/wiki/整体架构) · [后端 API](https://github.com/kldhsh123/Afterglow/wiki/后端API文档) · [FAQ](https://github.com/kldhsh123/Afterglow/wiki/常见问题) · [安全与隐私](https://github.com/kldhsh123/Afterglow/wiki/负责任使用与数据隐私)
+- **开发贡献**：[开发文档](https://github.com/kldhsh123/Afterglow/wiki/开发文档) · [贡献指南](CONTRIBUTING.md) · [文档维护](https://github.com/kldhsh123/Afterglow/wiki/文档维护)
 
 仓库中的 `docs/wiki/` 是长文档唯一真源；[GitHub Wiki](https://github.com/kldhsh123/Afterglow/wiki) 在发布版本时由 Actions 自动同步，也可以由维护者手动同步。
 
-## 项目生态
-
-- [Afterglow-QQBot](https://github.com/kldhsh123/Afterglow-QQBot)：QQBot 适配器
-- [Afterglow-WeiXinBot](https://github.com/kldhsh123/Afterglow-WeiXinBot)：微信 Bot 适配器
-
 ## 社区与贡献
 
-[Discussions](https://github.com/kldhsh123/Afterglow/discussions) · [问题反馈](https://github.com/kldhsh123/Afterglow/issues) · [QQ 群 `330316577`](https://qm.qq.com/cgi-bin/qm/qr?k=7rvmrvR100Is9aAp0ZsjmfiG7e0Cv6ZB&jump_from=webapi&authKey=mEN/epjvPHcT+Sb61/XO0Mi5egs2xJBhZm9Wm5MmgEWrpNa0ZOY3fzUf+pvqfijD) · [赞助支持](https://afdian.com/a/kldhsh123) · [致谢](docs/wiki/Acknowledgements.md)
+[Discussions](https://github.com/kldhsh123/Afterglow/discussions) · [问题反馈](https://github.com/kldhsh123/Afterglow/issues) · [QQ 群 `330316577`](https://qm.qq.com/cgi-bin/qm/qr?k=7rvmrvR100Is9aAp0ZsjmfiG7e0Cv6ZB&jump_from=webapi&authKey=mEN/epjvPHcT+Sb61/XO0Mi5egs2xJBhZm9Wm5MmgEWrpNa0ZOY3fzUf+pvqfijD) · [致谢](https://github.com/kldhsh123/Afterglow/wiki/致谢)
 
 Issue 和 PR 都欢迎提交。开始修改前请先阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
 

@@ -5,18 +5,19 @@ Afterglow 的核心服务位于 `backend/`：聊天记录导入、LanceDB 记忆
 
 完整文档：
 
-- [快速开始](https://github.com/kldhsh123/Afterglow/blob/main/docs/wiki/Getting-Started.md)
-- [配置参考](https://github.com/kldhsh123/Afterglow/blob/main/docs/wiki/Configuration.md)
-- [导入聊天记录](https://github.com/kldhsh123/Afterglow/blob/main/docs/wiki/Importing-Chat-History.md)
-- [后端 API](https://github.com/kldhsh123/Afterglow/blob/main/docs/wiki/API.md)
-- [故障排查](https://github.com/kldhsh123/Afterglow/blob/main/docs/wiki/Troubleshooting.md)
-- [开发文档](https://github.com/kldhsh123/Afterglow/blob/main/docs/wiki/Development.md)
+- [快速开始](https://github.com/kldhsh123/Afterglow/wiki/快速开始)
+- [配置参考](https://github.com/kldhsh123/Afterglow/wiki/配置参考)
+- [后端环境变量](https://github.com/kldhsh123/Afterglow/wiki/后端环境变量)
+- [导入聊天记录](https://github.com/kldhsh123/Afterglow/wiki/导入聊天记录)
+- [后端 API](https://github.com/kldhsh123/Afterglow/wiki/后端API文档)
+- [故障排查](https://github.com/kldhsh123/Afterglow/wiki/故障排查)
+- [开发文档](https://github.com/kldhsh123/Afterglow/wiki/开发文档)
 
 ## 数据隐私
 
 聊天记录、向量、persona 和图片默认保存在本机 `.data/`，但云端模型配置会把相关文本发送给对应
 provider。不要提交 `.env`、聊天导出、`.data/` 或 API key。完整边界见
-[负责任使用与数据隐私](https://github.com/kldhsh123/Afterglow/blob/main/docs/wiki/Safety-and-Privacy.md)。
+[负责任使用与数据隐私](https://github.com/kldhsh123/Afterglow/wiki/负责任使用与数据隐私)。
 
 ## 环境
 

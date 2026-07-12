@@ -13,7 +13,6 @@ _MARKDOWN_LINK_RE = re.compile(
     r"(?<!!)\[([^\]]+)\]\((?![a-z][a-z0-9+.-]*:)([^)#?]+\.md)(#[^)]+)?\)",
     re.IGNORECASE,
 )
-_WIKI_LINK_RE = re.compile(r"\[\[([^\]|]+)\|[^\]]+\]\]")
 _FENCED_CODE_RE = re.compile(
     r"^(?P<fence>`{3,}|~{3,})[^\n]*\n.*?^(?P=fence)[ \t]*$",
     re.MULTILINE | re.DOTALL,
@@ -29,16 +28,6 @@ def prepare_wiki(root: Path, wiki_base_url: str) -> int:
     for page in sorted(root.glob("*.md")):
         original = page.read_text(encoding="utf-8")
         code_ranges = _code_ranges(original)
-        for wiki_match in _WIKI_LINK_RE.finditer(original):
-            if _position_in_ranges(wiki_match.start(), code_ranges):
-                continue
-            wiki_page = wiki_match.group(1)
-            target = root / f"{wiki_page}.md"
-            if not target.is_file():
-                raise FileNotFoundError(
-                    f"{page.name}: missing Wiki page: {wiki_page}.md"
-                )
-
         def replace_link(match: re.Match[str]) -> str:
             nonlocal rewritten
             if _position_in_ranges(match.start(), code_ranges):

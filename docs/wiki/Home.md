@@ -8,26 +8,27 @@ Afterglow（续温）是一个本地运行的 AI 朋友系统。它从真实历�
 
 ## 开始使用
 
-- [快速开始](Getting-Started.md)：配置向导、源码启动、前端与客户端接入
-- [配置参考](Configuration.md)：必填配置、模型角色、鉴权与离线运行
-- [Docker 部署](Docker.md)：容器启动、目录挂载与日常运维
-- [常见问题](FAQ.md)
-- [故障排查](Troubleshooting.md)
+- [快速开始](快速开始.md)：配置向导、源码启动、前端与客户端接入
+- [配置参考](配置参考.md)：必填配置、模型角色、鉴权与离线运行
+- [后端环境变量](后端环境变量.md)：全部 `.env` 字段、默认值、联动和安全约束
+- [Docker 部署](Docker部署与运维.md)：容器启动、目录挂载与日常运维
+- [常见问题](常见问题.md)
+- [故障排查](故障排查.md)
 
 ## 数据与导入
 
-- [负责任使用与数据隐私](Safety-and-Privacy.md)
-- [导入聊天记录](Importing-Chat-History.md)
-- [Afterglow Chat v1 格式](Afterglow-Chat-Format.md)
-- [自定义人格模板](Persona-Templates.md)
+- [负责任使用与数据隐私](负责任使用与数据隐私.md)
+- [导入聊天记录](导入聊天记录.md)
+- [Afterglow Chat v1 格式](Afterglow专用导入格式.md)
+- [自定义人格模板](自定义人格模板.md)
 
 ## 原理与参考
 
-- [整体架构](Architecture.md)
-- [后端 API](API.md)
-- [开发文档](Development.md)
-- [文档与 Wiki 维护](Documentation-Maintenance.md)
-- [致谢](Acknowledgements.md)
+- [整体架构](整体架构.md)
+- [后端 API](后端API文档.md)
+- [开发文档](开发文档.md)
+- [文档与 Wiki 维护](文档维护.md)
+- [致谢](致谢.md)
 
 ## 其它入口
 
