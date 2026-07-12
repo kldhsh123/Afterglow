@@ -1,0 +1,58 @@
+name: auto-issue-review
+author: kldhsh123
+description: AI-powered GitHub issue template reviewer
+
+branding:
+  icon: check-circle
+  color: blue
+
+inputs:
+  github-token:
+    description: GitHub token used to read comments and update issues.
+    required: true
+  config-path:
+    description: Path to the auto-issue-review configuration file in the target repository.
+    required: false
+    default: .github/issue-ai-checker.json
+  model-base-url:
+    description: OpenAI-compatible API base URL, usually ending in /v1.
+    required: true
+  model:
+    description: Model name to send to the OpenAI-compatible chat completions API.
+    required: true
+  model-api-key:
+    description: API key for the OpenAI-compatible model provider.
+    required: true
+  model-temperature:
+    description: Optional model temperature.
+    required: false
+    default: "0"
+  model-max-tokens:
+    description: Optional max tokens for the model response.
+    required: false
+    default: "700"
+  model-timeout-ms:
+    description: Optional model request timeout in milliseconds.
+    required: false
+    default: "30000"
+  model-extra-headers-json:
+    description: Optional JSON object with extra HTTP headers for the model request.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Review issue
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        ISSUE_AI_CONFIG_PATH: ${{ inputs.config-path }}
+        ISSUE_AI_BASE_URL: ${{ inputs.model-base-url }}
+        ISSUE_AI_MODEL: ${{ inputs.model }}
+        ISSUE_AI_API_KEY: ${{ inputs.model-api-key }}
+        ISSUE_AI_TEMPERATURE: ${{ inputs.model-temperature }}
+        ISSUE_AI_MAX_TOKENS: ${{ inputs.model-max-tokens }}
+        ISSUE_AI_TIMEOUT_MS: ${{ inputs.model-timeout-ms }}
+        ISSUE_AI_EXTRA_HEADERS_JSON: ${{ inputs.model-extra-headers-json }}
+      run: node "$GITHUB_ACTION_PATH/.github/review-issue/issue-ai-checker.mjs"
