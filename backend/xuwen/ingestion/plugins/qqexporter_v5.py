@@ -39,7 +39,15 @@ class QQExporterV5Plugin:
     display_name = "QQChatExporter"
 
     def match(self, payload: dict[str, Any]) -> bool:
-        """识别 QQChatExporter 的特征字段。"""
+        """
+        Identify whether a payload uses the QQChatExporter format.
+        
+        Parameters:
+        	payload (dict[str, Any]): The payload to inspect.
+        
+        Returns:
+        	bool: `true` if the payload contains QQChatExporter identifiers, `false` otherwise.
+        """
         canonical = _canonical_payload(payload)
         if canonical is None:
             return False
@@ -58,6 +66,19 @@ class QQExporterV5Plugin:
         payload: dict[str, Any],
         settings: Settings,
     ) -> list[NormalizedMessage]:
+        """
+        Parse a QQChatExporter payload into chronologically ordered normalized messages.
+        
+        Parameters:
+        	payload (dict[str, Any]): The QQChatExporter payload to parse.
+        	settings (Settings): Import settings used to determine sender roles.
+        
+        Returns:
+        	list[NormalizedMessage]: Successfully parsed messages sorted by timestamp and sequence number.
+        
+        Raises:
+        	ParseError: If the payload cannot be normalized or does not contain a messages array.
+        """
         canonical = _canonical_payload(payload)
         if canonical is None:
             raise ParseError("JSONL 不符合 QQChatExporter 消息格式")
@@ -81,6 +102,15 @@ class QQExporterV5Plugin:
         return messages
 
     def inspect(self, payload: dict[str, Any]) -> ImportInspection:
+        """
+        Inspect a QQChatExporter payload and identify candidate participants.
+        
+        Parameters:
+        	payload (dict[str, Any]): The payload to inspect.
+        
+        Returns:
+        	ImportInspection: The detected format, participant candidates, and total message count.
+        """
         source_is_jsonl = jsonl_records(payload) is not None
         canonical = _canonical_payload(payload)
         if canonical is None:
@@ -128,6 +158,15 @@ class QQExporterV5Plugin:
         )
 
     def extract_image_refs(self, payload: dict[str, Any]) -> list[ImportImageRef]:
+        """
+        Collects references to image resources from messages in the payload.
+        
+        Parameters:
+        	payload (dict[str, Any]): The QQChatExporter payload to inspect.
+        
+        Returns:
+        	list[ImportImageRef]: Deduplicated image references associated with message IDs.
+        """
         canonical = _canonical_payload(payload)
         if canonical is None:
             return []
@@ -159,6 +198,15 @@ class QQExporterV5Plugin:
 
 
 def _canonical_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """
+    Normalize a QQChatExporter payload into a common message structure.
+    
+    Parameters:
+    	payload (dict[str, Any]): The payload to normalize.
+    
+    Returns:
+    	dict[str, Any] | None: The original payload for non-JSONL input, a normalized payload for valid JSONL input, or `None` for invalid JSONL records.
+    """
     records = jsonl_records(payload)
     if records is None:
         return payload
@@ -179,6 +227,14 @@ def _canonical_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _resource_path(raw: dict[str, Any]) -> str:
+    """Extract the local resource path or filename from a resource mapping.
+    
+    Parameters:
+    	raw (dict[str, Any]): Resource data containing a local path or filename.
+    
+    Returns:
+    	str: The local path, filename, or an empty string when neither is available.
+    """
     return str(raw.get("localPath") or raw.get("filename") or "")
 
 
@@ -192,7 +248,17 @@ def _parse_one(
     settings: Settings,
     fallback_seq: int,
 ) -> NormalizedMessage | None:
-    """解析单条消息。"""
+    """
+    Parse a raw message into a normalized message representation.
+    
+    Parameters:
+        raw (dict[str, Any]): Raw message data.
+        settings (Settings): Settings used to determine the sender's role.
+        fallback_seq (int): Sequence number used when the message has no sequence value.
+    
+    Returns:
+        NormalizedMessage: The normalized message.
+    """
     sender = raw.get("sender") or {}
     if not isinstance(sender, dict):
         sender = {}

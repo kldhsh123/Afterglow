@@ -40,6 +40,11 @@ logging.basicConfig(
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    """Build the command-line argument parser for the ingestion tool.
+    
+    Returns:
+        argparse.ArgumentParser: The configured parser for all supported commands and options.
+    """
     parser = argparse.ArgumentParser(
         prog="xuwen-ingest",
         description="续温 / Afterglow 历史聊天导入工具",
@@ -147,7 +152,16 @@ async def _rebuild_proactive_profile_from_store(
     settings: Settings,
     store: MemoryStore,
 ) -> str:
-    """从已入库窗口统一重建主动开聊画像，返回摘要。"""
+    """
+    Rebuild the proactive conversation profile from stored dialogue windows.
+    
+    Parameters:
+    	settings (Settings): Configuration containing profile limits, participant names, and output location.
+    	store (MemoryStore): Storage used to retrieve dialogue window data.
+    
+    Returns:
+    	str: A summary of the rebuilt profile.
+    """
     from xuwen.persona.proactive_profile import (
         PROACTIVE_PROFILE_FILENAME,
         compute_proactive_profile_from_window_rows,
@@ -178,7 +192,17 @@ async def _rebuild_circadian_profile_from_files(
     plugin_name: str | None,
     json_emoji_mode: str,
 ) -> str:
-    """基于批量导入的全部文件重建作息画像。"""
+    """
+    Rebuild the circadian persona profile from all supplied import files.
+    
+    Parameters:
+        paths (list[Path]): Files containing the source persona data.
+        plugin_name (str | None): Optional plugin used to load the files.
+        json_emoji_mode (str): Emoji handling mode for JSON input.
+    
+    Returns:
+        str: A summary of the rebuilt profile, including the source file count and sample size.
+    """
     from xuwen.persona.circadian import (
         CIRCADIAN_PROFILE_FILENAME,
         compute_circadian_profile,
@@ -248,6 +272,15 @@ _LABELS_ASCII = {
 
 
 async def _run_import(args: argparse.Namespace) -> int:
+    """
+    Import one or more JSON or JSONL files into the configured memory store.
+    
+    Parameters:
+    	args (argparse.Namespace): Parsed command-line arguments for the import operation.
+    
+    Returns:
+    	int: Exit code, where 0 indicates success and 1 indicates missing input files.
+    """
     settings = _load_settings(args.env_file)
     L = _LABELS_ASCII if args.ascii else _LABELS_CN
 

@@ -45,6 +45,12 @@ class ImportTask:
     report: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        """
+        Convert the import task to a dictionary containing all of its fields.
+        
+        Returns:
+        	dict[str, Any]: The import task's field values.
+        """
         return asdict(self)
 
 
@@ -61,6 +67,16 @@ class ImportTaskManager:
         files: list[Path],
         file_names: list[str],
     ) -> ImportTask:
+        """
+        Create a pending import task for the supplied files.
+        
+        Parameters:
+        	files (list[Path]): Paths to the files to import.
+        	file_names (list[str]): Display names corresponding to the files.
+        
+        Returns:
+        	ImportTask: The newly created pending import task.
+        """
         task_id = uuid.uuid4().hex[:16]
         task = ImportTask(
             task_id=task_id,
@@ -128,6 +144,9 @@ _MANAGER: ImportTaskManager | None = None
 
 
 def get_manager() -> ImportTaskManager:
+    """
+    Return the process-wide import task manager instance.
+    """
     global _MANAGER
     if _MANAGER is None:
         _MANAGER = ImportTaskManager()
@@ -138,9 +157,15 @@ async def _run_persona_analysis(
     json_paths: list[Path],
     settings: Settings,
 ) -> dict[str, Any]:
-    """合并全部文件生成 persona 卡片、风格画像和作息画像。
-
-    返回简要统计供前端展示。
+    """
+    Generate persona, style, and circadian profiles from all provided files.
+    
+    Parameters:
+    	json_paths (list[Path]): Paths to the input JSON files.
+    	settings (Settings): Application settings used to generate the profiles.
+    
+    Returns:
+    	dict[str, Any]: Summary statistics for the generated profiles, including source files, message counts, session count, and circadian analysis.
     """
     from xuwen.persona.generator import generate_persona_artifacts
 
@@ -365,11 +390,19 @@ async def _process_one_file(
 
 
 async def run_import_task(task_id: str, settings: Settings) -> None:
-    """后台跑的实际导入流程。
-
-    阶段：
-    1. 逐文件向量化入库 + 打标（85% 进度区间）
-    2. 合并全部文件跑画像分析（15% 进度区间）
+    """
+    Run the complete import workflow for a task.
+    
+    Processes each uploaded file, generates combined persona and circadian analyses,
+    rebuilds the proactive profile, and records progress and results in the task
+    manager. Recoverable analysis failures are recorded as warnings while allowing
+    the task to complete. Cancellation marks the task as cancelled and preserves
+    the work completed so far.
+    
+    Parameters:
+        task_id (str): Identifier of the import task to execute.
+        settings (Settings): Application settings used by the import and analysis
+            stages.
     """
     mgr = get_manager()
     task = mgr.get(task_id)

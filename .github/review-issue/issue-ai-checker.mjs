@@ -9,6 +9,9 @@ const DEFAULT_LOCALE = "en";
 const LOCALE_DIR = new URL("./locales/", import.meta.url);
 const localeCache = new Map();
 
+/**
+ * Processes a GitHub issue event, evaluates the issue against its matching template, and applies the resulting workflow actions.
+ */
 async function main() {
   const cwd = process.cwd();
   const configPath = process.env.ISSUE_AI_CONFIG_PATH || ".github/issue-ai-checker.json";
@@ -90,6 +93,14 @@ async function main() {
   }
 }
 
+/**
+ * Handles newly created issue comments that request manual review.
+ * @param {Object} params - Event handling dependencies and issue data.
+ * @param {Object} params.client - GitHub API client.
+ * @param {Object} params.config - Workflow configuration.
+ * @param {Object} params.event - GitHub issue comment event payload.
+ * @param {Object} params.issue - GitHub issue associated with the event.
+ */
 async function handleIssueCommentEvent({ client, config, event, issue }) {
   if (event.action !== "created") {
     log(`Issue comment action "${event.action}" does not require handling. Skipping.`);
@@ -115,6 +126,16 @@ async function handleIssueCommentEvent({ client, config, event, issue }) {
   await applyManualReview({ client, config, issue, comment: true });
 }
 
+/**
+ * Evaluates an issue against a selected template using the configured model.
+ * @param {Object} params - Evaluation parameters.
+ * @param {Object} params.config - Checker configuration, including model and response language settings.
+ * @param {Object} params.issue - GitHub issue to evaluate.
+ * @param {Object} params.template - Selected issue template.
+ * @param {string} params.templateText - Contents of the selected issue template.
+ * @returns {Object} A normalized verdict containing validity, reason, missing requirements, and a suggested comment.
+ * @throws {PublicError} If the model request times out, fails, or returns an unusable response.
+ */
 async function judgeIssue({ config, issue, template, templateText }) {
   if (process.env.ISSUE_AI_MOCK_RESPONSE) {
     return normalizeVerdict(parseModelJson(process.env.ISSUE_AI_MOCK_RESPONSE));
@@ -229,6 +250,11 @@ async function judgeIssue({ config, issue, template, templateText }) {
   }
 }
 
+/**
+ * Resolves model settings from the configured environment variables.
+ * @param {Object} model - Environment variable names and configuration references for the model.
+ * @returns {Object} The resolved model URL, credentials, generation settings, timeout, and additional headers.
+ */
 function resolveModelConfig(model) {
   const baseUrl = readRequiredEnv(model.baseUrlEnv, "model.baseUrlEnv");
   const apiKey = readRequiredEnv(model.apiKeyEnv, "model.apiKeyEnv");
@@ -249,6 +275,16 @@ function resolveModelConfig(model) {
   };
 }
 
+/**
+ * Applies the configured actions for an issue that satisfies its template.
+ * @param {object} params - The action context and valid verdict state.
+ * @param {object} params.client - GitHub API client.
+ * @param {object} params.config - Workflow configuration.
+ * @param {object} params.issue - GitHub issue being processed.
+ * @param {object} params.verdict - Model verdict containing an optional suggested comment.
+ * @param {object} params.stateComment - Existing workflow state comment, if available.
+ * @param {object} params.nextState - Updated workflow state.
+ */
 async function handleValid({ client, config, issue, verdict, stateComment, nextState }) {
   if (config.removeInvalidLabelWhenValid !== false && config.labels?.invalid) {
     await client.removeLabel(issue.number, config.labels.invalid);
@@ -270,6 +306,14 @@ async function handleValid({ client, config, issue, verdict, stateComment, nextS
   }
 }
 
+/**
+ * Applies the configured actions for an issue that fails template validation.
+ * @param {Object} config - Configuration controlling labels, comments, and issue closure.
+ * @param {Object} issue - The issue receiving the invalid result.
+ * @param {Object} verdict - The model verdict and optional suggested comment.
+ * @param {Object} stateComment - The existing workflow state comment, if available.
+ * @param {Object} nextState - The updated workflow state to store.
+ */
 async function handleInvalid({ client, config, issue, verdict, template, stateComment, nextState }) {
   if (config.labels?.invalid) {
     await client.addLabels(issue.number, [config.labels.invalid]);
@@ -299,6 +343,17 @@ async function handleInvalid({ client, config, issue, verdict, template, stateCo
   }
 }
 
+/**
+ * Records that the issue has reached its maximum number of checks and updates its labels and state comment.
+ * @param {object} options - Handler options.
+ * @param {object} options.client - GitHub API client.
+ * @param {object} options.config - Workflow configuration.
+ * @param {object} options.issue - GitHub issue.
+ * @param {object} options.state - Current workflow state.
+ * @param {object|undefined} options.stateComment - Existing state comment, if available.
+ * @param {object} options.template - Matched issue template.
+ * @param {number} options.maxChecks - Maximum number of checks allowed for the issue.
+ */
 async function handleMaxChecksReached({ client, config, issue, state, stateComment, template, maxChecks }) {
   if (config.labels?.maxChecksReached) {
     await client.addLabels(issue.number, [config.labels.maxChecksReached]);
@@ -327,6 +382,15 @@ async function handleMaxChecksReached({ client, config, issue, state, stateComme
   });
 }
 
+/**
+ * Handles an issue that does not match any configured template label.
+ * @param {object} params - The handler parameters.
+ * @param {object} params.client - GitHub API client.
+ * @param {object} params.config - Issue checker configuration.
+ * @param {object} params.issue - GitHub issue data.
+ * @param {object} params.state - Current workflow state.
+ * @param {object} params.stateComment - Existing state comment, if available.
+ */
 async function handleUnmatchedTemplate({ client, config, issue, state, stateComment }) {
   log(`No configured template label matched issue #${issue.number}.`);
 
@@ -355,6 +419,12 @@ async function handleUnmatchedTemplate({ client, config, issue, state, stateComm
   });
 }
 
+/**
+ * Builds a localized comment explaining why an issue is invalid and what action is required.
+ * @param {Object} verdict - The verdict containing the reason and missing requirements.
+ * @param {Object} config - Configuration that determines the invalid action and response language.
+ * @return {string} The formatted invalid-issue comment.
+ */
 function buildFallbackInvalidComment(verdict, config) {
   const invalidAction = config.invalidAction || "label";
   const lines = [
@@ -377,6 +447,12 @@ function buildFallbackInvalidComment(verdict, config) {
   return lines.join("\n");
 }
 
+/**
+ * Appends a localized instruction for reopening the issue when invalid issues are configured to close.
+ * @param {string} comment - The comment to update.
+ * @param {Object} config - Configuration containing the invalid action and response language.
+ * @returns {string} The original comment or the comment with a close instruction appended.
+ */
 function ensureCloseInstruction(comment, config) {
   if ((config.invalidAction || "label") !== "close") {
     return comment;
@@ -390,11 +466,22 @@ function ensureCloseInstruction(comment, config) {
   return `${comment}\n\n${closeInstruction}`;
 }
 
+/**
+ * Ensures a comment contains the localized manual review instruction.
+ * @param {string} comment - The comment text to update.
+ * @param {string} responseLanguage - The language used for the instruction.
+ * @return {string} The comment with the manual review instruction appended.
+ */
 function ensureManualReviewInstruction(comment, responseLanguage) {
   const cleanComment = stripManualReviewInstruction(comment).trim();
   return `${cleanComment}\n\n${getManualReviewInstruction(responseLanguage)}`;
 }
 
+/**
+ * Removes manual review trigger instructions from a comment and normalizes its spacing.
+ * @param {string} comment - The comment text to clean.
+ * @return {string} The comment without manual review instructions.
+ */
 function stripManualReviewInstruction(comment) {
   const escapedTrigger = escapeRegExp(MANUAL_REVIEW_TRIGGER);
   return comment
@@ -406,18 +493,38 @@ function stripManualReviewInstruction(comment) {
     .trim();
 }
 
+/**
+ * Escapes regular expression metacharacters in a string.
+ * @param {string} value - The string to escape.
+ * @return {string} The escaped string.
+ */
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/**
+ * Gets the localized instruction for requesting manual review.
+ * @param {string} responseLanguage - The language used for the instruction.
+ * @return {string} The localized manual review instruction.
+ */
 function getManualReviewInstruction(responseLanguage) {
   return t({ responseLanguage }, "manualReviewInstruction");
 }
 
+/**
+ * Gets the localized instruction for closing an issue.
+ * @param {string} responseLanguage - The language for the instruction.
+ * @return {string} The localized close instruction.
+ */
 function getCloseInstruction(responseLanguage) {
   return t({ responseLanguage }, "closeInstruction");
 }
 
+/**
+ * Normalizes a response language identifier for locale lookup.
+ * @param {string} [responseLanguage="en"] - The response language identifier.
+ * @return {string} The normalized locale identifier, mapping Chinese language variants to `"zh"`.
+ */
 function getLocale(responseLanguage = DEFAULT_LOCALE) {
   const normalized = responseLanguage.toLowerCase();
   if (normalized.startsWith("zh")) {
@@ -427,6 +534,14 @@ function getLocale(responseLanguage = DEFAULT_LOCALE) {
   return normalized;
 }
 
+/**
+ * Retrieves and interpolates a localized message.
+ * @param {Object} config - Configuration containing the response language.
+ * @param {string} key - The localized message key.
+ * @param {Object} [params={}] - Values used to replace message placeholders.
+ * @returns {string} The interpolated localized message.
+ * @throws {PublicError} If the message is unavailable in the selected and default locales.
+ */
 function t(config, key, params = {}) {
   const locale = getLocale(config.responseLanguage);
   const messages = loadLocale(locale);
@@ -443,6 +558,12 @@ function t(config, key, params = {}) {
   });
 }
 
+/**
+ * Loads localized messages for the requested locale.
+ * @param {string} locale - The locale identifier to load.
+ * @returns {Object} The localized message map.
+ * @throws {PublicError} If the default locale cannot be loaded.
+ */
 function loadLocale(locale) {
   if (localeCache.has(locale)) {
     return localeCache.get(locale);
@@ -461,15 +582,33 @@ function loadLocale(locale) {
   }
 }
 
+/**
+ * Replaces named placeholders in a template with parameter values.
+ * @param {string} template - The template containing `{{name}}` placeholders.
+ * @param {Object} params - Values keyed by placeholder name.
+ * @returns {string} The template with placeholders replaced by their corresponding values or empty strings when values are missing.
+ */
 function interpolate(template, params) {
   return template.replace(/\{\{(\w+)\}\}/g, (_, key) => String(params[key] ?? ""));
 }
 
+/**
+ * Selects the first template matching one of the provided issue labels.
+ * @param {Array<Object>} templates - Templates to search.
+ * @param {Array<string|Object>} labels - Issue labels represented as names or objects with a `name` property.
+ * @returns {Object|undefined} The first matching template, or `undefined` if no template matches.
+ */
 function selectTemplate(templates, labels) {
   const labelNames = new Set(labels.map((label) => (typeof label === "string" ? label : label.name)));
   return templates.find((template) => labelNames.has(template.label));
 }
 
+/**
+ * Determines whether an issue has a specified label.
+ * @param {Object} issue - The issue whose labels are checked.
+ * @param {string} labelName - The label name to find.
+ * @returns {boolean} `true` if the issue has the label, `false` otherwise.
+ */
 function hasLabel(issue, labelName) {
   if (!labelName) {
     return false;
@@ -478,6 +617,14 @@ function hasLabel(issue, labelName) {
   return (issue.labels || []).some((label) => (typeof label === "string" ? label : label.name) === labelName);
 }
 
+/**
+ * Applies the manual review label and optionally posts a confirmation comment for an issue.
+ * @param {object} options - Manual review options.
+ * @param {object} options.client - GitHub API client.
+ * @param {object} options.config - Workflow configuration.
+ * @param {object} options.issue - Issue receiving the manual review status.
+ * @param {boolean} options.comment - Whether to post a confirmation comment.
+ */
 async function applyManualReview({ client, config, issue, comment }) {
   if (config.labels?.manualReview) {
     await client.addLabels(issue.number, [config.labels.manualReview]);
@@ -488,15 +635,30 @@ async function applyManualReview({ client, config, issue, comment }) {
   }
 }
 
+/**
+ * Determines whether a comment requests manual review.
+ * @param {string} commentBody - The comment text to inspect.
+ * @returns {boolean} `true` if the comment contains the manual review trigger, `false` otherwise.
+ */
 function matchesManualReviewTrigger(commentBody) {
   const normalizedBody = commentBody.toLowerCase();
   return normalizedBody.includes(MANUAL_REVIEW_TRIGGER);
 }
 
+/**
+ * Determines whether a human comment requests manual review.
+ * @param {Array} comments - Comments to inspect.
+ * @returns {boolean} `true` if a human comment contains the manual review trigger, `false` otherwise.
+ */
 function hasManualReviewRequestComment(comments) {
   return comments.some((comment) => isHumanComment(comment) && matchesManualReviewTrigger(comment.body || ""));
 }
 
+/**
+ * Determines whether a comment was authored by a human.
+ * @param {Object} comment - The comment to evaluate.
+ * @returns {boolean} `true` if the comment is not a state comment and is human-authored, `false` otherwise.
+ */
 function isHumanComment(comment) {
   if (comment.body?.includes(STATE_MARKER)) {
     return false;
@@ -509,6 +671,11 @@ function isHumanComment(comment) {
   return comment.user.type !== "Bot" && !String(comment.user.login || "").endsWith("[bot]");
 }
 
+/**
+ * Gets the confirmation message for a manual review request.
+ * @param {Object} config - The checker configuration, including optional manual review settings.
+ * @returns {string} The configured manual review comment or a localized default message.
+ */
 function getManualReviewConfirmation(config) {
   if (config.manualReview?.comment) {
     return config.manualReview.comment;
@@ -517,10 +684,20 @@ function getManualReviewConfirmation(config) {
   return t(config, "manualReviewConfirmation");
 }
 
+/**
+ * Finds the latest comment containing the workflow state marker.
+ * @param {Array<Object>} comments - The issue comments to search.
+ * @return {Object|undefined} The latest state comment, or `undefined` if none is found.
+ */
 function findStateComment(comments) {
   return [...comments].reverse().find((comment) => comment.body?.includes(`<!-- ${STATE_MARKER}:`));
 }
 
+/**
+ * Parses workflow state from a state marker embedded in a comment.
+ * @param {string} body - The comment body containing the state marker.
+ * @return {Object} The parsed state object, or an empty object when the marker is missing or invalid.
+ */
 function parseState(body) {
   const match = body.match(/<!-- issue-ai-checker-state:\s*([\s\S]*?)\s*-->/);
   if (!match) {
@@ -534,6 +711,13 @@ function parseState(body) {
   }
 }
 
+/**
+ * Updates the existing state comment or creates one when none exists.
+ * @param {object} client - GitHub client used to manage comments.
+ * @param {number} issueNumber - Issue number associated with the state comment.
+ * @param {object|undefined} stateComment - Existing state comment, if available.
+ * @param {object} state - Workflow state to store in the comment.
+ */
 async function upsertStateComment(client, issueNumber, stateComment, state) {
   const body = appendStateMarker("Issue AI checker state.", state);
   if (stateComment) {
@@ -543,14 +727,33 @@ async function upsertStateComment(client, issueNumber, stateComment, state) {
   }
 }
 
+/**
+ * Creates an issue comment containing the supplied workflow state.
+ * @param {object} client - GitHub client used to create the comment.
+ * @param {number} issueNumber - Issue number receiving the comment.
+ * @param {string} body - Comment content.
+ * @param {object} state - Workflow state to embed in the comment.
+ */
 async function createCommentWithState(client, issueNumber, body, state) {
   await client.createComment(issueNumber, appendStateMarker(body, state));
 }
 
+/**
+ * Appends serialized workflow state to a comment body as an HTML marker.
+ * @param {string} body - The comment body to annotate.
+ * @param {Object} state - The workflow state to serialize.
+ * @return {string} The trimmed comment body with the state marker appended.
+ */
 function appendStateMarker(body, state) {
   return `${body.trim()}\n\n<!-- ${STATE_MARKER}: ${JSON.stringify(state)} -->`;
 }
 
+/**
+ * Parses a model verdict from JSON content, including optionally fenced JSON.
+ * @param {string} content - The model response containing a JSON value.
+ * @returns {*} The parsed JSON value.
+ * @throws {PublicError} If the content is not valid JSON.
+ */
 function parseModelJson(content) {
   const trimmed = content.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
   try {
@@ -560,6 +763,11 @@ function parseModelJson(content) {
   }
 }
 
+/**
+ * Normalizes a model verdict into the expected structure and value types.
+ * @param {Object} value - The verdict data to normalize.
+ * @returns {Object} A verdict containing `valid`, `reason`, `missing`, and `suggestedComment` fields.
+ */
 function normalizeVerdict(value) {
   return {
     valid: Boolean(value.valid),
@@ -569,6 +777,11 @@ function normalizeVerdict(value) {
   };
 }
 
+/**
+ * Reads and parses a JSON file.
+ * @param {string} filePath - Path to the JSON file.
+ * @returns {Promise<unknown>} The parsed JSON value.
+ */
 async function readJson(filePath) {
   if (!filePath) {
     throw new Error("JSON file path is required.");
@@ -577,6 +790,12 @@ async function readJson(filePath) {
   return JSON.parse(await fs.readFile(filePath, "utf8"));
 }
 
+/**
+ * Reads a required environment variable.
+ * @param {string} envName - The environment variable name.
+ * @param {string} configField - The configuration field associated with the variable name.
+ * @returns {string} The environment variable value.
+ */
 function readRequiredEnv(envName, configField) {
   if (!envName) {
     throw new Error(`${configField} must name an environment variable.`);
@@ -590,6 +809,13 @@ function readRequiredEnv(envName, configField) {
   return value;
 }
 
+/**
+ * Reads a numeric environment variable with a fallback value.
+ * @param {string} envName - The environment variable name.
+ * @param {number} fallback - The value to use when the variable is unset.
+ * @return {number} The parsed environment variable value or fallback.
+ * @throws {Error} If the environment variable value is not a finite number.
+ */
 function readNumberEnv(envName, fallback) {
   if (!envName || !process.env[envName]) {
     return fallback;
@@ -603,6 +829,12 @@ function readNumberEnv(envName, fallback) {
   return value;
 }
 
+/**
+ * Parses a JSON value from an environment variable.
+ * @param {string} envName - The name of the environment variable to read.
+ * @param {*} fallback - The value to return when the variable name or value is missing.
+ * @returns {*} The parsed JSON value or the fallback value.
+ */
 function readJsonEnv(envName, fallback) {
   if (!envName || !process.env[envName]) {
     return fallback;
@@ -611,6 +843,12 @@ function readJsonEnv(envName, fallback) {
   return JSON.parse(process.env[envName]);
 }
 
+/**
+ * Parses a repository identifier into its owner and repository name.
+ * @param {string} repository - The repository identifier in `owner/repo` format.
+ * @returns {{owner: string, repo: string}} The repository owner and name.
+ * @throws {Error} If the repository identifier is missing or does not contain a slash.
+ */
 function parseRepository(repository) {
   if (!repository || !repository.includes("/")) {
     throw new Error("GITHUB_REPOSITORY must be set to owner/repo.");

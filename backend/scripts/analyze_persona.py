@@ -26,6 +26,15 @@ console = Console()
 
 
 def main(argv: list[str] | None = None) -> int:
+    """
+    Generate persona reports and profiles from one or more chat export files.
+    
+    Parameters:
+        argv (list[str] | None): Optional command-line arguments. When omitted, arguments are read from the command line.
+    
+    Returns:
+        int: Exit status code, with 0 indicating successful generation.
+    """
     parser = argparse.ArgumentParser(
         prog="analyze-persona",
         description="合并聊天 JSON / JSONL，生成朋友 persona、风格与作息画像",

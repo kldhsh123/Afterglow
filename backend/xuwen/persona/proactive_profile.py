@@ -240,6 +240,17 @@ def _window_rows_to_sessions(
     friend_name: str,
     self_name: str,
 ) -> list[_WindowSession]:
+    """
+    Group window rows into chronologically ordered sessions with their first and last usable speaker lines.
+    
+    Parameters:
+    	rows (Iterable[dict[str, Any]]): Window rows containing session identifiers, timestamps, and message text.
+    	friend_name (str): Display name used to identify friend messages.
+    	self_name (str): Display name used to identify self messages.
+    
+    Returns:
+    	list[_WindowSession]: Reconstructed sessions ordered by start time, end time, and session identifier.
+    """
     by_session: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         sid = str(row.get("session_id") or "")
@@ -293,6 +304,14 @@ def _window_rows_to_sessions(
 
 
 def _timezone(name: str) -> tzinfo:
+    """Return the time zone identified by a name, falling back to UTC when it is unavailable.
+    
+    Parameters:
+    	name (str): IANA time zone name.
+    
+    Returns:
+    	tzinfo: The requested time zone, or UTC if the name is invalid or unavailable.
+    """
     try:
         return ZoneInfo(name)
     except (ZoneInfoNotFoundError, ValueError):
@@ -301,6 +320,13 @@ def _timezone(name: str) -> tzinfo:
 
 
 def save_proactive_profile(profile: ProactiveProfile, path: Path) -> None:
+    """
+    Save a proactive profile as formatted JSON at the specified path.
+    
+    Parameters:
+    	profile (ProactiveProfile): The profile to serialize.
+    	path (Path): Destination path for the JSON file.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(asdict(profile), ensure_ascii=False, indent=2),

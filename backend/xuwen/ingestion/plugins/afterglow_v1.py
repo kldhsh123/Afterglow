@@ -26,6 +26,15 @@ class AfterglowV1Plugin:
     display_name = "Afterglow Chat v1"
 
     def match(self, payload: dict[str, Any]) -> bool:
+        """
+        Determine whether a payload uses the Afterglow Chat v1 format.
+        
+        Parameters:
+        	payload (dict[str, Any]): Payload to inspect.
+        
+        Returns:
+        	bool: `true` if the payload is a valid Afterglow Chat v1 payload, `false` otherwise.
+        """
         canonical = _canonical_payload(payload)
         if canonical is None:
             return False
@@ -41,6 +50,19 @@ class AfterglowV1Plugin:
         payload: dict[str, Any],
         settings: Settings,
     ) -> list[NormalizedMessage]:
+        """
+        Parse a private Afterglow Chat payload into normalized messages.
+        
+        Parameters:
+        	payload (dict[str, Any]): Afterglow Chat JSON or JSONL-derived payload.
+        	settings (Settings): Import settings used to infer sender roles.
+        
+        Returns:
+        	list[NormalizedMessage]: Messages ordered by timestamp and sequence.
+        
+        Raises:
+        	ParseError: If the payload cannot be recognized, is not a private conversation, or lacks a messages array.
+        """
         canonical = _canonical_payload(payload)
         if canonical is None:
             raise ParseError("JSONL 不符合 Afterglow Chat 格式")
@@ -75,6 +97,15 @@ class AfterglowV1Plugin:
         return messages
 
     def inspect(self, payload: dict[str, Any]) -> ImportInspection:
+        """
+        Inspect an Afterglow Chat payload and identify its participants and message count.
+        
+        Parameters:
+        	payload (dict[str, Any]): The payload to inspect.
+        
+        Returns:
+        	ImportInspection: Inspection details including the detected format, identity candidates, and total message count.
+        """
         source_is_jsonl = jsonl_records(payload) is not None
         canonical = _canonical_payload(payload)
         if canonical is None:
@@ -120,6 +151,15 @@ class AfterglowV1Plugin:
         )
 
     def extract_image_refs(self, payload: dict[str, Any]) -> list[ImportImageRef]:
+        """
+        Extract image attachment references from message payloads.
+        
+        Parameters:
+            payload (dict[str, Any]): Afterglow Chat JSON or JSONL-derived payload.
+        
+        Returns:
+            list[ImportImageRef]: Image references containing each message ID and attachment name.
+        """
         canonical = _canonical_payload(payload)
         if canonical is None:
             return []
@@ -140,6 +180,15 @@ class AfterglowV1Plugin:
 
 
 def _canonical_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """
+    Normalize a canonical payload or supported JSONL records into a standard payload structure.
+    
+    Parameters:
+    	payload (dict[str, Any]): A canonical payload or JSONL-derived input containing Afterglow records.
+    
+    Returns:
+    	dict[str, Any] | None: The normalized payload, or `None` if the records do not match a supported structure.
+    """
     records = jsonl_records(payload)
     if records is None:
         return payload
@@ -180,6 +229,15 @@ def _canonical_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _build_participant_roles(participants: Any) -> dict[str, SenderRole]:
+    """
+    Builds a mapping from participant identifiers to their recognized sender roles.
+    
+    Parameters:
+    	participants (Any): Participant records to inspect.
+    
+    Returns:
+    	dict[str, SenderRole]: A mapping of participant identifiers to sender roles.
+    """
     roles: dict[str, SenderRole] = {}
     if not isinstance(participants, list):
         return roles
@@ -200,6 +258,18 @@ def _parse_one(
     participant_roles: dict[str, SenderRole],
     fallback_seq: int,
 ) -> NormalizedMessage:
+    """
+    Convert a raw message record into a normalized message.
+    
+    Parameters:
+        raw (dict[str, Any]): Raw message data.
+        settings (Settings): Import settings used to infer the sender role.
+        participant_roles (dict[str, SenderRole]): Participant UID-to-role mappings.
+        fallback_seq (int): Sequence number used when the message lacks one.
+    
+    Returns:
+        NormalizedMessage: The normalized message representation.
+    """
     sender_uid = str(raw.get("sender_uid") or raw.get("senderUid") or "")
     sender_name = str(raw.get("sender_name") or raw.get("senderName") or "")
     system = _parse_bool(raw.get("system", False))

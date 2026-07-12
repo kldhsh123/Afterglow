@@ -331,15 +331,18 @@ async def inspect_upload(
     settings: Settings = Depends(_settings_dep),
     file: UploadFile = File(...),
 ) -> dict[str, Any]:
-    """单文件嗅探：识别 JSON / JSONL 格式和双方候选身份，不入库不保留。
-
-    用于配置向导第 1 步"从聊天文件识别"按钮。返回结构：
-        {
-          "format": "<plugin-defined>" | "unknown",
-          "total_messages": int,
-          "candidates": [{ name, uid, role_hint: "self"/"friend"/"unknown" }, ...],
-          "error": str | ""
-        }
+    """
+    Identify the chat file format and candidate participant identities without importing the file.
+    
+    Parameters:
+        file (UploadFile): Chat file to inspect.
+    
+    Returns:
+        dict[str, Any]: Inspection details including the format, human-readable format label,
+            message count, candidate identities, and any inspection error.
+    
+    Raises:
+        HTTPException: If the uploaded file exceeds the maximum allowed size.
     """
     upload_dir = Path(settings.config_ui_uploads_dir)
     upload_dir.mkdir(parents=True, exist_ok=True)
@@ -465,10 +468,18 @@ async def start_import(
     payload: StartImportPayload,
     settings: Settings = Depends(_settings_dep),
 ) -> dict[str, Any]:
-    """启动后台导入任务。
-
-    并发兜底：如果已经有进行中的导入任务，直接返回它的 task_id，
-    防止前端疯狂点击触发多个后台 task 并发写库。
+    """
+    Start a background import task for uploaded files.
+    
+    Parameters:
+    	payload (StartImportPayload): Import files and their corresponding display names.
+    	settings (Settings): Application settings used to locate the upload directory and run the import.
+    
+    Returns:
+    	dict[str, Any]: The task ID, current status, and whether an existing active task was reused.
+    
+    Raises:
+    	HTTPException: If no files are provided, a file is outside the upload directory, or a requested file does not exist.
     """
     if not payload.files:
         raise HTTPException(status_code=400, detail="未提供文件")

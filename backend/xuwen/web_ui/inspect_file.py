@@ -27,6 +27,15 @@ class InspectResult:
 
 
 def inspect_chat_file(path: Path) -> InspectResult:
+    """
+    Inspect a chat import file and identify candidate identities.
+    
+    Parameters:
+        path (Path): Path to the chat import file.
+    
+    Returns:
+        InspectResult: Detected format, identity candidates, message count, and any inspection error.
+    """
     try:
         payload = load_qq_json(path)
         plugin = detect_plugin(payload)

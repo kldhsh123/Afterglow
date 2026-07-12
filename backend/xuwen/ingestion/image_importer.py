@@ -80,6 +80,23 @@ async def import_history_images(
     vision_client: VisionClient | None = None,
     plugin_name: str | None = None,
 ) -> ImageImportReport:
+    """
+    Import image references from chat history, generate descriptions, and store searchable image records.
+    
+    Parameters:
+        export_dir (str | Path): Directory containing chat exports and image files.
+        settings (Settings): Import, vision, and storage configuration.
+        store (MemoryStore | None): Optional persistence store.
+        embedder (EmbeddingClient | None): Optional embedding client.
+        vision_client (VisionClient | None): Optional vision client.
+        plugin_name (str | None): Optional preferred ingestion plugin.
+    
+    Returns:
+        ImageImportReport: Counts for discovered references, matched files, descriptions, reused records, and upserted rows.
+    
+    Raises:
+        IngestionError: If the export data is invalid, vision processing is disabled or unconfigured, or an image exceeds the configured size limit.
+    """
     settings.require_identity()
     if not settings.vision_enabled:
         raise IngestionError("未启用视觉理解。请设置 VISION_ENABLED=true。")
@@ -200,6 +217,18 @@ async def import_history_images(
 
 
 def _load_chat_payloads(root: Path) -> list[dict[str, Any]]:
+    """
+    Load recognizable chat payloads from JSON, JSONL, and NDJSON files under a directory.
+    
+    Parameters:
+    	root (Path): Directory to search recursively for chat export files.
+    
+    Returns:
+    	list[dict[str, Any]]: Chat payloads that contain message records and match an ingestion plugin.
+    
+    Raises:
+    	IngestionError: If the path is not a directory, JSONL or NDJSON files cannot be parsed, or no recognizable chat payloads are found.
+    """
     if not root.is_dir():
         raise IngestionError(f"不是目录：{root}")
     candidates = sorted(
@@ -230,6 +259,15 @@ def _load_chat_payloads(root: Path) -> list[dict[str, Any]]:
 
 
 def _safe_name(value: str) -> str:
+    """
+    Extract a safe filename component from a path-like value.
+    
+    Parameters:
+        value (str): Path-like value to normalize.
+    
+    Returns:
+        str: The final path component, or an empty string if no valid name exists.
+    """
     if not value:
         return ""
     name = Path(value.replace("\\", "/")).name
@@ -237,6 +275,15 @@ def _safe_name(value: str) -> str:
 
 
 def _index_image_files(root: Path) -> dict[str, list[Path]]:
+    """
+    Build an index of supported image files under a directory.
+    
+    Parameters:
+        root (Path): Directory to search recursively.
+    
+    Returns:
+        dict[str, list[Path]]: Mapping of lowercase filenames to matching file paths.
+    """
     index: dict[str, list[Path]] = {}
     for path in root.rglob("*"):
         if path.is_file() and path.suffix.lower() in _IMAGE_EXTS:
@@ -249,6 +296,17 @@ def _find_image_file(
     image_files: dict[str, list[Path]],
     image_name: str,
 ) -> Path | None:
+    """
+    Find an image file by relative path or indexed filename.
+    
+    Parameters:
+        root (Path): Root directory used to resolve relative image paths.
+        image_files (dict[str, list[Path]]): Indexed image files keyed by lowercase filename.
+        image_name (str): Image path or filename to locate.
+    
+    Returns:
+        Path | None: The matching image path, or None if no supported image file is found.
+    """
     relative = image_name.replace("\\", "/").strip().lstrip("/")
     if relative:
         candidate = (root / relative).resolve()
