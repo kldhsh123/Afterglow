@@ -2,9 +2,9 @@
 # https://github.com/AstrBotDevs/AstrBot/tree/master/.github/ISSUE_TEMPLATE
 # Modified for Afterglow's feature request workflow.
 name: '🎉 功能建议'
-title: "[Feature]"
+title: "[功能建议]"
 description: 提交建议帮助我们改进。
-labels: [ "enhancement" ]
+labels: [ "增强" ]
 body:
   - type: markdown
     attributes:

@@ -9,7 +9,7 @@
       "name": "Bug report"
     },
     {
-      "label": "enhancement",
+      "label": "增强",
       "path": ".github/ISSUE_TEMPLATE/feature-request.yml",
       "name": "Feature request"
     }
