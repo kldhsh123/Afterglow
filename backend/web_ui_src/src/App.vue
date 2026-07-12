@@ -32,6 +32,7 @@ const form = reactive({
   OPENAI_BASE_URL: '',
   OPENAI_API_KEY: '',
   CHAT_MODEL: '',
+  CHAT_API_PROTOCOL: 'chat_completions' as 'chat_completions' | 'responses',
   EMBEDDING_API_URL: '',
   EMBEDDING_API_KEY: '',
   EMBEDDING_MODEL: '',
@@ -114,7 +115,12 @@ const skipLabelCheck = ref(false)
 // 字段变化 → 清空对应的 test 结果与 skip 标志，强迫用户重测/重勾
 // （防止"先填错→失败→跳过→改字段"留下错误的放行状态）。
 watch(
-  () => [form.OPENAI_BASE_URL, form.OPENAI_API_KEY, form.CHAT_MODEL],
+  () => [
+    form.OPENAI_BASE_URL,
+    form.OPENAI_API_KEY,
+    form.CHAT_MODEL,
+    form.CHAT_API_PROTOCOL,
+  ],
   () => {
     chatTest.value = null
     skipChatCheck.value = false
@@ -376,7 +382,12 @@ const chunkingStrategyLocked = computed<boolean>(() => {
 async function testChat() {
   chatTesting.value = true; chatTest.value = null
   try {
-    chatTest.value = await api.testChat(form.OPENAI_BASE_URL, form.OPENAI_API_KEY, form.CHAT_MODEL)
+    chatTest.value = await api.testChat(
+      form.OPENAI_BASE_URL,
+      form.OPENAI_API_KEY,
+      form.CHAT_MODEL,
+      form.CHAT_API_PROTOCOL,
+    )
   } catch (e) {
     chatTest.value = { ok: false, message: (e as Error).message }
   } finally { chatTesting.value = false }
@@ -626,6 +637,7 @@ async function saveConfig(opts: { silent?: boolean } = {}): Promise<boolean> {
     putStr('OPENAI_BASE_URL', form.OPENAI_BASE_URL)
     putStr('OPENAI_API_KEY', form.OPENAI_API_KEY)
     putStr('CHAT_MODEL', form.CHAT_MODEL)
+    putStr('CHAT_API_PROTOCOL', form.CHAT_API_PROTOCOL)
     putStr('EMBEDDING_API_URL', form.EMBEDDING_API_URL)
     putStr('EMBEDDING_API_KEY', form.EMBEDDING_API_KEY)
     putStr('EMBEDDING_MODEL', form.EMBEDDING_MODEL)
@@ -1204,6 +1216,16 @@ onMounted(async () => {
                   class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                          border border-ink/10 dark:border-night-text/10 outline-none
                          focus:ring-2 focus:ring-accent-soft font-mono text-sm" />
+              </label>
+              <label class="block">
+                <span class="text-sm">API 协议</span>
+                <select v-model="form.CHAT_API_PROTOCOL"
+                  class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
+                         border border-ink/10 dark:border-night-text/10 outline-none
+                         focus:ring-2 focus:ring-accent-soft font-mono text-sm">
+                  <option value="chat_completions">Chat Completions（兼容性最好）</option>
+                  <option value="responses">Responses（适配仅支持该端点的服务）</option>
+                </select>
               </label>
               <label class="block">
                 <span class="text-sm">模型名</span>

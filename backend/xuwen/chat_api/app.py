@@ -60,7 +60,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         store.ensure_tables()
 
         embedder = EmbeddingClient(resolved_settings)
-        llm = LLMClient(resolved_settings)
+        llm = LLMClient(
+            resolved_settings,
+            api_protocol=resolved_settings.chat_api_protocol,
+        )
         # life / response_policy / query_rewrite / rerank 都是 fail-open 设计：
         # 单次失败立刻退快路径（缓存 / 规则层 / 原 query / RRF 顺序），重试无意义只会放大延迟。
         # 主聊天 llm 保留默认 max_retries=3，因为它没有兜底。
