@@ -2,12 +2,13 @@
 """离线生成 persona 卡片与报告。
 
 用法：
-    uv run python scripts/analyze_persona.py <path-to-qq-json>
+    uv run python scripts/analyze_persona.py <chat-json-or-jsonl> [more-files ...]
 
-会生成三个文件到 PERSONA_DATA_DIR：
+会生成四个文件到 PERSONA_DATA_DIR：
     - persona_report.json（完整统计）
     - persona_card.md     （供 prompt 模板使用的简洁卡片）
     - persona_style_profile.json（按用户话题分桶的真实回应风格）
+    - circadian_profile.json（基于全部文件的作息画像）
 """
 
 from __future__ import annotations
@@ -19,17 +20,7 @@ from pathlib import Path
 from rich.console import Console
 
 from xuwen.config import get_settings
-from xuwen.ingestion.cleaner import Cleaner
-from xuwen.ingestion.parser import load_qq_json, parse_messages
-from xuwen.ingestion.splitter import split_sessions
-from xuwen.persona.analyzer import analyze_persona
-from xuwen.persona.card import render_persona_card, save_persona_card, save_persona_report
-from xuwen.persona.circadian import (
-    CIRCADIAN_PROFILE_FILENAME,
-    compute_circadian_profile,
-    save_circadian_profile,
-)
-from xuwen.persona.style_profile import build_style_profile, save_style_profile
+from xuwen.persona.generator import generate_persona_artifacts
 
 console = Console()
 
@@ -37,18 +28,24 @@ console = Console()
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="analyze-persona",
-        description="对 QQ 导出 JSON 做朋友画像统计并生成 persona 卡片",
+        description="合并聊天 JSON / JSONL，生成朋友 persona、风格与作息画像",
     )
     parser.add_argument(
-        "json_path",
+        "json_paths",
         type=Path,
-        help="支持的聊天 JSON，或 QCE / WeFlow JSONL",
+        nargs="+",
+        help="一个或多个 Afterglow Chat / QQChatExporter / WeFlow JSON 或 JSONL",
     )
     parser.add_argument(
         "--out-dir",
         type=Path,
         default=None,
         help="可选：输出目录（默认使用 settings.persona_data_dir）",
+    )
+    parser.add_argument(
+        "--plugin",
+        default=None,
+        help="可选：强制使用指定 ingestion plugin；混合格式时不要设置",
     )
     parser.add_argument(
         "--json-emoji-mode",
@@ -65,50 +62,29 @@ def main(argv: list[str] | None = None) -> int:
     settings.require_identity()
     out_dir = args.out_dir or settings.persona_data_dir
 
-    console.print(f"[bold]加载[/]：{args.json_path}")
-    payload = load_qq_json(args.json_path)
-    parsed = parse_messages(payload, settings)
-    cleaner = Cleaner(settings, json_emoji_mode=args.json_emoji_mode)
-    cleaned = cleaner.clean_many(parsed)
-    sessions = split_sessions(cleaned, settings)
-
-    console.print(f"会话数：{len(sessions)}，清洗后朋友消息总数：" + str(
-        sum(1 for s in sessions for m in s.messages if m.is_friend)
-    ))
-
-    report = analyze_persona(
-        sessions,
-        friend_name=settings.friend_name,
-        self_name=settings.self_name,
+    console.print(f"[bold]加载[/]：{len(args.json_paths)} 个文件")
+    for path in args.json_paths:
+        console.print(f"  {path}")
+    result = generate_persona_artifacts(
+        args.json_paths,
+        settings,
+        out_dir=out_dir,
+        plugin_name=args.plugin,
         json_emoji_mode=args.json_emoji_mode,
     )
-
-    out_dir.mkdir(parents=True, exist_ok=True)
-    json_path = out_dir / "persona_report.json"
-    card_path = out_dir / "persona_card.md"
-
-    save_persona_report(report, json_path)
-    card_md = render_persona_card(report)
-    save_persona_card(card_md, card_path)
-    style_path = out_dir / "persona_style_profile.json"
-    style_profile = build_style_profile(
-        sessions,
-        friend_name=settings.friend_name,
-        self_name=settings.self_name,
-    )
-    save_style_profile(style_profile, style_path)
-
-    # 作息画像
-    circadian_profile = compute_circadian_profile(cleaned)
-    circadian_path = out_dir / CIRCADIAN_PROFILE_FILENAME
-    save_circadian_profile(circadian_profile, circadian_path)
-
-    console.print(f"[green]报告已保存：[/]{json_path}")
-    console.print(f"[green]卡片已保存：[/]{card_path}")
-    console.print(f"[green]场景画像已保存：[/]{style_path}")
     console.print(
-        f"[green]作息画像已保存：[/]{circadian_path}"
-        f"（样本 {circadian_profile.sample_size}，{circadian_profile.summary}）"
+        f"解析消息：{result.parsed_messages}，去重：{result.duplicate_messages}，"
+        f"唯一消息：{result.unique_messages}"
+    )
+    console.print(
+        f"会话数：{result.sessions}，清洗后朋友消息总数：{result.friend_messages}"
+    )
+    console.print(f"[green]报告已保存：[/]{result.report_path}")
+    console.print(f"[green]卡片已保存：[/]{result.card_path}")
+    console.print(f"[green]场景画像已保存：[/]{result.style_profile_path}")
+    console.print(
+        f"[green]作息画像已保存：[/]{result.circadian_path}"
+        f"（样本 {result.circadian_sample_size}，{result.circadian_summary}）"
     )
     return 0
 

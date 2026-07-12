@@ -142,10 +142,6 @@ const importStarting = ref(false)
 const resumeHint = ref('')
 let importSse: EventSource | null = null
 
-// 用户在 step 1 选择的"信息量最大的文件"作为 persona 画像参考
-// 默认指向消息数最多的那个上传文件；用户可改
-const personaSourcePath = ref<string>('')
-
 // localStorage 持久化导入任务，关掉页面也能回来追进度
 const IMPORT_TASK_KEY = 'afterglow.import.activeTaskId'
 const IMPORT_FILES_KEY = 'afterglow.import.uploadedFiles'
@@ -473,13 +469,6 @@ async function onIdentifyFilesPicked(ev: Event) {
     if (self && !form.SELF_UID) { form.SELF_NAME = self.name; form.SELF_UID = self.uid }
     if (friend && !form.FRIEND_UID) { form.FRIEND_NAME = friend.name; form.FRIEND_UID = friend.uid }
 
-    // 自动挑信息量最大的文件作为 persona 参考（如果用户还没指定）
-    if (!personaSourcePath.value && uploadedFiles.value.length) {
-      const best = uploadedFiles.value
-        .slice()
-        .sort((a, b) => (b.total_messages || 0) - (a.total_messages || 0))[0]
-      personaSourcePath.value = best.saved_as
-    }
     persistUploadedFiles(uploadedFiles.value)
   } catch (e) {
     inspectError.value = (e as Error).message
@@ -547,14 +536,7 @@ const unassignedCandidates = computed<IdentityCandidate[]>(() => {
 
 // ---- import flow ----
 function removeUploaded(idx: number) {
-  const removed = uploadedFiles.value.splice(idx, 1)[0]
-  // 如果删的就是 persona 参考，重置默认
-  if (removed && personaSourcePath.value === removed.saved_as) {
-    const best = uploadedFiles.value
-      .slice()
-      .sort((a, b) => (b.total_messages || 0) - (a.total_messages || 0))[0]
-    personaSourcePath.value = best ? best.saved_as : ''
-  }
+  uploadedFiles.value.splice(idx, 1)
   persistUploadedFiles(uploadedFiles.value)
 }
 
@@ -576,8 +558,7 @@ async function startImport() {
     if (!ok) return
     const files = uploadedFiles.value.map(f => f.saved_as)
     const names = uploadedFiles.value.map(f => f.name)
-    const persona = personaSourcePath.value || null
-    const res = await api.startImport(files, names, persona)
+    const res = await api.startImport(files, names)
     persistImportTask(res.task_id)
     resumeHint.value = ''
     subscribeTask(res.task_id)
@@ -588,7 +569,6 @@ async function startImport() {
     if (msg.includes('文件不存在') || msg.includes('not exist') || msg.includes('404')) {
       uploadedFiles.value = []
       persistUploadedFiles([])
-      personaSourcePath.value = ''
       saveError.value = '已上传的文件在后端找不到（可能被清理或后端重启过）。请返回步骤 1 重新选择文件。'
     }
   } finally {
@@ -1025,7 +1005,7 @@ onMounted(async () => {
                 <div class="flex-1">
                   <div class="text-sm font-medium">从聊天文件自动识别（推荐）</div>
                   <div class="text-xs text-ink-soft dark:text-night-text-soft mt-0.5 leading-relaxed">
-                    选一个或多个 QQ / 微信导出的 JSON，或 QQChatExporter / WeFlow 导出的 JSONL，
+                    选择一个或多个 Afterglow Chat、QQChatExporter 或 WeFlow 导出的 JSON / JSONL，
                     文件会直接上传至本机后端并解析双方身份。
                     跨平台或多账号场景可一次选多个文件，UID 自动累加为逗号列表。
                   </div>
@@ -1049,8 +1029,7 @@ onMounted(async () => {
                 <div class="text-xs text-ink-soft dark:text-night-text-soft">
                   已上传 {{ uploadedFiles.length }} 个文件，导入步骤会直接使用。
                   <span v-if="uploadedFiles.length > 1">
-                    勾选下方"画像参考"指定哪份文件用来生成人格画像与作息分析
-                    （默认选消息条数最多的一份）。
+                    人格、风格和作息画像将合并全部文件生成，请确保这些记录属于同一个人。
                   </span>
                 </div>
                 <div v-for="(f, i) in uploadedFiles" :key="f.saved_as"
@@ -1063,14 +1042,6 @@ onMounted(async () => {
                     {{ f.format_label || f.format || '?' }}
                     · {{ f.total_messages || 0 }} 条
                   </span>
-                  <button v-if="uploadedFiles.length > 1" type="button"
-                    @click="personaSourcePath = f.saved_as"
-                    class="px-2 py-0.5 rounded-full border text-xs whitespace-nowrap"
-                    :class="personaSourcePath === f.saved_as
-                      ? 'border-accent bg-accent/10 text-accent dark:border-night-accent dark:text-night-accent dark:bg-night-accent/10'
-                      : 'border-ink/10 dark:border-night-text/10 hover:bg-paper dark:hover:bg-night-bg'">
-                    画像参考
-                  </button>
                   <button type="button" @click="removeUploaded(i)"
                     class="p-0.5 text-ink-soft dark:text-night-text-soft hover:text-warning">
                     <X :size="12" />
@@ -1952,8 +1923,7 @@ onMounted(async () => {
                     <div class="text-sm truncate">{{ f.name }}</div>
                     <div class="text-xs text-ink-soft dark:text-night-text-soft">
                       {{ (f.size / 1024 / 1024).toFixed(2) }} MB ·
-                      {{ f.format === 'qqexporter_v5' ? 'QQ' :
-                         f.format === 'wechat_weflow' ? '微信' : '未识别' }}
+                      {{ f.format_label || f.format || '未识别' }}
                       · {{ f.total_messages || 0 }} 条消息
                     </div>
                   </div>

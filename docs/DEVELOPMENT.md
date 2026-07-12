@@ -284,9 +284,22 @@ uv run python -m xuwen.ingestion.cli import \
 - bare message 分片可以独立导入，但必须满足上述逐行必填字段和身份配置要求。
 - `message.id` 应在整个导出包中稳定且全局唯一。不要依赖 loader 按文件名和行号生成的兜底 ID，否则文件改名、重新分片或 WebUI 重新上传后无法保证幂等去重。
 - 文件边界也是会话切分边界；窗口和 response pair 不会跨文件生成，`conversation.id` 当前不会触发分片合并。
-- WebUI persona 只使用选定的一个文件；CLI 作息画像只使用参数列表中的最后一个文件。主动开聊画像会在批量导入完成后基于全部已入库窗口重建。
+- WebUI 会合并本次任务的全部文件生成人格、风格和作息画像；CLI 批量导入也会基于本次传入的全部文件重建作息画像。主动开聊画像会在批量导入完成后基于全部已入库窗口重建。
 
 如果多个 chunk 属于同一段连续对话，并且需要保留跨 chunk 的上下文、窗口和问答关系，应由转换中间件先按时间排序、去重并合并成一个自包含的 typed JSONL，再交给 Afterglow 导入。
+
+上述限制针对文本向量入库。独立的 persona 聚合器会先跨文件去重，再按 ingestion plugin 分组，
+在每组内部按 `(timestamp_ms, seq, message_id, sender_uid)` 排序并重新切分会话。因此同格式 chunk
+边界两侧的消息可以形成画像回复样本；不同 plugin 的消息会共同参与词频和作息统计，但不会组成
+跨平台 response pair。调用方式：
+
+```bash
+uv run python scripts/analyze_persona.py \
+  chunk-001.jsonl chunk-002.jsonl
+```
+
+所有画像输入必须属于同一个目标人物。跨平台或多账号时，应在 `.env` 的 `SELF_UID` / `FRIEND_UID`
+中配置该人物对应的全部 UID；不同人物必须分开生成画像。
 
 `import-images` 会按图片 bytes 计算 SHA-256 去重，把原图保存到 `.data/images/<sha>.<ext>`，
 对每个唯一 SHA 只调用一次 `VISION_MODEL` 生成摘要，再把“图片摘要 + 消息时间/发送者/上下文 +
