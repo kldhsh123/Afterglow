@@ -197,7 +197,7 @@ def _parse_one(
     if not isinstance(sender, dict):
         sender = {}
 
-    sender_uid = str(sender.get("uid") or "")
+    sender_uid = str(sender.get("uid") or sender.get("uin") or "")
     sender_name = str(sender.get("remark") or sender.get("name") or sender.get("nickname") or "")
     raw_type = str(raw.get("type") or "")
     recalled = _parse_bool(raw.get("recalled", False))
