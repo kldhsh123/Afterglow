@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import logging
 import mimetypes
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -42,6 +43,8 @@ _FAILED_DESCRIPTION_PREFIXES = (
     "[图片：无描述",
 )
 _EXISTING_SHA_REUSE_LIMIT = 5000
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True, frozen=True)
@@ -222,7 +225,13 @@ def _load_chat_payloads(root: Path) -> list[dict[str, Any]]:
         )
         if has_message_records and detect_plugin(payload) is not None:
             payloads.append(payload)
-    if errors:
+    if errors and payloads:
+        logger.warning(
+            "图片导入已跳过 %d 个无法解析的 JSONL：%s",
+            len(errors),
+            "；".join(errors[:5]),
+        )
+    elif errors:
         raise IngestionError("目录中存在无法解析的 JSONL：" + "；".join(errors[:5]))
     if not payloads:
         raise IngestionError("图片导入目录中没有可识别的聊天 JSON / JSONL")

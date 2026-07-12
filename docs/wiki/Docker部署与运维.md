@@ -1,6 +1,6 @@
 # Docker 部署与运维
 
-如果你不想装 Python / uv / 一堆依赖，直接用 Docker 镜像一行起服。和源码部署**共享 `.env` 与 `.data/`**，任意时候切换互不影响。
+如果你不想装 Python / uv / 一堆依赖，直接用 Docker 镜像一行起服。独立 Docker 部署把 `.env` 与 `.data/` 放在宿主机工作目录中，升级容器不会丢失。
 
 ```bash
 mkdir -p ~/afterglow && cd ~/afterglow
@@ -75,17 +75,21 @@ docker compose exec backend bash
 
 ### 与源码部署互操作
 
-完全可以并存，只要别同时跑（端口冲突）：
+完全可以并存，只要别同时跑（端口冲突）。但两种模式默认使用不同目录：普通源码部署读取仓库里的 `backend/.env` 与 `backend/.data/`，下面的独立 Docker 部署读取 `~/afterglow/.env` 与 `~/afterglow/.data/`。
+
+如果希望两种模式复用同一份配置和数据，可以让源码进程也从 Docker 工作目录启动：
 
 ```bash
 # 今天用源码模式
-cd backend && uv run uvicorn xuwen.chat_api.app:create_app --factory --reload
+cd ~/afterglow
+uv run --project /path/to/Afterglow/backend \
+  uvicorn xuwen.chat_api.app:create_app --factory --reload
 
 # 关掉后明天换 Docker
 docker compose up -d
 ```
 
-两边读写同一份 `backend/.env` 与 `backend/.data/`，**无需任何迁移**。
+把 `/path/to/Afterglow` 替换为源码仓库路径。这样两边都会读取 `~/afterglow/.env` 与 `~/afterglow/.data/`；如果仍按快速开始从仓库的 `backend/` 启动，则需要自行复制或迁移这两个目录。
 
 ### 几个 Docker 模式特有的注意点
 

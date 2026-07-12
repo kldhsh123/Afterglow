@@ -649,7 +649,19 @@ class GitHubClient {
       return readJsonEnv("ISSUE_AI_DRY_RUN_COMMENTS_JSON", []);
     }
 
-    return this.request(`/repos/${this.repo.owner}/${this.repo.repo}/issues/${issueNumber}/comments`);
+    const comments = [];
+    const perPage = 100;
+
+    for (let page = 1; ; page += 1) {
+      const pageComments = await this.request(
+        `/repos/${this.repo.owner}/${this.repo.repo}/issues/${issueNumber}/comments?per_page=${perPage}&page=${page}`
+      );
+      comments.push(...pageComments);
+
+      if (pageComments.length < perPage) {
+        return comments;
+      }
+    }
   }
 
   async createComment(issueNumber, body) {

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, cast
@@ -44,6 +45,8 @@ def load_qq_json(path: str | Path) -> dict[str, Any]:
 
 def _load_jsonl_records(path: Path) -> dict[str, Any]:
     records: list[dict[str, Any]] = []
+    # 同一路径重复导入保持稳定，同时隔离不同目录下的同名 JSONL。
+    source_namespace = hashlib.sha256(str(path.resolve()).encode("utf-8")).hexdigest()[:12]
     try:
         with path.open("r", encoding="utf-8-sig") as f:
             for line_no, raw_line in enumerate(f, start=1):
@@ -56,7 +59,10 @@ def _load_jsonl_records(path: Path) -> dict[str, Any]:
                     raise ParseError(f"JSONL 第 {line_no} 行解析失败：{e.msg}") from e
                 if not isinstance(item, dict):
                     raise ParseError(f"JSONL 第 {line_no} 行必须是 JSON 对象")
-                item.setdefault("_jsonlSourceId", f"{path.stem}-{line_no}")
+                item.setdefault(
+                    "_jsonlSourceId",
+                    f"{path.stem}-{source_namespace}-{line_no}",
+                )
                 records.append(item)
     except UnicodeDecodeError as e:
         raise ParseError(f"JSONL 不是有效的 UTF-8 文件：{e}") from e

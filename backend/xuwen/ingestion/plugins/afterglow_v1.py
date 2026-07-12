@@ -124,11 +124,14 @@ class AfterglowV1Plugin:
         if canonical is None:
             return []
         refs: list[ImportImageRef] = []
-        for raw in canonical.get("messages") or []:
+        for idx, raw in enumerate(canonical.get("messages") or []):
             if not isinstance(raw, dict):
                 continue
             message_id = str(
-                raw.get("id") or raw.get("message_id") or raw.get("_jsonlSourceId") or ""
+                raw.get("id")
+                or raw.get("message_id")
+                or raw.get("_jsonlSourceId")
+                or f"local-{idx}"
             )
             for item in raw.get("attachments") or []:
                 if not isinstance(item, dict) or str(item.get("type") or "").lower() != "image":

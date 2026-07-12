@@ -159,6 +159,7 @@ OpenAI 兼容聊天接口，也是第三方程序最应该接入的主接口。
 ```bash
 curl -N http://127.0.0.1:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $XUWEN_API_KEY" \
   -d '{
     "messages": [{"role": "user", "content": "今天有点累"}],
     "stream": true,
@@ -191,7 +192,7 @@ curl -N http://127.0.0.1:8000/v1/chat/completions \
 联网与 URL 读取：
 
 - `WEB_ACCESS_ENABLED=true` 后，用户明确要求“搜索/新闻/最新/天气/价格”等公开实时信息时，后端会调用 Tavily 或 SearXNG，并把摘要注入 prompt。
-- 用户消息里包含 `http://`、`https://` 链接且 `WEB_FETCH_ENABLED=true` 时，后端会直接尝试读取网页标题和正文摘录，并把结果注入 prompt。
+- 用户消息里包含 `http://`、`https://` 链接，且 `WEB_ACCESS_ENABLED=true`、`WEB_FETCH_ENABLED=true` 时，后端会直接尝试读取网页标题和正文摘录，并把结果注入 prompt。
 - 用户只写裸域名（如 `example.com`）时，不会无条件访问。后端会先用本地规则判断是否有“打开/看看/这个网站是什么”等访问意图；命中后再调用小模型确认要访问的候选 URL，确认后按 `https://example.com` 访问。这个小模型复用 `LIFE_API_URL` / `LIFE_API_KEY` / `LIFE_MODEL` 配置。
 - URL 读取只支持普通文本网页，不执行 JavaScript；后端会拒绝本机、内网、链路本地等地址，并限制跳转、响应大小和正文字符数。
 - 相关诊断在 `/debug/stats` 的 `calls.web.search`、`calls.web.search.skipped`、`calls.web.intent`、`calls.web.fetch`、`calls.web.fetch.skipped`。
