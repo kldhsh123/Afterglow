@@ -14,6 +14,13 @@ _MARKDOWN_LINK_RE = re.compile(
     re.IGNORECASE,
 )
 _WIKI_LINK_RE = re.compile(r"\[\[([^\]|]+)\|[^\]]+\]\]")
+_FENCED_CODE_RE = re.compile(
+    r"^(?P<fence>`{3,}|~{3,})[^\n]*\n.*?^(?P=fence)[ \t]*$",
+    re.MULTILINE | re.DOTALL,
+)
+_INLINE_CODE_RE = re.compile(
+    r"(?<!`)(?P<ticks>`+)(?!`)[^\n]*?(?P=ticks)(?!`)"
+)
 
 
 def prepare_wiki(root: Path, wiki_base_url: str) -> int:
@@ -21,7 +28,11 @@ def prepare_wiki(root: Path, wiki_base_url: str) -> int:
     rewritten = 0
     for page in sorted(root.glob("*.md")):
         original = page.read_text(encoding="utf-8")
-        for wiki_page in _WIKI_LINK_RE.findall(original):
+        code_ranges = _code_ranges(original)
+        for wiki_match in _WIKI_LINK_RE.finditer(original):
+            if _position_in_ranges(wiki_match.start(), code_ranges):
+                continue
+            wiki_page = wiki_match.group(1)
             target = root / f"{wiki_page}.md"
             if not target.is_file():
                 raise FileNotFoundError(
@@ -30,14 +41,20 @@ def prepare_wiki(root: Path, wiki_base_url: str) -> int:
 
         def replace_link(match: re.Match[str]) -> str:
             nonlocal rewritten
+            if _position_in_ranges(match.start(), code_ranges):
+                return match.group(0)
             label, relative, anchor = match.groups()
             target = (page.parent / relative).resolve()
             try:
                 target.relative_to(root)
             except ValueError as exc:
-                raise ValueError(f"{page.name}: link escapes Wiki root: {relative}") from exc
+                raise ValueError(
+                    f"{page.name}: link escapes Wiki root: {relative}"
+                ) from exc
             if not target.is_file():
-                raise FileNotFoundError(f"{page.name}: missing Wiki page: {relative}")
+                raise FileNotFoundError(
+                    f"{page.name}: missing Wiki page: {relative}"
+                )
             rewritten += 1
             page_name = "Home" if target.name == "Home.md" else target.stem
             url = f"{wiki_base_url.rstrip('/')}/{quote(page_name)}{anchor or ''}"
@@ -47,6 +64,22 @@ def prepare_wiki(root: Path, wiki_base_url: str) -> int:
         if prepared != original:
             page.write_text(prepared, encoding="utf-8")
     return rewritten
+
+
+def _code_ranges(text: str) -> list[tuple[int, int]]:
+    """Return fenced and inline code ranges that Markdown links must ignore."""
+    ranges = [
+        (match.start(), match.end())
+        for match in _FENCED_CODE_RE.finditer(text)
+    ]
+    for match in _INLINE_CODE_RE.finditer(text):
+        if not _position_in_ranges(match.start(), ranges):
+            ranges.append((match.start(), match.end()))
+    return sorted(ranges)
+
+
+def _position_in_ranges(position: int, ranges: list[tuple[int, int]]) -> bool:
+    return any(start <= position < end for start, end in ranges)
 
 
 def main() -> int:
