@@ -1,0 +1,32 @@
+# 常见问题
+
+**Q：什么是"配置向导"？必须用吗？**
+A：可选但推荐首次使用。后端缺少关键配置时会自动启用 `/config/`，终端打印一次性 token；
+浏览器完成 8 步即可写入 `.env`、导入聊天并生成 persona。手动流程见
+[快速开始](Getting-Started.md#手动配置)。
+
+**Q：必须用阿里云 Qwen3-Embedding 吗？**
+A：不必，任何 OpenAI 兼容的 `/embeddings` 接口都可以。改 `EMBEDDING_API_URL` / `EMBEDDING_MODEL` / `EMBEDDING_DIM` 即可。本地 ollama 也支持。
+
+**Q：必须用 OpenAI 吗？**
+A：不必，任何 OpenAI 兼容的 `/chat/completions` 接口都可以（DeepSeek、Moonshot、Qwen、ollama 等）。改 `OPENAI_BASE_URL` 即可。
+
+**Q：能不能不脱敏 PII？**
+A：可以。`.env` 设 `ENABLE_PII_REDACTION=false`，或通过 `PII_RULES_PATH` 加载自定义规则。
+
+**Q：QQ 号 / URL 为什么不脱敏？**
+A：QQ 号在导出文件里到处都是（uid 关联需要）；URL 是对话语境的一部分（朋友分享 B 站视频是有意义的）。脱敏列表只覆盖一旦泄漏就造成实质损失的"硬隐私"。
+
+**Q：能否导入微信 / Telegram / Discord 数据？**
+A：QQ 推荐使用 QQChatExporter。微信可使用第三方 [WeFlow Releases](https://github.com/hicccc77/weflow-releases/) 导出的 `arkme-json` 或 `ChatLab JSONL`，但其当前发布版不是开源软件，Afterglow 无法审计或担保，请充分评估隐私与安全风险后使用。其它平台可以通过 ingestion plugin 扩展。
+
+**Q：会不会越聊越不像？**
+A：每轮对话都会异步回写到 `live_messages`（`trust_level=0.35`，权重远低于历史 `1.0`）。前端可在设置页"暂停回写"避免污染。
+
+**Q：怎么删除某条记忆？**
+A：调 `DELETE /memory/friend_messages/{chunk_id}` 或 `DELETE /memory/response_pairs/{pair_id}`（软删除）。
+
+**Q：能本地完全离线吗？**
+A：可以。LLM 用 ollama / vLLM；embedding 用 `nomic-embed-text` / `bge` 等本地模型。
+
+---

@@ -31,7 +31,7 @@
 | 想做什么 | 入口 |
 |---|---|
 | 修小 bug / 改文档错别字 | 直接发 PR |
-| 新增导入插件（其它聊天平台） | 看 [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) 的 plugin 章节 |
+| 新增导入插件（其它聊天平台） | 看 [`docs/wiki/Development.md`](docs/wiki/Development.md#导入插件开发) |
 | 改进配置向导 UI | 改 `backend/web_ui_src/`，详见 [`backend/web_ui_src/README.md`](backend/web_ui_src/README.md) |
 | 改主聊天前端（时光信笺） | 改 `frontend/`，详见 [`frontend/README.md`](frontend/README.md) |
 | 新增 / 改 prompt 模板 | `backend/xuwen/persona/templates/*.md.j2` |
@@ -59,7 +59,10 @@ cd ../backend/web_ui_src
 npm install
 ```
 
-更详细的环境配置 / 模型选型 / 数据导入流程见根 [`README.md`](README.md) 和 [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)，本文不重复。
+更详细的环境配置、模型和数据导入流程见
+[`Getting-Started.md`](docs/wiki/Getting-Started.md)、
+[`Configuration.md`](docs/wiki/Configuration.md) 和
+[`Importing-Chat-History.md`](docs/wiki/Importing-Chat-History.md)，本文不重复。
 
 ## 项目结构（贡献者视角）
 
@@ -77,7 +80,7 @@ Afterglow/
 │   ├── web_ui_src/      # 配置向导前端源码（构建到 ../xuwen/web_ui/static/）
 │   └── scripts/         # 离线脚本（import / analyze_persona / eval_retrieval）
 ├── frontend/            # Vue 3 时光信笺主聊天 UI（测试调试用）
-├── docs/                # API.md / DEVELOPMENT.md
+├── docs/wiki/           # 可审查的文档源，Actions 同步到 GitHub Wiki
 └── .github/             # Issue 模板 / FUNDING
 ```
 
@@ -203,6 +206,7 @@ Closes #123
 - [ ] 改了 `frontend/` 跑过 `npx vue-tsc --noEmit`
 - [ ] 没有 `.env` / `.data/` / 真实聊天 JSON 跟着进 PR
 - [ ] 新功能 / bug fix 带了对应的测试
+- [ ] 新增长文档已放入 `docs/wiki/`，并更新 `Home.md` / `_Sidebar.md`
 - [ ] 标题 + 描述讲清楚"做了什么"和"为什么"
 - [ ] 如果对应一个 Issue，PR 里写 `Closes #N`
 

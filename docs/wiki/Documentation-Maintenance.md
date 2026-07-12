@@ -1,0 +1,66 @@
+# 文档与 Wiki 维护
+
+## 单一真源
+
+`docs/wiki/` 是长文档的唯一真源。GitHub Wiki 是 Actions 发布出的只读镜像：
+
+- 文档变更必须随代码 PR 审查。
+- 不要直接编辑 Wiki；下一次同步会覆盖网页修改。
+- 根 `README.md` 承担项目入口、风险摘要、最短启动、导航和可渲染的整体架构概览。
+- `backend/README.md` 只承担 Python 包与容器内可见的后端入口。
+
+`README.md` 中的架构图是一个刻意保留的摘要副本。架构变更时，必须同时更新
+`README.md` 和 `docs/wiki/Architecture.md`。其余长文内容仍只在 `docs/wiki/` 维护。
+
+## 页面组织
+
+GitHub Wiki 页面使用扁平文件名，分类由 `_Sidebar.md` 表达。新增页面时：
+
+1. 在 `docs/wiki/` 新增唯一的 `.md` 文件名，不创建子目录。
+2. 在 `_Sidebar.md` 的对应分类添加链接。
+3. 从 `Home.md` 或相关页面添加可发现入口。
+4. 在本地检查相对链接，再提交 PR。
+
+`_Footer.md`、`_Sidebar.md` 和 `Home.md` 是同步必需文件。
+
+## 首次启用 Wiki
+
+仓库维护者需要完成一次人工初始化：
+
+1. 在 GitHub 仓库 Settings > General > Features 启用 Wikis。
+2. 限制 Wiki 编辑权限为协作者，避免公开网页编辑与镜像冲突。
+3. 在 Wiki 页面创建一个临时 `Home` 页，使 `<repository>.wiki.git` 可以 clone。
+4. 在 Actions 中选择需要发布的分支或 tag，手动运行 `sync-wiki`，确认页面和侧边栏正确。
+
+工作流默认使用短期 `GITHUB_TOKEN`。若仓库策略禁止它写入 Wiki，可创建仅限本仓库、具有必要 Contents
+写权限且设置有效期的 token，保存为 Actions secret `WIKI_TOKEN`。不要使用无限期、跨仓库的 classic PAT。
+
+## 同步行为
+
+`.github/workflows/sync-wiki.yml` 会在文档 PR 中执行只读校验；只有 GitHub Release 正式发布或维护者
+手动触发时才同步 Wiki。Release 同步使用对应 tag 中的文档，手动同步使用运行时选择的分支或 tag。工作流会：
+
+1. 校验源目录、Home、Sidebar、Footer 和符号链接。
+2. clone Wiki 的当前默认分支。
+3. 使用 `rsync --delete` 做严格镜像，删除已经从源目录移除的旧页面。
+4. 在临时 Wiki checkout 中校验内部页面链接，并把仓库相对 `.md` 链接改为 Wiki URL。
+5. 只有存在差异时提交普通 commit 并 push，不使用 force push。
+
+PR 不获得 Wiki 写权限。发布使用独立 concurrency group，避免两个部署同时写 Wiki；失败时不会修改主仓库。
+
+## 发布预处理脚本
+
+`.github/scripts/prepare_wiki.py` 是 Wiki 发布时的链接校验与转换器。它只使用 Python 标准库，会：
+
+- 确认相对 `.md` 链接和 `[[Page|Label]]` 链接的目标页面存在。
+- 拒绝逃离 Wiki 根目录的路径。
+- 在 runner 的临时 Wiki checkout 中把仓库相对链接改成完整 Wiki URL。
+
+脚本不会修改 `docs/wiki/` 源文件。Actions 通过 `actions/setup-python` 显式配置 Python 3.12 后执行，
+不依赖 runner 默认 Python 版本，也不需要安装第三方包。
+
+参考：
+
+- [GitHub Wiki 文档](https://docs.github.com/en/communities/documenting-your-project-with-wikis)
+- [GITHUB_TOKEN](https://docs.github.com/en/actions/concepts/security/github_token)
+- [Actions concurrency](https://docs.github.com/en/actions/concepts/workflows-and-actions/concurrency)
