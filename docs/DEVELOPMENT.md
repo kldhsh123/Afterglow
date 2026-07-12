@@ -65,14 +65,18 @@ backend/xuwen/
 
 | name | display_name | 输入格式 | 识别特征 |
 |---|---|---|---|
-| `afterglow_v1` | Afterglow Chat v1 | Afterglow 专用私聊 JSON | `afterglow.format = "afterglow-chat"` 且 `afterglow.version` 为 `1.x` |
-| `qqexporter_v5` | QQChatExporter V5 | QQ 导出 JSON | `metadata.name` 含 `qqchatexporter` 或 `chatInfo.selfUid` 存在 |
-| `wechat_weflow` | WeChat ([WeFlow](https://github.com/hicccc77/WeFlow) arkme-json) | 微信 [WeFlow](https://github.com/hicccc77/WeFlow) 导出 JSON | `weflow.format = "arkme-json"` 或 `session + senders + messages` 同时存在 |
+| `afterglow_v1` | Afterglow Chat v1 | Afterglow 专用私聊 JSON/JSONL | JSON metadata 或 typed/bare JSONL records |
+| `qqexporter_v5` | QQChatExporter | QQChatExporter JSON/JSONL | metadata/chatInfo 或 JSONL message records |
+| `wechat_weflow` | WeChat (WeFlow) | [WeFlow Releases](https://github.com/hicccc77/weflow-releases/) 导出 JSON/JSONL | `arkme-json` 或 ChatLab typed JSONL records |
 
-> **微信导入提醒**：[WeFlow](https://github.com/hicccc77/WeFlow) 是 Afterglow 所支持的微信导入适配器，Afterglow 的默认微信导入插件依赖此项目。
+> **微信导入提醒**：[WeFlow Releases](https://github.com/hicccc77/weflow-releases/) 当前发布版不是开源软件，
+> Afterglow 无法审计或担保。开发和测试时不要使用未脱敏的真实聊天数据。
 
 CLI 在导入时按注册顺序遍历 `match()`，第一个命中的负责 `parse()`；
 也可以用 `--plugin <name>` 强制指定。
+
+通用 loader 只负责把 JSONL 解码为中性 records，不包含任何平台字段判断。plugin 使用
+`jsonl_records(payload)` 取得逐行对象，并在自身模块内完成格式识别与规范化。
 
 插件接口在 `backend/xuwen/ingestion/plugins/__init__.py`：
 
@@ -92,13 +96,27 @@ class ImportPlugin(Protocol):
         ...
 ```
 
+配置向导身份识别和历史图片引用是独立可选能力。需要这些功能的 plugin 还应实现：
+
+```python
+class InspectableImportPlugin(Protocol):
+    def inspect(self, payload: dict[str, Any]) -> ImportInspection: ...
+
+class ImageReferenceImportPlugin(Protocol):
+    def extract_image_refs(self, payload: dict[str, Any]) -> list[ImportImageRef]: ...
+```
+
+格式名称、候选身份和图片字段解释都应留在 plugin 内；不要在 `parser.py`、WebUI 或
+`image_importer.py` 添加平台专用分支。
+
 新增一个导入格式的步骤：
 
 1. 在 `backend/xuwen/ingestion/plugins/` 下新增模块，例如 `wechat_xxx.py`。
 2. 实现 `name`、`display_name`、`match()`、`parse()`。
-3. 在 `backend/xuwen/ingestion/parser.py` 注册插件。
-4. 添加单元测试，覆盖自动识别、强制指定和关键消息类型。
-5. 用真实脱敏样例跑一次导入。
+3. 需要向导自动识别身份时实现 `inspect()`；需要历史图片导入时实现 `extract_image_refs()`。
+4. 在 `backend/xuwen/ingestion/parser.py` 注册插件。
+5. 添加单元测试，覆盖自动识别、强制指定和关键消息类型。
+6. 用真实脱敏样例跑一次导入。
 
 最小示例：
 
@@ -124,11 +142,7 @@ class ExamplePlugin:
         messages: list[NormalizedMessage] = []
         for idx, raw in enumerate(payload.get("messages") or []):
             sender_uid = str(raw.get("sender_id") or "")
-            role = (
-                SenderRole.SELF
-                if sender_uid == settings.self_uid
-                else SenderRole.FRIEND
-            )
+            role: SenderRole = "self" if sender_uid == settings.self_uid else "friend"
             messages.append(
                 NormalizedMessage(
                     message_id=str(raw.get("id") or idx),
@@ -167,11 +181,19 @@ uv run python -m xuwen.ingestion.cli plugins
 ```bash
 uv run python -m xuwen.ingestion.cli import export.json --plugin qqexporter_v5
 uv run python -m xuwen.ingestion.cli import export.json --plugin wechat_weflow
+uv run python -m xuwen.ingestion.cli import export.jsonl --plugin afterglow_v1
 ```
 
 ### Afterglow Chat v1
 
-Afterglow v1 是给第三方中间件使用的稳定中间格式，目前只支持私聊：
+Afterglow v1 是给第三方中间件使用的稳定、平台无关中间格式，目前只支持私聊。可以使用 AI 编写
+一次性中间件，将任意来源的聊天记录转换为该格式，以快速复用 Afterglow 的导入流水线。
+
+转换中间件适合验证和个人迁移；长期维护、公开使用或需要完整保留源平台语义时，仍建议实现独立
+ingestion plugin 并提交 PR。plugin 可以把格式识别、身份嗅探、消息解析和图片引用提取封装在同一处，
+不会因中间格式转换损失信息。
+
+JSON 格式：
 
 ```json
 {
@@ -234,6 +256,37 @@ export-dir/
 ```bash
 uv run python -m xuwen.ingestion.cli import-images export-dir --plugin afterglow_v1
 ```
+
+JSONL 同时支持两种形式。推荐使用 `_type=header/participant/message` 的 typed records：
+
+```jsonl
+{"_type":"header","afterglow":{"format":"afterglow-chat","version":"1.0"},"conversation":{"id":"conv-001","type":"private"}}
+{"_type":"participant","uid":"me","name":"我","role":"self"}
+{"_type":"participant","uid":"friend","name":"TA","role":"friend"}
+{"_type":"message","id":"m1","seq":1,"timestamp_ms":1783625485000,"sender_uid":"friend","sender_name":"TA","kind":"text","text":"今天怎么样"}
+```
+
+也可以每行直接放一个 message 对象。裸 message JSONL 的每一行都必须包含
+`sender_uid`（或 `senderUid`）以及 `timestamp_ms`（或 `timestamp`）；由于没有
+`participants`，身份必须由消息的 `sender_role`、`.env` 中的 UID，或配置向导中的身份分配确定。
+
+一次导入可以传入多个 Afterglow JSONL：
+
+```bash
+uv run python -m xuwen.ingestion.cli import \
+  chunk-001.jsonl chunk-002.jsonl \
+  --plugin afterglow_v1
+```
+
+多文件导入当前是批量逐文件处理，而不是先拼接为一个逻辑 JSONL 流：
+
+- 每个 typed JSONL 文件必须自包含一个 `header`，并且只能在其后包含 `participant` 和 `message`；建议每个分片重复完整的 `participants`。
+- bare message 分片可以独立导入，但必须满足上述逐行必填字段和身份配置要求。
+- `message.id` 应在整个导出包中稳定且全局唯一。不要依赖 loader 按文件名和行号生成的兜底 ID，否则文件改名、重新分片或 WebUI 重新上传后无法保证幂等去重。
+- 文件边界也是会话切分边界；窗口和 response pair 不会跨文件生成，`conversation.id` 当前不会触发分片合并。
+- WebUI persona 只使用选定的一个文件；CLI 作息画像只使用参数列表中的最后一个文件。主动开聊画像会在批量导入完成后基于全部已入库窗口重建。
+
+如果多个 chunk 属于同一段连续对话，并且需要保留跨 chunk 的上下文、窗口和问答关系，应由转换中间件先按时间排序、去重并合并成一个自包含的 typed JSONL，再交给 Afterglow 导入。
 
 `import-images` 会按图片 bytes 计算 SHA-256 去重，把原图保存到 `.data/images/<sha>.<ext>`，
 对每个唯一 SHA 只调用一次 `VISION_MODEL` 生成摘要，再把“图片摘要 + 消息时间/发送者/上下文 +

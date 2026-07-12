@@ -51,12 +51,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    p_import = sub.add_parser("import", help="把导出的 JSON 导入向量库")
+    p_import = sub.add_parser("import", help="把导出的 JSON / JSONL 导入向量库")
     p_import.add_argument(
         "json_paths",
         type=Path,
         nargs="+",
-        help="一个或多个导出 JSON 文件路径（自动识别格式，可混合 QQ 和微信）",
+        help="一个或多个导出 JSON / JSONL 文件路径（自动识别格式，可混合 QQ 和微信）",
     )
     p_import.add_argument("--env-file", type=Path, default=None, help="可选：.env 文件路径")
     p_import.add_argument(
@@ -88,7 +88,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_images.add_argument(
         "export_dir",
         type=Path,
-        help="导出目录，必须包含一个 JSON 文件和 resources/images 目录",
+        help="导出目录；自动收集其中的聊天 JSON/JSONL 和图片资源",
     )
     p_images.add_argument("--env-file", type=Path, default=None, help="可选：.env 文件路径")
     p_images.add_argument(
@@ -220,7 +220,7 @@ async def _run_import(args: argparse.Namespace) -> int:
 
     paths: list[Path] = list(args.json_paths)
     if not paths:
-        console.print("[red]错误：至少需要一个 JSON 文件路径。[/red]")
+        console.print("[red]错误：至少需要一个 JSON / JSONL 文件路径。[/red]")
         return 1
 
     multi = len(paths) > 1

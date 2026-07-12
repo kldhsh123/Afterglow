@@ -11,6 +11,12 @@ from typing import Any
 from xuwen.config import Settings
 from xuwen.core.errors import ParseError
 from xuwen.core.models import MessageKind, NormalizedMessage, SenderRole
+from xuwen.ingestion.plugins import (
+    ImportIdentityCandidate,
+    ImportImageRef,
+    ImportInspection,
+    jsonl_records,
+)
 
 
 class AfterglowV1Plugin:
@@ -20,7 +26,10 @@ class AfterglowV1Plugin:
     display_name = "Afterglow Chat v1"
 
     def match(self, payload: dict[str, Any]) -> bool:
-        afterglow = payload.get("afterglow")
+        canonical = _canonical_payload(payload)
+        if canonical is None:
+            return False
+        afterglow = canonical.get("afterglow")
         if not isinstance(afterglow, dict):
             return False
         fmt = str(afterglow.get("format") or "").lower()
@@ -32,17 +41,20 @@ class AfterglowV1Plugin:
         payload: dict[str, Any],
         settings: Settings,
     ) -> list[NormalizedMessage]:
-        conversation = payload.get("conversation")
+        canonical = _canonical_payload(payload)
+        if canonical is None:
+            raise ParseError("JSONL 不符合 Afterglow Chat 格式")
+        conversation = canonical.get("conversation")
         if isinstance(conversation, dict):
             conv_type = str(conversation.get("type") or "private").lower()
             if conv_type != "private":
                 raise ParseError("Afterglow v1 目前只支持 private 私聊导入")
 
-        raw_messages = payload.get("messages")
+        raw_messages = canonical.get("messages")
         if not isinstance(raw_messages, list):
             raise ParseError("payload 中缺少 messages 数组")
 
-        participant_roles = _build_participant_roles(payload.get("participants"))
+        participant_roles = _build_participant_roles(canonical.get("participants"))
         messages: list[NormalizedMessage] = []
         for idx, raw in enumerate(raw_messages):
             if not isinstance(raw, dict):
@@ -61,6 +73,110 @@ class AfterglowV1Plugin:
 
         messages.sort(key=lambda m: (m.timestamp_ms, m.seq))
         return messages
+
+    def inspect(self, payload: dict[str, Any]) -> ImportInspection:
+        source_is_jsonl = jsonl_records(payload) is not None
+        canonical = _canonical_payload(payload)
+        if canonical is None:
+            return ImportInspection("unknown", [], 0, "无法识别 Afterglow Chat 格式")
+        candidates: list[ImportIdentityCandidate] = []
+        participants = canonical.get("participants")
+        if isinstance(participants, list):
+            for item in participants:
+                if not isinstance(item, dict):
+                    continue
+                uid = str(item.get("uid") or "")
+                if not uid:
+                    continue
+                role_raw = str(item.get("role") or "").lower()
+                role = role_raw if role_raw in {"self", "friend"} else "unknown"
+                candidates.append(
+                    ImportIdentityCandidate(
+                        name=str(item.get("name") or uid),
+                        uid=uid,
+                        role_hint=role,  # type: ignore[arg-type]
+                    )
+                )
+        if not candidates:
+            seen: set[str] = set()
+            for message in canonical.get("messages") or []:
+                if not isinstance(message, dict):
+                    continue
+                uid = str(message.get("sender_uid") or message.get("senderUid") or "")
+                if not uid or uid in seen:
+                    continue
+                seen.add(uid)
+                candidates.append(
+                    ImportIdentityCandidate(
+                        name=str(message.get("sender_name") or message.get("senderName") or uid),
+                        uid=uid,
+                    )
+                )
+        return ImportInspection(
+            format="afterglow_jsonl" if source_is_jsonl else "afterglow_v1",
+            candidates=candidates,
+            total_messages=len(canonical.get("messages") or []),
+            format_label="Afterglow Chat JSONL" if source_is_jsonl else "Afterglow Chat",
+        )
+
+    def extract_image_refs(self, payload: dict[str, Any]) -> list[ImportImageRef]:
+        canonical = _canonical_payload(payload)
+        if canonical is None:
+            return []
+        refs: list[ImportImageRef] = []
+        for raw in canonical.get("messages") or []:
+            if not isinstance(raw, dict):
+                continue
+            message_id = str(
+                raw.get("id") or raw.get("message_id") or raw.get("_jsonlSourceId") or ""
+            )
+            for item in raw.get("attachments") or []:
+                if not isinstance(item, dict) or str(item.get("type") or "").lower() != "image":
+                    continue
+                name = str(item.get("name") or item.get("filename") or "")
+                if message_id and name:
+                    refs.append(ImportImageRef(message_id, name))
+        return refs
+
+
+def _canonical_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
+    records = jsonl_records(payload)
+    if records is None:
+        return payload
+    first = records[0]
+    if first.get("_type") == "header":
+        afterglow = first.get("afterglow")
+        if not isinstance(afterglow, dict):
+            return None
+        conversation = first.get("conversation")
+        participants: list[dict[str, Any]] = []
+        messages: list[dict[str, Any]] = []
+        for record in records[1:]:
+            item = {key: value for key, value in record.items() if key != "_type"}
+            if record.get("_type") == "participant":
+                participants.append(item)
+            elif record.get("_type") == "message":
+                messages.append(item)
+            else:
+                return None
+        return {
+            "afterglow": afterglow,
+            "conversation": conversation if isinstance(conversation, dict) else {"type": "private"},
+            "participants": participants,
+            "messages": messages,
+        }
+    if all(
+        ("sender_uid" in record or "senderUid" in record)
+        and ("timestamp_ms" in record or "timestamp" in record)
+        for record in records
+    ):
+        return {
+            "afterglow": {"format": "afterglow-chat", "version": "1.0-jsonl"},
+            "conversation": {"type": "private"},
+            "participants": [],
+            "messages": records,
+        }
+    return None
 
 
 def _build_participant_roles(participants: Any) -> dict[str, SenderRole]:
@@ -104,7 +220,12 @@ def _parse_one(
         kind = MessageKind.PLACEHOLDER
 
     return NormalizedMessage(
-        message_id=str(raw.get("id") or raw.get("message_id") or f"local-{fallback_seq}"),
+        message_id=str(
+            raw.get("id")
+            or raw.get("message_id")
+            or raw.get("_jsonlSourceId")
+            or f"local-{fallback_seq}"
+        ),
         seq=_parse_int(raw.get("seq"), default=fallback_seq),
         timestamp_ms=_parse_int(raw.get("timestamp_ms") or raw.get("timestamp"), default=0),
         sender_uid=sender_uid,

@@ -1,8 +1,8 @@
 """历史聊天图片离线导入。
 
 `import-images <export-dir>` 在普通文本导入完成后手动运行：
-- 从导出目录里的 JSON 提取图片引用；
-- 在 resources/images 中查找原图；
+- 从导出目录里的 JSON / JSONL chunks 提取图片引用；
+- 在整个导出目录中按相对路径或文件名查找原图；
 - 按 sha256 去重保存到 .data/images；
 - 调用 VLM 生成摘要，并写入 history_images 向量表。
 """
@@ -23,7 +23,13 @@ from xuwen.core.errors import IngestionError, ParseError
 from xuwen.core.models import HistoryImageChunk, NormalizedMessage, Session
 from xuwen.ingestion.cleaner import Cleaner
 from xuwen.ingestion.embedder import EmbeddingClient
-from xuwen.ingestion.parser import load_qq_json, parse_messages
+from xuwen.ingestion.parser import detect_plugin, load_qq_json
+from xuwen.ingestion.plugins import (
+    ImageReferenceImportPlugin,
+    ImportImageRef,
+    jsonl_records,
+    select_plugin,
+)
 from xuwen.ingestion.splitter import split_sessions
 from xuwen.memory.schema import TABLE_HISTORY_IMAGES
 from xuwen.memory.store import MemoryStore
@@ -49,12 +55,6 @@ class ImageImportReport:
     skipped_failed_descriptions: int
     skipped_existing_rows: int
     upserted_rows: int
-
-
-@dataclass(slots=True, frozen=True)
-class _ImageRef:
-    message_id: str
-    image_name: str
 
 
 @dataclass(slots=True, frozen=True)
@@ -87,17 +87,19 @@ async def import_history_images(
         raise IngestionError("请配置 VISION_API_URL / VISION_API_KEY 后再导入图片。")
 
     root = Path(export_dir)
-    json_path = _find_single_json(root)
-    images_dir = root / "resources" / "images"
-    if not images_dir.is_dir():
-        raise IngestionError(f"找不到图片目录：{images_dir}")
-
-    payload = load_qq_json(json_path)
-    parsed = parse_messages(payload, settings, plugin_name=plugin_name)
+    payloads = _load_chat_payloads(root)
+    parsed: list[NormalizedMessage] = []
+    image_refs: list[ImportImageRef] = []
+    for payload in payloads:
+        plugin = select_plugin(payload, preferred=plugin_name)
+        parsed.extend(plugin.parse(payload, settings))
+        if isinstance(plugin, ImageReferenceImportPlugin):
+            image_refs.extend(plugin.extract_image_refs(payload))
+    parsed.sort(key=lambda message: (message.timestamp_ms, message.seq))
     cleaned = Cleaner(settings).clean_many(parsed)
     sessions = split_sessions(cleaned, settings)
     msg_index, session_index = _index_messages(sessions)
-    image_refs = _extract_image_refs(payload)
+    image_files = _index_image_files(root)
 
     resolved: list[_ResolvedImageRef] = []
     missing = 0
@@ -105,7 +107,7 @@ async def import_history_images(
         msg = msg_index.get(ref.message_id)
         if msg is None:
             continue
-        path = _find_image_file(images_dir, ref.image_name)
+        path = _find_image_file(root, image_files, ref.image_name)
         if path is None:
             missing += 1
             continue
@@ -122,7 +124,7 @@ async def import_history_images(
             _ResolvedImageRef(
                 message=msg,
                 session_id=session_index[msg.message_id].session_id,
-                image_name=Path(ref.image_name).name,
+                image_name=_safe_name(ref.image_name),
                 path=path,
                 sha=sha,
                 ext=ext,
@@ -197,89 +199,34 @@ async def import_history_images(
     )
 
 
-def _find_single_json(root: Path) -> Path:
+def _load_chat_payloads(root: Path) -> list[dict[str, Any]]:
     if not root.is_dir():
         raise IngestionError(f"不是目录：{root}")
-    json_files = sorted(p for p in root.iterdir() if p.is_file() and p.suffix.lower() == ".json")
-    if len(json_files) != 1:
-        raise IngestionError("图片导入目录必须包含且只包含一个 JSON 文件")
-    return json_files[0]
-
-
-def _extract_image_refs(payload: dict[str, Any]) -> list[_ImageRef]:
-    if _looks_like_afterglow(payload):
-        return _extract_afterglow_refs(payload)
-    if _looks_like_qq(payload):
-        return _extract_qq_refs(payload)
-    raise ParseError("import-images 目前支持 Afterglow v1 和 QQChatExporter V5 图片引用")
-
-
-def _looks_like_afterglow(payload: dict[str, Any]) -> bool:
-    afterglow = payload.get("afterglow")
-    fmt = str(afterglow.get("format") or "").lower() if isinstance(afterglow, dict) else ""
-    version = str(afterglow.get("version") or "") if isinstance(afterglow, dict) else ""
-    return isinstance(afterglow, dict) and fmt == "afterglow-chat" and version.startswith("1.")
-
-
-def _looks_like_qq(payload: dict[str, Any]) -> bool:
-    return isinstance(payload.get("chatInfo"), dict) or isinstance(payload.get("metadata"), dict)
-
-
-def _extract_afterglow_refs(payload: dict[str, Any]) -> list[_ImageRef]:
-    refs: list[_ImageRef] = []
-    for raw in payload.get("messages") or []:
-        if not isinstance(raw, dict):
+    candidates = sorted(
+        path
+        for path in root.rglob("*")
+        if path.is_file() and path.suffix.lower() in {".json", ".jsonl", ".ndjson"}
+    )
+    payloads: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for path in candidates:
+        try:
+            payload = load_qq_json(path)
+        except ParseError as e:
+            if path.suffix.lower() in {".jsonl", ".ndjson"}:
+                errors.append(f"{path.relative_to(root)}：{e}")
             continue
-        message_id = str(raw.get("id") or raw.get("message_id") or "")
-        for item in raw.get("attachments") or []:
-            if not isinstance(item, dict):
-                continue
-            if str(item.get("type") or "").lower() != "image":
-                continue
-            name = _safe_name(str(item.get("name") or item.get("filename") or ""))
-            if message_id and name:
-                refs.append(_ImageRef(message_id=message_id, image_name=name))
-    return refs
-
-
-def _extract_qq_refs(payload: dict[str, Any]) -> list[_ImageRef]:
-    refs: list[_ImageRef] = []
-    for raw in payload.get("messages") or []:
-        if not isinstance(raw, dict):
-            continue
-        message_id = str(raw.get("id") or "")
-        content = raw.get("content") if isinstance(raw.get("content"), dict) else {}
-        candidates: list[str] = []
-        for resource in content.get("resources") or []:
-            if isinstance(resource, dict) and str(resource.get("type") or "").lower() == "image":
-                candidates.append(_local_resource_name(resource))
-        for element in content.get("elements") or []:
-            if not isinstance(element, dict) or str(element.get("type") or "").lower() != "image":
-                continue
-            data = element.get("data") if isinstance(element.get("data"), dict) else {}
-            candidates.append(_local_resource_name(data))
-        for value in candidates:
-            name = _safe_name(value)
-            if message_id and name:
-                refs.append(_ImageRef(message_id=message_id, image_name=name))
-    # 同一条 QQ 消息 resources/elements 可能重复描述同一张图。
-    seen: set[tuple[str, str]] = set()
-    out: list[_ImageRef] = []
-    for ref in refs:
-        key = (ref.message_id, ref.image_name.lower())
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(ref)
-    return out
-
-
-def _local_resource_name(raw: dict[str, Any]) -> str:
-    for key in ("filename", "localPath"):
-        value = str(raw.get(key) or "")
-        if value:
-            return value
-    return ""
+        has_message_records = (
+            jsonl_records(payload) is not None
+            or isinstance(payload.get("messages"), list)
+        )
+        if has_message_records and detect_plugin(payload) is not None:
+            payloads.append(payload)
+    if errors:
+        raise IngestionError("目录中存在无法解析的 JSONL：" + "；".join(errors[:5]))
+    if not payloads:
+        raise IngestionError("图片导入目录中没有可识别的聊天 JSON / JSONL")
+    return payloads
 
 
 def _safe_name(value: str) -> str:
@@ -289,21 +236,39 @@ def _safe_name(value: str) -> str:
     return name if name not in {"", ".", ".."} else ""
 
 
-def _find_image_file(images_dir: Path, image_name: str) -> Path | None:
+def _index_image_files(root: Path) -> dict[str, list[Path]]:
+    index: dict[str, list[Path]] = {}
+    for path in root.rglob("*"):
+        if path.is_file() and path.suffix.lower() in _IMAGE_EXTS:
+            index.setdefault(path.name.lower(), []).append(path)
+    return index
+
+
+def _find_image_file(
+    root: Path,
+    image_files: dict[str, list[Path]],
+    image_name: str,
+) -> Path | None:
+    relative = image_name.replace("\\", "/").strip().lstrip("/")
+    if relative:
+        candidate = (root / relative).resolve()
+        try:
+            candidate.relative_to(root.resolve())
+        except ValueError:
+            candidate = root
+        if candidate.is_file() and candidate.suffix.lower() in _IMAGE_EXTS:
+            return candidate
+
     name = _safe_name(image_name)
     if not name:
         return None
-    exact = images_dir / name
-    if exact.is_file() and exact.suffix.lower() in _IMAGE_EXTS:
-        return exact
     lowered = name.lower()
-    candidates = [p for p in images_dir.iterdir() if p.is_file() and p.suffix.lower() in _IMAGE_EXTS]
-    for p in candidates:
-        if p.name.lower() == lowered:
-            return p
-    for p in candidates:
-        if p.name.lower().endswith(f"_{lowered}"):
-            return p
+    exact = image_files.get(lowered)
+    if exact:
+        return exact[0]
+    for indexed_name, candidates in image_files.items():
+        if indexed_name.endswith(f"_{lowered}") and candidates:
+            return candidates[0]
     return None
 
 

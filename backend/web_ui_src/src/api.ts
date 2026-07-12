@@ -130,6 +130,7 @@ export interface UploadedFile {
   saved_as: string
   size: number
   format: string
+  format_label?: string
   total_messages?: number
   candidates?: IdentityCandidate[]
   error?: string
@@ -142,7 +143,8 @@ export interface IdentityCandidate {
 }
 
 export interface InspectResult {
-  format: 'qqexporter_v5' | 'wechat_weflow' | 'unknown'
+  format: string
+  format_label: string
   total_messages: number
   candidates: IdentityCandidate[]
   error: string

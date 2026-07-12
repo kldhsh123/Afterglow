@@ -275,7 +275,7 @@ mindmap
 | Node.js | ≥ 20 | 前端构建 | **仅用前端时需要**；纯 API 用户可不装 |
 | [uv](https://github.com/astral-sh/uv) | latest | Python 包管理 | 推荐 |
 | [pnpm](https://pnpm.io/) | latest | Node 包管理 | 仅前端 |
-| [QQChatExporter V5](https://github.com/shuakami/qq-chat-exporter) 导出纯文本 JSON | — | 真人聊天数据源 | 至少一份；plugin 会自动识别格式 |
+| [QQChatExporter](https://github.com/shuakami/qq-chat-exporter) 导出纯文本 JSON/JSONL | — | 真人聊天数据源 | 至少一份；plugin 会自动识别格式 |
 
 ### 1. 准备模型（API）
 
@@ -373,7 +373,7 @@ cp .env.example .env
 用编辑器打开 `.env`，按文件内注释填写：
 
 - **身份信息** —— `SELF_NAME` / `SELF_UID` / `FRIEND_NAME` / `FRIEND_UID`
-  - QQ：`SELF_UID` / `FRIEND_UID` 填 QQChatExporter 导出 JSON 里的 `selfUid` / 对方 `sender.uid`（`u_xxx` 形式）
+  - QQ：`SELF_UID` / `FRIEND_UID` 填 QQChatExporter 导出文件里的 `selfUid` / 对方 `sender.uid`（`u_xxx` 形式）
   - `FRIEND_*` 永远是**你想让 AI 模仿的那个人**，不是你自己
   - **多账号**：同一个人有多个 UID（主号 + 小号），直接在 `SELF_UID` / `FRIEND_UID` 里**用逗号分隔**列上所有 UID，导入时会被视为同一身份。例：`FRIEND_UID=u_qq_friend,u_qq_friend_alt`
 - **主聊天模型** —— `OPENAI_BASE_URL` / `OPENAI_API_KEY` / `CHAT_MODEL`
@@ -405,7 +405,7 @@ uv run python -m xuwen.ingestion.cli import 已处理的聊天记录.json \
 
 `--json-emoji-mode` 在消息导入和下一步 persona 分析中必须保持一致。
 
-- CLI 自动识别 Afterglow v1 / QQChatExporter / WeFlow 微信 JSON 格式
+- CLI 自动识别 Afterglow Chat / QQChatExporter / WeFlow 微信的 JSON 与 JSONL 格式
 - 默认只做轻量文本导入时，QQChatExporter 建议在高级选项勾选"仅保留文件元数据，不下载文件"
 - 需要历史图片检索时，必须另外保留实际包含 `resources/images/` 原图的导出目录
 - 多账号场景：在 `.env` 用 `SELF_UID=u_qq,u_qq_alt` 和 `FRIEND_UID=u_qq_friend,u_qq_friend_alt`（**逗号分隔**）把全部 UID 列出来
@@ -413,14 +413,62 @@ uv run python -m xuwen.ingestion.cli import 已处理的聊天记录.json \
 - 开启 `LABELING_ENABLED=true` 时会接着自动打标
 - 中断 / 限流失败不丢导入数据，之后可续跑：`uv run python -m xuwen.ingestion.cli label`
 
+QQChatExporter 的 `chunked-jsonl` 导出也可直接导入。请选择导出目录下
+`chunks/*.jsonl`（可一次传入多个 chunk），不要选择只含索引信息、不含消息的 `manifest.json`：
+
+```bash
+uv run python -m xuwen.ingestion.cli import 路径/到/chunks/*.jsonl
+```
+
+JSONL 本身不包含 `manifest.json` 中的当前账号身份。首次使用配置向导时，向导会列出
+JSONL 中的发送者，请手动将对应账号点选为“设为我”和“设为朋友”。
+
+WeFlow 5.1 的 `ChatLab JSONL` 同样可以直接导入：
+
+```bash
+uv run python -m xuwen.ingestion.cli import 路径/到/微信聊天.jsonl
+```
+
+ChatLab JSONL 也不标记哪个 member 是当前账号，首次导入时同样需要在向导中分配身份。
+
+> **微信导入与软件来源提醒**：微信导入使用第三方
+> [WeFlow Releases](https://github.com/hicccc77/weflow-releases/) 提供的发布包。
+> WeFlow 当前发布版不是开源软件，Afterglow 无法审计其实现，也不对其安全性、数据处理方式或兼容性背书。
+> 微信聊天记录包含高度敏感的个人数据，并且导出工具需要读取本地微信数据；请在了解来源、权限和风险后自行决定是否使用，
+> 使用前建议备份原始数据并优先在隔离、离线环境中操作。
+
+### Afterglow 专用导入格式
+
+Afterglow Chat 是稳定、平台无关的专用中间格式，支持 JSON 和 JSONL。你可以使用 AI 编写一次性
+中间件，把任何聊天软件、数据库或备份文件转换成 Afterglow Chat，从而快速接入现有导入、画像、
+向量化和图片处理流程。
+
+这种转换方式适合验证思路、个人迁移和暂时没有官方适配器的平台。但对于长期使用、公开分发或需要
+准确保留身份、回复关系、撤回、媒体等语义的来源，仍然建议编写独立 ingestion plugin，并向
+Afterglow 提交 PR 贡献。独立 plugin 能直接描述源格式，避免中间转换丢失信息，也便于后续版本维护。
+
+完整 JSON 字段说明见 [开发文档](docs/DEVELOPMENT.md#afterglow-chat-v1)。JSONL 推荐使用
+typed-records 结构：
+
+```jsonl
+{"_type":"header","afterglow":{"format":"afterglow-chat","version":"1.0"},"conversation":{"type":"private"}}
+{"_type":"participant","uid":"me","name":"Me","role":"self"}
+{"_type":"participant","uid":"friend","name":"Friend","role":"friend"}
+{"_type":"message","id":"m1","seq":1,"timestamp_ms":1700000000000,"sender_uid":"friend","sender_name":"Friend","kind":"text","text":"hello"}
+```
+
+也兼容每行直接写一个 Afterglow message 对象的精简形式；此时不含 participants，向导会要求手动分配身份。
+
 可选：离线导入历史图片。先完成上面的文本导入，再确认 `.env` 已配置 `VISION_ENABLED=true`
-和 `VISION_API_URL` / `VISION_API_KEY` / `VISION_MODEL`。提交的是导出目录，不是单个 JSON：
+和 `VISION_API_URL` / `VISION_API_KEY` / `VISION_MODEL`。提交的是完整导出目录，不是单个文件。
+命令会递归收集目录中的 JSON / JSONL 和图片，因此 QQChatExporter 的 `chunks + resources`、WeFlow 的
+`ChatLab JSONL + media` 都可以原样放进一个目录：
 
 ```text
 导出目录/
-  chat.json
-  resources/
-    images/
+  chat.json 或 chat.jsonl（可有多个 chunk）
+  resources/ 或 media/
+    任意子目录/
       xxx.jpg
 ```
 
@@ -428,7 +476,8 @@ uv run python -m xuwen.ingestion.cli import 已处理的聊天记录.json \
 uv run python -m xuwen.ingestion.cli import-images 路径/到/导出目录
 ```
 
-图片导入会按 sha256 去重保存原图，调用视觉模型生成摘要并写入 `history_images`。后续召回使用
+图片导入会优先按消息中的相对路径定位，找不到时递归按文件名匹配；随后按 sha256 去重保存原图，
+调用视觉模型生成摘要并写入 `history_images`。后续召回使用
 已入库的图片摘要和 `image_sha`，不会每次聊天重复把历史原图发给模型。
 
 > **⚠️ 多文件场景的两个局限（重要）**
@@ -457,7 +506,7 @@ uv run python scripts/analyze_persona.py 路径/到/已处理的聊天记录.jso
 >
 > 注意：persona 是离线统计画像，只提供长期语气参考；当天在做什么由 `life_state.json` 和聊天时的小模型状态决定。
 >
-> **⚠️ 当前只接受单个 JSON 文件。** 如果你在步骤 ③ 导入了多个文件，请挑**数据量最大或最具代表性**的那一份跑 persona——通常就是步骤 ③ 命令行里放在最后一位的那个文件（与 circadian 画像保持一致）。后续会支持多文件合并 persona，欢迎 PR。
+> **⚠️ 当前只接受单个 JSON 或 JSONL chunk。** 如果你在步骤 ③ 导入了多个文件，请挑**数据量最大或最具代表性**的那一份跑 persona——通常就是步骤 ③ 命令行里放在最后一位的那个文件（与 circadian 画像保持一致）。后续会支持多文件合并 persona，欢迎 PR。
 
 ##### 步骤 ⑤：启动 chat API
 
@@ -561,7 +610,7 @@ docker compose pull && docker compose up -d
 docker compose run --rm backend \
   python -m xuwen.ingestion.cli import .imports/qq.json
 
-# 可选：离线导入历史图片（目录内需有一个 JSON 和 resources/images）
+# 可选：离线导入历史图片（目录内可包含多个 JSON/JSONL 和任意层级图片目录）
 docker compose run --rm backend \
   python -m xuwen.ingestion.cli import-images .imports/export-dir --plugin afterglow_v1
 
@@ -682,7 +731,7 @@ A：可以。`.env` 设 `ENABLE_PII_REDACTION=false`，或通过 `PII_RULES_PATH
 A：QQ 号在导出文件里到处都是（uid 关联需要）；URL 是对话语境的一部分（朋友分享 B 站视频是有意义的）。脱敏列表只覆盖一旦泄漏就造成实质损失的"硬隐私"。
 
 **Q：能否导入微信 / Telegram / Discord 数据？**
-A：目前 README 暂时只推荐 QQChatExporter V5 导出的 QQ 聊天记录。微信历史聊天导入说明已暂时移除，因为目前还没有足够稳定、好用的微信聊天记录导出项目，详见 [#14](https://github.com/kldhsh123/Afterglow/issues/14)。其它平台目前没有内置推荐流程，但写一个新 plugin 输出 `NormalizedMessage` 即可，下游流水线无需改动，欢迎 PR。
+A：QQ 推荐使用 QQChatExporter。微信可使用第三方 [WeFlow Releases](https://github.com/hicccc77/weflow-releases/) 导出的 `arkme-json` 或 `ChatLab JSONL`，但其当前发布版不是开源软件，Afterglow 无法审计或担保，请充分评估隐私与安全风险后使用。其它平台可以通过 ingestion plugin 扩展。
 
 **Q：会不会越聊越不像？**
 A：每轮对话都会异步回写到 `live_messages`（`trust_level=0.35`，权重远低于历史 `1.0`）。前端可在设置页"暂停回写"避免污染。
