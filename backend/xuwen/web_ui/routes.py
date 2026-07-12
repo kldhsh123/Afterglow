@@ -456,7 +456,8 @@ async def upload_files(
 class StartImportPayload(BaseModel):
     files: list[str]  # 服务器侧绝对路径
     file_names: list[str]
-    persona_source: str | None = None  # 作为画像参考的文件路径
+    # 兼容旧版前端；画像现在始终合并 files 中的全部文件。
+    persona_source: str | None = None
 
 
 @router.post("/import/start")
@@ -497,21 +498,7 @@ async def start_import(
             raise HTTPException(status_code=404, detail=f"文件不存在：{raw}")
         paths.append(p)
 
-    persona_source: Path | None = None
-    if payload.persona_source:
-        ps = Path(payload.persona_source).resolve()
-        try:
-            ps.relative_to(upload_dir)
-        except ValueError:
-            raise HTTPException(
-                status_code=400,
-                detail=f"非法画像参考路径：{payload.persona_source}",
-            ) from None
-        if not ps.exists():
-            raise HTTPException(status_code=404, detail=f"画像参考文件不存在：{payload.persona_source}")
-        persona_source = ps
-
-    task = mgr.create(paths, payload.file_names, persona_source=persona_source)
+    task = mgr.create(paths, payload.file_names)
     handle = asyncio.create_task(run_import_task(task.task_id, settings))
     mgr.attach_handle(task.task_id, handle)
     return {"task_id": task.task_id, "status": task.status, "reused": False}

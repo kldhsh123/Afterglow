@@ -410,6 +410,7 @@ uv run python -m xuwen.ingestion.cli import 已处理的聊天记录.json \
 - 需要历史图片检索时，必须另外保留实际包含 `resources/images/` 原图的导出目录
 - 多账号场景：在 `.env` 用 `SELF_UID=u_qq,u_qq_alt` 和 `FRIEND_UID=u_qq_friend,u_qq_friend_alt`（**逗号分隔**）把全部 UID 列出来
 - 多文件按命令行顺序处理，共享 LanceDB 连接与 Embedding 客户端
+- 多文件导入完成后，作息画像会基于全部文件去重并重建
 - 开启 `LABELING_ENABLED=true` 时会接着自动打标
 - 中断 / 限流失败不丢导入数据，之后可续跑：`uv run python -m xuwen.ingestion.cli label`
 
@@ -480,21 +481,21 @@ uv run python -m xuwen.ingestion.cli import-images 路径/到/导出目录
 调用视觉模型生成摘要并写入 `history_images`。后续召回使用
 已入库的图片摘要和 `image_sha`，不会每次聊天重复把历史原图发给模型。
 
-> **⚠️ 多文件场景的两个局限（重要）**
->
-> - **作息画像 (`circadian_profile.json`) 仅基于最后一个文件生成**——把数据量最大或最具代表性的对话放在**命令行最后一位**，画像才能反映 TA 真实的作息分布。
-> - **下一步 `analyze_persona` 当前也只接受单个 JSON**——多文件场景下，建议挑那个最具代表性的（通常就是同一份"最后一位"文件）单独跑画像。LanceDB 向量库本身是合并的，检索能用上全部数据，但 persona 卡片不会跨文件合并。
-
 ##### 步骤 ④：生成 persona 卡片 + 作息画像
 
 ```bash
+# 单文件
 uv run python scripts/analyze_persona.py 路径/到/你的聊天记录.json
+
+# 多文件：这些文件必须属于同一个需要模仿的人
+uv run python scripts/analyze_persona.py \
+  qq_导出.json wechat_导出.json chunks/*.jsonl
 ```
 
 如果导入时使用了 `normalized`，生成 persona 时也要传入相同模式：
 
 ```bash
-uv run python scripts/analyze_persona.py 路径/到/已处理的聊天记录.json \
+uv run python scripts/analyze_persona.py 已处理-1.json 已处理-2.jsonl \
   --json-emoji-mode normalized
 ```
 
@@ -506,7 +507,9 @@ uv run python scripts/analyze_persona.py 路径/到/已处理的聊天记录.jso
 >
 > 注意：persona 是离线统计画像，只提供长期语气参考；当天在做什么由 `life_state.json` 和聊天时的小模型状态决定。
 >
-> **⚠️ 当前只接受单个 JSON 或 JSONL chunk。** 如果你在步骤 ③ 导入了多个文件，请挑**数据量最大或最具代表性**的那一份跑 persona——通常就是步骤 ③ 命令行里放在最后一位的那个文件（与 circadian 画像保持一致）。后续会支持多文件合并 persona，欢迎 PR。
+> 多文件画像会先跨文件去重，再按 plugin 分组、按时间排序并重新切分会话。同一种格式的相邻 chunk
+> 可以形成跨文件的回复样本；不同 plugin 的消息会共同参与总体统计和作息分析，但不会拼成跨平台问答对。
+> 所有输入文件必须属于同一个目标人物；不同朋友应分别生成画像。
 
 ##### 步骤 ⑤：启动 chat API
 

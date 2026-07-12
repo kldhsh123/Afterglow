@@ -37,7 +37,8 @@ from xuwen.ingestion.chunker import (
 )
 from xuwen.ingestion.cleaner import Cleaner
 from xuwen.ingestion.embedder import EmbeddingClient
-from xuwen.ingestion.parser import load_qq_json, parse_messages
+from xuwen.ingestion.parser import load_qq_json
+from xuwen.ingestion.plugins import InspectableImportPlugin, select_plugin
 from xuwen.ingestion.splitter import build_windows, split_sessions
 from xuwen.memory.schema import (
     TABLE_DIALOGUE_WINDOWS,
@@ -98,10 +99,21 @@ async def import_history(
     start = time.perf_counter()
     _stage("正在解析消息")
     payload = load_qq_json(json_path)
-    raw_count = len(payload.get("messages") or [])
 
     # 1) parse（plugin 自动识别）
-    parsed = parse_messages(payload, settings, plugin_name=plugin_name)
+    plugin = select_plugin(payload, preferred=plugin_name)
+    parsed = plugin.parse(payload, settings)
+    raw_messages = payload.get("messages")
+    raw_count = max(
+        len(raw_messages) if isinstance(raw_messages, list) else 0,
+        len(parsed),
+    )
+    if isinstance(plugin, InspectableImportPlugin):
+        try:
+            raw_count = max(plugin.inspect(payload).total_messages, len(parsed))
+        except Exception:
+            # 身份嗅探/计数是可选能力，失败不能让已经成功的 parse 回退为导入失败。
+            pass
 
     # 2) clean
     _stage(f"正在清洗与去重 {len(parsed)} 条消息")

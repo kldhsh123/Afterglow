@@ -151,9 +151,7 @@ uv run python -m xuwen.ingestion.cli import 路径/到/你的_导出.json
 # normalized 只识别 [/表情]，其他方括号文本会保留。
 # 默认建议先做轻量文本导入；QQChatExporter 可勾选"仅保留文件元数据，不下载文件"。
 # 需要历史图片检索时，必须另外保留实际包含 resources/images/ 原图的导出目录。
-# 多文件场景下：
-#   - circadian_profile.json 仅基于最后一个文件生成（把最近 / 最具代表性的对话放最后）
-#   - scripts/analyze_persona.py 当前也只接受单个 JSON，挑代表性最强的一份单独跑
+# 多文件场景下，circadian_profile.json 会基于全部文件去重后生成。
 # 若已开启 LABELING_ENABLED=true，导入完成后会继续跑打标阶段。
 # 未打标 chunk 仍正常参与向量召回，只是不享受后续标签加权。
 
@@ -170,8 +168,10 @@ uv run python -m xuwen.ingestion.cli stats
 
 # 5. 生成 persona 卡片与场景风格画像（建议做，否则 prompt 缺画像，回答会偏通用）
 #    persona 是离线统计画像，只提供长期语气参考；当天状态由 life_state.json 决定。
-#    会生成 persona_card.md / persona_report.json / persona_style_profile.json。
+#    会生成 persona_card.md / persona_report.json / persona_style_profile.json / circadian_profile.json。
 uv run python scripts/analyze_persona.py 路径/到/你的聊天记录.json
+# 多文件（必须属于同一个目标人物）：
+# uv run python scripts/analyze_persona.py qq.json wechat.json chunks/*.jsonl
 # --json-emoji-mode 必须与导入时一致；例如：
 # uv run python scripts/analyze_persona.py 已处理.json --json-emoji-mode normalized
 

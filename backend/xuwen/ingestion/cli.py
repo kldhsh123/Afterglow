@@ -171,6 +171,39 @@ async def _rebuild_proactive_profile_from_store(
     return profile.summary
 
 
+async def _rebuild_circadian_profile_from_files(
+    settings: Settings,
+    paths: list[Path],
+    *,
+    plugin_name: str | None,
+    json_emoji_mode: str,
+) -> str:
+    """基于批量导入的全部文件重建作息画像。"""
+    from xuwen.persona.circadian import (
+        CIRCADIAN_PROFILE_FILENAME,
+        compute_circadian_profile,
+        save_circadian_profile,
+    )
+    from xuwen.persona.generator import load_persona_dataset
+
+    dataset = await asyncio.to_thread(
+        load_persona_dataset,
+        paths,
+        settings,
+        plugin_name=plugin_name,
+        json_emoji_mode=json_emoji_mode,
+    )
+    profile = compute_circadian_profile(dataset.messages)
+    save_circadian_profile(
+        profile,
+        settings.persona_data_dir / CIRCADIAN_PROFILE_FILENAME,
+    )
+    return (
+        f"合并 {dataset.source_files} 个文件，样本 {profile.sample_size}，"
+        f"{profile.summary}"
+    )
+
+
 # 中文 / ASCII 双套列名
 _LABELS_CN = {
     "metric": "指标",
@@ -267,7 +300,6 @@ async def _run_import(args: argparse.Namespace) -> int:
     reports: list = []
     try:
         for idx, path in enumerate(paths):
-            is_last = idx == len(paths) - 1
             if multi:
                 console.print(
                     f"\n[bold cyan][{idx + 1}/{len(paths)}][/] 处理 {path}"
@@ -280,9 +312,8 @@ async def _run_import(args: argparse.Namespace) -> int:
                 plugin_name=args.plugin,
                 json_emoji_mode=args.json_emoji_mode,
                 label_progress_cb=_label_progress if settings.labeling_enabled else None,
-                # 中间文件跳过 circadian 计算，避免被后续文件覆盖；
-                # 最后一个文件触发，画像基于该文件的 cleaned 数据生成。
-                update_circadian=is_last,
+                # 批量场景在全部文件完成后统一重建作息画像。
+                update_circadian=not multi,
                 update_proactive=not multi,
             )
             reports.append((path, report))
@@ -292,6 +323,19 @@ async def _run_import(args: argparse.Namespace) -> int:
 
     if multi:
         _print_aggregate(reports, L)
+        try:
+            circadian_summary = await _rebuild_circadian_profile_from_files(
+                settings,
+                paths,
+                plugin_name=args.plugin,
+                json_emoji_mode=args.json_emoji_mode,
+            )
+            console.print(f"[dim]·[/] 已基于全部文件重建作息画像：{circadian_summary}")
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "批量导入后重建 circadian profile 失败，已忽略",
+                exc_info=True,
+            )
         try:
             proactive_summary = await _rebuild_proactive_profile_from_store(
                 settings,
@@ -303,11 +347,6 @@ async def _run_import(args: argparse.Namespace) -> int:
                 "批量导入后重建 proactive profile 失败，已忽略",
                 exc_info=True,
             )
-        # circadian 局限提示：只反映最后一个文件
-        console.print(
-            "[yellow]提示：[/]作息画像 (circadian_profile.json) 仅基于最后一个文件计算，"
-            "建议把数据量最大或最具代表性的对话放在最后一位。"
-        )
 
     await _auto_build_vector_indices(settings)
 

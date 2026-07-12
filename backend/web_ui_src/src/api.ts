@@ -221,10 +221,10 @@ export const api = {
     return body
   },
 
-  startImport: (files: string[], file_names: string[], persona_source: string | null = null) =>
+  startImport: (files: string[], file_names: string[]) =>
     jsonRequest<{ task_id: string; status: string }>('/import/start', {
       method: 'POST',
-      body: JSON.stringify({ files, file_names, persona_source }),
+      body: JSON.stringify({ files, file_names }),
     }),
 
   listTasks: () =>
