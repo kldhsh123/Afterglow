@@ -1,11 +1,4 @@
-"""通用 JSON 导入入口。
-
-历史上本文件直接放 QQChatExporter 的 parser；现已重构为 plugin 系统：
-- 真正的 parser 在 `xuwen/ingestion/plugins/` 下
-- 本模块只负责加载 JSON + 委派给 plugin
-
-保留 `parse_messages()` 顶层 API 不变，方便老调用方平滑过渡。
-"""
+"""通用聊天导入入口：只负责文件解码和 plugin 调度。"""
 
 from __future__ import annotations
 
@@ -17,6 +10,7 @@ from xuwen.config import Settings
 from xuwen.core.errors import ParseError
 from xuwen.core.models import NormalizedMessage
 from xuwen.ingestion.plugins import (
+    JSONL_RECORDS_KEY,
     ImportPlugin,
     list_plugins,
     register_plugin,
@@ -26,25 +20,49 @@ from xuwen.ingestion.plugins.afterglow_v1 import AfterglowV1Plugin
 from xuwen.ingestion.plugins.qqexporter_v5 import QQExporterV5Plugin
 from xuwen.ingestion.plugins.wechat_weflow import WeChatWeFlowPlugin
 
-# 注册内置 plugins（每次 import 都幂等替换）
 register_plugin(AfterglowV1Plugin())
 register_plugin(QQExporterV5Plugin())
 register_plugin(WeChatWeFlowPlugin())
 
 
 def load_qq_json(path: str | Path) -> dict[str, Any]:
-    """从磁盘读取导出的 JSON 文件。
-
-    名字里保留 "qq" 是为了兼容老调用，实际可以是任何 plugin 支持的 JSON。
-    """
+    """读取 JSON 或 JSONL；格式解释完全交给 plugin。"""
     p = Path(path)
     if not p.exists():
-        raise ParseError(f"找不到 JSON 文件：{p}")
+        raise ParseError(f"找不到聊天记录文件：{p}")
+    if p.suffix.lower() in {".jsonl", ".ndjson"}:
+        return _load_jsonl_records(p)
     try:
-        with p.open("r", encoding="utf-8") as f:
-            return cast(dict[str, Any], json.load(f))
+        with p.open("r", encoding="utf-8-sig") as f:
+            payload = json.load(f)
     except json.JSONDecodeError as e:
         raise ParseError(f"JSON 解析失败：{e}") from e
+    if not isinstance(payload, dict):
+        raise ParseError("JSON 顶层必须是对象")
+    return cast(dict[str, Any], payload)
+
+
+def _load_jsonl_records(path: Path) -> dict[str, Any]:
+    records: list[dict[str, Any]] = []
+    try:
+        with path.open("r", encoding="utf-8-sig") as f:
+            for line_no, raw_line in enumerate(f, start=1):
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    item = json.loads(line)
+                except json.JSONDecodeError as e:
+                    raise ParseError(f"JSONL 第 {line_no} 行解析失败：{e.msg}") from e
+                if not isinstance(item, dict):
+                    raise ParseError(f"JSONL 第 {line_no} 行必须是 JSON 对象")
+                item.setdefault("_jsonlSourceId", f"{path.stem}-{line_no}")
+                records.append(item)
+    except UnicodeDecodeError as e:
+        raise ParseError(f"JSONL 不是有效的 UTF-8 文件：{e}") from e
+    if not records:
+        raise ParseError("JSONL 中没有记录")
+    return {JSONL_RECORDS_KEY: records}
 
 
 def parse_messages(
@@ -53,16 +71,11 @@ def parse_messages(
     *,
     plugin_name: str | None = None,
 ) -> list[NormalizedMessage]:
-    """把 JSON 转为 NormalizedMessage 列表。
-
-    自动选择匹配的 plugin；可通过 `plugin_name` 强制指定。
-    """
     plugin = select_plugin(payload, preferred=plugin_name)
     return plugin.parse(payload, settings)
 
 
 def detect_plugin(payload: dict[str, Any]) -> ImportPlugin | None:
-    """仅识别不解析，返回匹配的 plugin（用于配置向导显示"识别到 XXX 格式"）。"""
     for plugin in list_plugins():
         try:
             if plugin.match(payload):

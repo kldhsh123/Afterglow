@@ -1,6 +1,4 @@
-"""QQChatExporter V5 导入 plugin。
-
-参考：https://github.com/shuakami/qq-chat-exporter
+"""QQChatExporter 导入 plugin。
 
 数据结构（顶层）：
     {
@@ -26,22 +24,31 @@ from typing import Any
 from xuwen.config import Settings
 from xuwen.core.errors import ParseError
 from xuwen.core.models import MessageKind, NormalizedMessage, SenderRole
+from xuwen.ingestion.plugins import (
+    ImportIdentityCandidate,
+    ImportImageRef,
+    ImportInspection,
+    jsonl_records,
+)
 
 
 class QQExporterV5Plugin:
-    """QQChatExporter V5 导出 JSON 的解析插件。"""
+    """QQChatExporter 导出 JSON / JSONL 的解析插件。"""
 
     name = "qqexporter_v5"
-    display_name = "QQChatExporter V5"
+    display_name = "QQChatExporter"
 
     def match(self, payload: dict[str, Any]) -> bool:
         """识别 QQChatExporter 的特征字段。"""
-        metadata = payload.get("metadata")
+        canonical = _canonical_payload(payload)
+        if canonical is None:
+            return False
+        metadata = canonical.get("metadata")
         if isinstance(metadata, dict):
             name = str(metadata.get("name") or "").lower()
             if "qqchatexporter" in name or "qq-chat-exporter" in name:
                 return True
-        chat_info = payload.get("chatInfo")
+        chat_info = canonical.get("chatInfo")
         if isinstance(chat_info, dict) and "selfUid" in chat_info:
             return True
         return False
@@ -51,11 +58,14 @@ class QQExporterV5Plugin:
         payload: dict[str, Any],
         settings: Settings,
     ) -> list[NormalizedMessage]:
-        if "messages" not in payload or not isinstance(payload["messages"], list):
+        canonical = _canonical_payload(payload)
+        if canonical is None:
+            raise ParseError("JSONL 不符合 QQChatExporter 消息格式")
+        if "messages" not in canonical or not isinstance(canonical["messages"], list):
             raise ParseError("payload 中缺少 messages 数组")
 
         messages: list[NormalizedMessage] = []
-        for idx, raw in enumerate(payload["messages"]):
+        for idx, raw in enumerate(canonical["messages"]):
             if not isinstance(raw, dict):
                 # 跳过非 dict 项（null / 字符串），避免一颗鼠屎坏了一锅粥
                 continue
@@ -69,6 +79,107 @@ class QQExporterV5Plugin:
 
         messages.sort(key=lambda m: (m.timestamp_ms, m.seq))
         return messages
+
+    def inspect(self, payload: dict[str, Any]) -> ImportInspection:
+        source_is_jsonl = jsonl_records(payload) is not None
+        canonical = _canonical_payload(payload)
+        if canonical is None:
+            return ImportInspection("unknown", [], 0, "无法识别 QQChatExporter 格式")
+        info = canonical.get("chatInfo")
+        info = info if isinstance(info, dict) else {}
+        self_uid = str(info.get("selfUid") or "")
+        candidates: list[ImportIdentityCandidate] = []
+        if self_uid:
+            candidates.append(
+                ImportIdentityCandidate(
+                    name=str(info.get("selfName") or info.get("name") or "我"),
+                    uid=self_uid,
+                    role_hint="self",
+                )
+            )
+        counts: dict[tuple[str, str], int] = {}
+        for message in canonical.get("messages") or []:
+            if not isinstance(message, dict):
+                continue
+            sender = message.get("sender")
+            if not isinstance(sender, dict):
+                continue
+            uid = str(sender.get("uid") or sender.get("uin") or "")
+            if not uid or uid == self_uid:
+                continue
+            name = str(sender.get("remark") or sender.get("name") or sender.get("nickname") or uid)
+            key = (uid, name)
+            counts[key] = counts.get(key, 0) + 1
+        for index, ((uid, name), _count) in enumerate(
+            sorted(counts.items(), key=lambda item: -item[1])[:20]
+        ):
+            candidates.append(
+                ImportIdentityCandidate(
+                    name=name,
+                    uid=uid,
+                    role_hint="friend" if self_uid and index == 0 else "unknown",
+                )
+            )
+        return ImportInspection(
+            format="qce_jsonl" if source_is_jsonl else "qqexporter_v5",
+            candidates=candidates,
+            total_messages=len(canonical.get("messages") or []),
+            format_label="QQChatExporter JSONL" if source_is_jsonl else "QQChatExporter",
+        )
+
+    def extract_image_refs(self, payload: dict[str, Any]) -> list[ImportImageRef]:
+        canonical = _canonical_payload(payload)
+        if canonical is None:
+            return []
+        refs: list[ImportImageRef] = []
+        seen: set[tuple[str, str]] = set()
+        for raw in canonical.get("messages") or []:
+            if not isinstance(raw, dict):
+                continue
+            message_id = str(raw.get("id") or raw.get("_jsonlSourceId") or "")
+            content = raw.get("content")
+            if not message_id or not isinstance(content, dict):
+                continue
+            candidates: list[str] = []
+            for resource in content.get("resources") or []:
+                if isinstance(resource, dict) and str(resource.get("type") or "").lower() == "image":
+                    candidates.append(_resource_path(resource))
+            for element in content.get("elements") or []:
+                if not isinstance(element, dict) or str(element.get("type") or "").lower() != "image":
+                    continue
+                data = element.get("data")
+                if isinstance(data, dict):
+                    candidates.append(_resource_path(data))
+            for image_name in candidates:
+                key = (message_id, image_name.lower())
+                if image_name and key not in seen:
+                    seen.add(key)
+                    refs.append(ImportImageRef(message_id, image_name))
+        return refs
+
+
+def _canonical_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
+    records = jsonl_records(payload)
+    if records is None:
+        return payload
+    if not all(
+        isinstance(record.get("sender"), dict)
+        and isinstance(record.get("content"), dict)
+        and "timestamp" in record
+        and "_type" not in record
+        for record in records
+    ):
+        return None
+    return {
+        "metadata": {"name": "QQChatExporter / chunked-jsonl"},
+        "chatInfo": {},
+        "messages": records,
+        "sourceFormat": "qce_jsonl",
+    }
+
+
+def _resource_path(raw: dict[str, Any]) -> str:
+    return str(raw.get("localPath") or raw.get("filename") or "")
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +231,7 @@ def _parse_one(
     )
 
     return NormalizedMessage(
-        message_id=str(raw.get("id") or f"local-{fallback_seq}"),
+        message_id=str(raw.get("id") or raw.get("_jsonlSourceId") or f"local-{fallback_seq}"),
         seq=_parse_int(raw.get("seq"), default=fallback_seq),
         timestamp_ms=_parse_int(raw.get("timestamp"), default=0),
         sender_uid=sender_uid,

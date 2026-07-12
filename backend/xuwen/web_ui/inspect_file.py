@@ -1,20 +1,13 @@
-"""导入文件元数据嗅探：只读 JSON 顶部，识别格式和双方候选身份，不解析全量消息。
-
-用于配置向导第 1 步的"从聊天文件识别"按钮：
-- 用户选一个文件
-- 后端在毫秒级别返回检测到的双方信息（昵称 + UID）
-- 用户在 UI 上点哪个是自己、哪个是对方
-- 自动填好 SELF_NAME / SELF_UID / FRIEND_NAME / FRIEND_UID
-
-这样小白完全不用打开聊天文件去找那串 u_xxx / wxid_xxx。
-"""
+"""导入文件嗅探：文件解码后将身份识别委派给对应 ingestion plugin。"""
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
+
+from xuwen.ingestion.parser import detect_plugin, load_qq_json
+from xuwen.ingestion.plugins import InspectableImportPlugin
 
 
 @dataclass
@@ -26,192 +19,49 @@ class IdentityCandidate:
 
 @dataclass
 class InspectResult:
-    format: Literal["afterglow_v1", "qqexporter_v5", "wechat_weflow", "unknown"]
+    format: str
+    format_label: str
     candidates: list[IdentityCandidate]
     total_messages: int
     error: str = ""
 
 
 def inspect_chat_file(path: Path) -> InspectResult:
-    """读 JSON 顶部，识别双方候选身份。
-
-    Afterglow v1：直接读 participants。
-    QQ：直接读 chatInfo.{selfUid,selfName}；再扫前若干条 messages 找一个非 self 的 sender 作 friend。
-    微信：读 senders 数组；用首条 isSend=1 的 senderID 反查 self。
-    """
     try:
-        text = path.read_text(encoding="utf-8")
-        data = json.loads(text)
-    except Exception as e:
-        return InspectResult(format="unknown", candidates=[], total_messages=0, error=str(e))
-
-    if _looks_like_afterglow(data):
-        return _inspect_afterglow(data)
-    if _looks_like_qq(data):
-        return _inspect_qq(data)
-    if _looks_like_wechat(data):
-        return _inspect_wechat(data)
-    return InspectResult(
-        format="unknown",
-        candidates=[],
-        total_messages=len(data.get("messages") or []),
-        error="无法识别格式。请确认是 Afterglow v1、QQChatExporter V5 或微信 WeFlow 导出的 JSON。",
-    )
-
-
-# ---------- Afterglow v1 ----------
-
-
-def _looks_like_afterglow(data: dict[str, Any]) -> bool:
-    afterglow = data.get("afterglow")
-    fmt = str(afterglow.get("format") or "").lower() if isinstance(afterglow, dict) else ""
-    version = str(afterglow.get("version") or "") if isinstance(afterglow, dict) else ""
-    return (
-        isinstance(afterglow, dict)
-        and fmt == "afterglow-chat"
-        and version.startswith("1.")
-    )
-
-
-def _inspect_afterglow(data: dict[str, Any]) -> InspectResult:
-    conversation = data.get("conversation")
-    if isinstance(conversation, dict):
-        conv_type = str(conversation.get("type") or "private").lower()
-        if conv_type != "private":
+        payload = load_qq_json(path)
+        plugin = detect_plugin(payload)
+        if plugin is None:
             return InspectResult(
                 format="unknown",
+                format_label="未知格式",
                 candidates=[],
-                total_messages=len(data.get("messages") or []),
-                error="Afterglow v1 当前只支持 private 私聊导入。",
+                total_messages=0,
+                error="无法识别格式：没有导入 plugin 能识别该聊天文件。",
             )
-
-    candidates: list[IdentityCandidate] = []
-    participants = data.get("participants")
-    if isinstance(participants, list):
-        for p in participants:
-            if not isinstance(p, dict):
-                continue
-            uid = str(p.get("uid") or "")
-            if not uid:
-                continue
-            role_raw = str(p.get("role") or "").lower()
-            if role_raw in {"self", "friend"}:
-                role: Literal["self", "friend", "unknown"] = role_raw  # type: ignore[assignment]
-            else:
-                role = "unknown"
-            candidates.append(
-                IdentityCandidate(
-                    name=str(p.get("name") or uid),
-                    uid=uid,
-                    role_hint=role,
-                )
+        if not isinstance(plugin, InspectableImportPlugin):
+            return InspectResult(
+                format="unknown",
+                format_label="未知格式",
+                candidates=[],
+                total_messages=0,
+                error=f"{plugin.display_name} plugin 未提供身份嗅探能力。",
             )
-
-    candidates.sort(key=lambda c: 0 if c.role_hint == "self" else 1)
-    return InspectResult(
-        format="afterglow_v1",
-        candidates=candidates,
-        total_messages=len(data.get("messages") or []),
-    )
-
-
-# ---------- QQ ----------
-
-
-def _looks_like_qq(data: dict[str, Any]) -> bool:
-    info = data.get("chatInfo")
-    return isinstance(info, dict) and "selfUid" in info
-
-
-def _inspect_qq(data: dict[str, Any]) -> InspectResult:
-    info = data["chatInfo"]
-    self_uid = str(info.get("selfUid") or "")
-    self_name = str(info.get("selfName") or info.get("name") or "我")
-
-    candidates: list[IdentityCandidate] = []
-    if self_uid:
-        candidates.append(
-            IdentityCandidate(name=self_name, uid=self_uid, role_hint="self")
+        inspection = plugin.inspect(payload)
+        return InspectResult(
+            format=inspection.format,
+            format_label=inspection.format_label or plugin.display_name,
+            candidates=[
+                IdentityCandidate(candidate.name, candidate.uid, candidate.role_hint)
+                for candidate in inspection.candidates
+            ],
+            total_messages=inspection.total_messages,
+            error=inspection.error,
         )
-
-    messages = data.get("messages") or []
-    seen_uids: set[str] = {self_uid} if self_uid else set()
-    # 扫前 200 条找出现的 sender，按频次排序，第一个非 self 作为 friend
-    counts: dict[tuple[str, str], int] = {}
-    for msg in messages[:200]:
-        sender = msg.get("sender") or {}
-        uid = str(sender.get("uid") or "")
-        name = str(sender.get("name") or sender.get("remark") or "")
-        if not uid or uid in seen_uids:
-            continue
-        key = (uid, name)
-        counts[key] = counts.get(key, 0) + 1
-
-    for (uid, name), _ in sorted(counts.items(), key=lambda kv: -kv[1]):
-        candidates.append(
-            IdentityCandidate(
-                name=name or "对方",
-                uid=uid,
-                role_hint="friend" if len(candidates) == 1 else "unknown",
-            )
+    except Exception as e:
+        return InspectResult(
+            format="unknown",
+            format_label="未知格式",
+            candidates=[],
+            total_messages=0,
+            error=str(e),
         )
-        if len(candidates) >= 4:
-            break
-
-    return InspectResult(
-        format="qqexporter_v5",
-        candidates=candidates,
-        total_messages=len(messages),
-    )
-
-
-# ---------- WeChat WeFlow ----------
-
-
-def _looks_like_wechat(data: dict[str, Any]) -> bool:
-    weflow = data.get("weflow")
-    senders = data.get("senders")
-    return (
-        isinstance(weflow, dict)
-        and weflow.get("format") == "arkme-json"
-        and isinstance(senders, list)
-    )
-
-
-def _inspect_wechat(data: dict[str, Any]) -> InspectResult:
-    senders = data.get("senders") or []
-    messages = data.get("messages") or []
-
-    # 用首条 isSend=1 的消息反查 self senderID
-    self_sender_id: int | None = None
-    for m in messages[:200]:
-        if m.get("isSend") == 1:
-            sid = m.get("senderID")
-            if isinstance(sid, int):
-                self_sender_id = sid
-                break
-
-    candidates: list[IdentityCandidate] = []
-    for s in senders:
-        if not isinstance(s, dict):
-            continue
-        wxid = str(s.get("wxid") or "")
-        name = str(s.get("displayName") or "")
-        if not wxid:
-            continue
-        if self_sender_id is not None and s.get("senderID") == self_sender_id:
-            role: Literal["self", "friend", "unknown"] = "self"
-        elif self_sender_id is not None:
-            role = "friend"
-        else:
-            role = "unknown"
-        candidates.append(IdentityCandidate(name=name or wxid, uid=wxid, role_hint=role))
-
-    # self 排第一个，方便前端默认展示
-    candidates.sort(key=lambda c: 0 if c.role_hint == "self" else 1)
-
-    return InspectResult(
-        format="wechat_weflow",
-        candidates=candidates,
-        total_messages=len(messages),
-    )

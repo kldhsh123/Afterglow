@@ -138,7 +138,12 @@ cp .env.example .env
 uv run python -m xuwen.ingestion.cli import 路径/到/你的_导出.json
 # 多文件批量导入（QQ + 微信 / 多账号场景）：
 # uv run python -m xuwen.ingestion.cli import qq_导出.json wechat_导出.json 小号_导出.json
-# 自动识别格式：Afterglow v1 / QQChatExporter V5 / WeFlow 微信。
+# QQChatExporter chunked-jsonl：选择 chunks/*.jsonl，不要选择不含消息的 manifest.json：
+# uv run python -m xuwen.ingestion.cli import 路径/到/chunks/*.jsonl
+# WeFlow 5.1 ChatLab JSONL：
+# uv run python -m xuwen.ingestion.cli import 路径/到/微信聊天.jsonl
+# Afterglow Chat JSONL：支持 header/participant/message typed records，也支持裸 message 行
+# 自动识别格式：Afterglow / QQChatExporter / WeFlow JSON 与 JSONL。
 # 也可显式指定：--plugin afterglow_v1 / qqexporter_v5 / wechat_weflow。
 # 表情占位符模式默认为 raw：方括号内 1-12 个字符会被视为表情。
 # 若已自行把所有文字表情统一为 [/表情]，可使用：
@@ -156,7 +161,7 @@ uv run python -m xuwen.ingestion.cli import 路径/到/你的_导出.json
 # uv run python -m xuwen.ingestion.cli label
 
 # 3c. 离线导入历史图片（可选）
-# 目录必须包含一个 JSON 文件和 resources/images/。该命令会按 sha256 去重保存图片，
+# 直接传完整导出目录；会递归收集其中的 JSON/JSONL 和图片文件，并按 sha256 去重，
 # 调用 VISION_MODEL 生成摘要，并写入 history_images；召回时使用摘要，不重复请求 VLM。
 # uv run python -m xuwen.ingestion.cli import-images 路径/到/导出目录 --plugin afterglow_v1
 
@@ -208,11 +213,11 @@ Afterglow 用 `SELF_UID` / `FRIEND_UID` 在导入时区分"哪条消息是你说
 > QQChatExporter 请在高级选项勾选"仅保留文件元数据，不下载文件"，让 JSON 保留图片文件名引用但
 > 不下载附件。这样 JSON 更小、导入更快，也更不容易意外泄漏附件内容。
 
-> **历史图片是可选后处理**：如果你确实需要导入历史图片，请另外保留实际包含 `resources/images/`
-> 原图的导出目录，并在文本导入完成后手动运行 `import-images`。图片内容会在导入期由 `VISION_MODEL` 总结为文字摘要，
+> **历史图片是可选后处理**：如果你确实需要导入历史图片，请保留包含聊天 JSON/JSONL
+> 和原图资源的完整导出目录，并在文本导入完成后手动运行 `import-images`。图片内容会在导入期由 `VISION_MODEL` 总结为文字摘要，
 > 后续聊天召回只使用这个摘要和 `image_sha`，不会每次聊天都把历史原图重新发给模型。
 
-### QQ（QQChatExporter V5）
+### QQ（QQChatExporter）
 
 导出的 JSON 顶部有 `chatInfo` 字段：
 
@@ -240,11 +245,13 @@ Afterglow 用 `SELF_UID` / `FRIEND_UID` 在导入时区分"哪条消息是你说
 把 `selfUid` 填到 `SELF_UID`，第一条 `sender.uid` 中非 self 的填到 `FRIEND_UID`。
 `SELF_NAME` / `FRIEND_NAME` 用易读的名字即可。
 
-### 微信（[WeFlow](https://github.com/hicccc77/WeFlow) `arkme-json`）
+### 微信（[WeFlow Releases](https://github.com/hicccc77/weflow-releases/)）
 
-> **微信导入提醒**：[WeFlow](https://github.com/hicccc77/WeFlow) 是 Afterglow 所支持的微信导入适配器，Afterglow 的默认微信导入插件依赖此项目。
+> **重要风险说明**：[WeFlow Releases](https://github.com/hicccc77/weflow-releases/) 提供的当前发布版不是开源软件。
+> Afterglow 无法审计其实现，也不对其安全性、数据处理方式或兼容性背书。微信记录属于高度敏感数据，
+> 导出工具还需要访问本地微信数据；请评估来源、权限与风险后使用，建议先备份并在隔离、离线环境操作。
 
-[WeFlow](https://github.com/hicccc77/WeFlow) 导出 JSON 顶部有 `weflow.format = "arkme-json"`，结构如下：
+WeFlow 的 `arkme-json` 顶部有 `weflow.format = "arkme-json"`，结构如下：
 
 ```json
 {
@@ -275,7 +282,7 @@ FRIEND_NAME=MC
 FRIEND_UID=wxid_xxx
 ```
 
-> **群聊提醒**：当前 [WeFlow](https://github.com/hicccc77/WeFlow) plugin 在 `wxid` 都不匹配时会按 `isSend` 字段兜底（`1` → self、`0` → friend）。
+> **群聊提醒**：当前 WeFlow plugin 在 `wxid` 都不匹配时会按 `isSend` 字段兜底（`1` → self、`0` → friend）。
 > 这只在私聊里语义正确；群聊有多人发言，**必须**显式填 `FRIEND_UID` 才能正确区分。
 
 > **快速取值（命令行）**：

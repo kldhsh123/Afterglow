@@ -331,11 +331,11 @@ async def inspect_upload(
     settings: Settings = Depends(_settings_dep),
     file: UploadFile = File(...),
 ) -> dict[str, Any]:
-    """单文件嗅探：读 JSON 顶部识别格式和双方候选身份，不入库不保留。
+    """单文件嗅探：识别 JSON / JSONL 格式和双方候选身份，不入库不保留。
 
     用于配置向导第 1 步"从聊天文件识别"按钮。返回结构：
         {
-          "format": "qqexporter_v5" | "wechat_weflow" | "unknown",
+          "format": "<plugin-defined>" | "unknown",
           "total_messages": int,
           "candidates": [{ name, uid, role_hint: "self"/"friend"/"unknown" }, ...],
           "error": str | ""
@@ -372,6 +372,7 @@ async def inspect_upload(
 
     return {
         "format": result.format,
+        "format_label": result.format_label,
         "total_messages": result.total_messages,
         "candidates": [
             {"name": c.name, "uid": c.uid, "role_hint": c.role_hint}
@@ -386,7 +387,7 @@ async def upload_files(
     settings: Settings = Depends(_settings_dep),
     files: list[UploadFile] = File(...),
 ) -> dict[str, Any]:
-    """上传一个或多个聊天记录 JSON。仅保存到磁盘，不触发导入。
+    """上传一个或多个聊天记录 JSON / JSONL。仅保存到磁盘，不触发导入。
 
     每个文件同时做一次顶部嗅探，返回：消息数、格式识别结果、双方身份候选。
     这样前端在向导第 1 步选文件时一次请求就能拿到全部信息（持久上传 + 身份识别）。
@@ -426,6 +427,7 @@ async def upload_files(
                     "saved_as": str(dest),
                     "size": size,
                     "format": "unknown",
+                    "format_label": "未知格式",
                     "total_messages": 0,
                     "candidates": [],
                     "error": f"嗅探失败：{e}",
@@ -439,6 +441,7 @@ async def upload_files(
                 "saved_as": str(dest),
                 "size": size,
                 "format": ir.format,
+                "format_label": ir.format_label,
                 "total_messages": ir.total_messages,
                 "candidates": [
                     {"name": c.name, "uid": c.uid, "role_hint": c.role_hint}

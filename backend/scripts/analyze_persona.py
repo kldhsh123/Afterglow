@@ -39,7 +39,11 @@ def main(argv: list[str] | None = None) -> int:
         prog="analyze-persona",
         description="对 QQ 导出 JSON 做朋友画像统计并生成 persona 卡片",
     )
-    parser.add_argument("json_path", type=Path, help="QQChatExporter V5 导出的 JSON")
+    parser.add_argument(
+        "json_path",
+        type=Path,
+        help="支持的聊天 JSON，或 QCE / WeFlow JSONL",
+    )
     parser.add_argument(
         "--out-dir",
         type=Path,
