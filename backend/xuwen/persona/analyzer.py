@@ -136,7 +136,20 @@ def analyze_persona(
     sample_count: int = 20,
     json_emoji_mode: str = "raw",
 ) -> PersonaReport:
-    """对一组 sessions 做画像分析，返回 PersonaReport。"""
+    """
+    Analyze friend messages from pre-segmented sessions and build a persona report.
+    
+    Parameters:
+        json_emoji_mode (str): Placeholder handling mode, either ``"raw"`` or
+            ``"normalized"``.
+    
+    Returns:
+        PersonaReport: Aggregated language, punctuation, media, and dialogue
+            sample statistics.
+    
+    Raises:
+        ValueError: If ``json_emoji_mode`` is not ``"raw"`` or ``"normalized"``.
+    """
     if json_emoji_mode not in {"raw", "normalized"}:
         raise ValueError("json_emoji_mode 必须是 raw 或 normalized")
     flat: list[NormalizedMessage] = [m for s in sessions for m in s.messages]
@@ -162,12 +175,14 @@ def analyze_persona(
 
 
 def _is_useful_for_persona(m: NormalizedMessage) -> bool:
-    """判断这条消息是否值得拿去做语言风格统计。
-
-    - 撤回 / 系统：必然不算
-    - PLACEHOLDER（type_17 / json / forward 等纯非文本卡片）：text 字段常含 json
-      字段名（title/desc 等噪声），不要参与词频
-    - 空文本：跳过
+    """
+    Determine whether a message is suitable for language-style statistics.
+    
+    Parameters:
+    	m (NormalizedMessage): The message to evaluate.
+    
+    Returns:
+    	`true` if the message has usable text and is not recalled, system-generated, or a placeholder message; `false` otherwise.
     """
     if m.kind in {MessageKind.RECALLED, MessageKind.SYSTEM, MessageKind.PLACEHOLDER}:
         return False
@@ -177,7 +192,17 @@ def _is_useful_for_persona(m: NormalizedMessage) -> bool:
 def _top_terms(
     messages: list[NormalizedMessage], n: int, json_emoji_mode: str
 ) -> list[TermStat]:
-    """高频词（基于 jieba 分词，过滤停用词与短词）。"""
+    """
+    Return the most frequently occurring meaningful terms in the messages.
+    
+    Parameters:
+    	messages (list[NormalizedMessage]): Messages from which to extract terms.
+    	n (int): Maximum number of terms to return.
+    	json_emoji_mode (str): Placeholder and emoji-cleaning mode.
+    
+    Returns:
+    	list[TermStat]: Terms ordered by descending frequency.
+    """
     counter: Counter[str] = Counter()
     for m in messages:
         text = _strip_placeholders(m.text, json_emoji_mode)
@@ -199,7 +224,17 @@ def _top_terms(
 def _top_phrases(
     messages: list[NormalizedMessage], n: int, json_emoji_mode: str
 ) -> list[TermStat]:
-    """高频短语（2-4 字符 n-gram，候选朋友"口头禅"）。"""
+    """
+    Identify frequently repeated two- to four-character phrases in friend messages.
+    
+    Parameters:
+    	messages (list[NormalizedMessage]): Friend messages to analyze.
+    	n (int): Maximum number of phrases to return.
+    	json_emoji_mode (str): Placeholder and emoji-cleaning mode used before phrase extraction.
+    
+    Returns:
+    	list[TermStat]: Phrases occurring at least twice, ordered by descending frequency.
+    """
     counter: Counter[str] = Counter()
     for m in messages:
         text = _strip_placeholders(m.text, json_emoji_mode)
@@ -266,6 +301,15 @@ def _punctuation_stats(messages: list[NormalizedMessage]) -> PunctuationStats:
 
 
 def _media_stats(messages: list[NormalizedMessage]) -> MediaStats:
+    """
+    Summarize emoji and media-marker usage across messages.
+    
+    Parameters:
+    	messages (list[NormalizedMessage]): Messages to analyze.
+    
+    Returns:
+    	MediaStats: Average emoji usage and ratios for placeholders, images, and voice messages.
+    """
     if not messages:
         return MediaStats(0.0, 0.0, 0.0, 0.0)
     n = len(messages)
@@ -284,12 +328,21 @@ def _media_stats(messages: list[NormalizedMessage]) -> MediaStats:
 def _sample_pairs(
     sessions: list[Session], n: int, json_emoji_mode: str
 ) -> list[DialogueSample]:
-    """抽取 self → friend 的相邻对作为典型样本。
-
-    多样性策略：
-    - 按朋友回复长度分 3 桶（短 <8 字 / 中 8-20 字 / 长 >20 字）
-    - 每桶均匀抽样；再按 emoji / 占位符 / 是否含口头禅词进一步打散
-    - 跳过近重复（前 10 字相同的样本不重复出现）
+    """
+    Extracts representative adjacent self-to-friend dialogue samples.
+    
+    Samples are cleaned according to the selected emoji mode, exclude friend replies
+    shorter than four characters, and are distributed across reply-length categories
+    before near-duplicate replies are removed and the results are ordered by timestamp.
+    
+    Parameters:
+        sessions (list[Session]): Sessions containing the messages to examine.
+        n (int): Maximum number of samples to return.
+        json_emoji_mode (str): Placeholder-cleaning mode, either ``"raw"`` or
+            ``"normalized"``.
+    
+    Returns:
+        list[DialogueSample]: Selected dialogue samples in ascending timestamp order.
     """
     pairs: list[DialogueSample] = []
     for session in sessions:
@@ -369,6 +422,16 @@ def _sample_pairs(
 
 
 def _strip_placeholders(text: str, json_emoji_mode: str = "raw") -> str:
+    """
+    Remove placeholder and emoji-marker text from a message.
+    
+    Parameters:
+        text (str): Message text to clean.
+        json_emoji_mode (str): Cleaning mode; `"normalized"` removes `[/表情]`, while `"raw"` removes short bracketed placeholders.
+    
+    Returns:
+        str: Message text with recognized placeholders replaced by spaces.
+    """
     text = _PLACEHOLDER_RE.sub(" ", text)
     if json_emoji_mode == "normalized":
         return text.replace("[/表情]", " ")

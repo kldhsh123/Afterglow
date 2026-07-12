@@ -86,7 +86,19 @@ class HybridRetriever:
         metrics: MetricsRecorder | None = None,
         trace_id: str = "",
     ) -> RetrievalResult:
-        """执行混合检索并返回融合结果。"""
+        """
+        Perform hybrid retrieval and return ranked, fused context candidates.
+        
+        Parameters:
+            query (RetrievalQuery): Query text and retrieval options.
+        
+        Returns:
+            RetrievalResult: Retrieved friend examples, dialogue windows, history images,
+                recent live messages, response pairs, and fused candidates.
+        
+        Raises:
+            RetrievalError: If the query text is blank or query embedding fails.
+        """
         total_start = time.perf_counter()
         if not query.query_text.strip():
             raise RetrievalError("query_text 不能为空")

@@ -56,11 +56,14 @@ class WeChatWeFlowPlugin:
     display_name = "WeFlow"
 
     def match(self, payload: dict[str, Any]) -> bool:
-        """识别 WeFlow 特征字段。
-
-        允许两种判定方式：
-        - 顶层 `weflow` 是 dict 且 format 字段含 'arkme'（最严格）；
-        - 同时存在 `session` + `senders` + `messages` 三个 WeFlow 特有结构（兜底）。
+        """
+        Determine whether a payload appears to be a WeFlow export.
+        
+        Parameters:
+        	payload (dict[str, Any]): Payload to inspect.
+        
+        Returns:
+        	bool: `true` if the payload matches a supported WeFlow structure, `false` otherwise.
         """
         canonical = _canonical_payload(payload)
         if canonical is None:
@@ -96,6 +99,19 @@ class WeChatWeFlowPlugin:
         payload: dict[str, Any],
         settings: Settings,
     ) -> list[NormalizedMessage]:
+        """
+        Parse WeFlow arkme-json or ChatLab JSONL data into normalized messages.
+        
+        Parameters:
+        	payload (dict[str, Any]): WeFlow export payload to parse.
+        	settings (Settings): Import settings used to determine sender roles.
+        
+        Returns:
+        	list[NormalizedMessage]: Messages sorted by timestamp and sequence number.
+        
+        Raises:
+        	ParseError: If the payload cannot be normalized as WeFlow data or lacks a messages array.
+        """
         canonical = _canonical_payload(payload)
         if canonical is None:
             raise ParseError("JSONL 不符合 WeFlow ChatLab 格式")
@@ -123,6 +139,15 @@ class WeChatWeFlowPlugin:
         return messages
 
     def inspect(self, payload: dict[str, Any]) -> ImportInspection:
+        """
+        Inspect a WeFlow payload and return its format, message count, and identity candidates.
+        
+        Parameters:
+        	payload (dict[str, Any]): WeFlow payload to inspect.
+        
+        Returns:
+        	ImportInspection: Inspection metadata, including detected format, message count, and sender identity candidates.
+        """
         source_is_jsonl = jsonl_records(payload) is not None
         canonical = _canonical_payload(payload)
         if canonical is None:
@@ -192,6 +217,15 @@ class WeChatWeFlowPlugin:
         )
 
     def extract_image_refs(self, payload: dict[str, Any]) -> list[ImportImageRef]:
+        """
+        Extracts image references from ChatLab-formatted WeFlow messages.
+        
+        Parameters:
+        	payload (dict[str, Any]): The WeFlow payload to inspect.
+        
+        Returns:
+        	list[ImportImageRef]: Image references containing each message's identifier and content.
+        """
         canonical = _canonical_payload(payload)
         if canonical is None or not _looks_like_chatlab(canonical):
             return []
@@ -213,6 +247,15 @@ class WeChatWeFlowPlugin:
 
 
 def _canonical_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """
+    Normalize a WeFlow ChatLab JSONL payload into the canonical structure.
+    
+    Parameters:
+    	payload (dict[str, Any]): The payload to normalize.
+    
+    Returns:
+    	dict[str, Any] | None: The canonical payload, the original payload when it is not JSONL, or `None` when the JSONL structure is invalid or unsupported.
+    """
     records = jsonl_records(payload)
     if records is None:
         return payload
@@ -248,6 +291,15 @@ def _canonical_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _looks_like_chatlab(payload: dict[str, Any]) -> bool:
+    """
+    Determine whether a payload has the WeFlow ChatLab format.
+    
+    Parameters:
+    	payload (dict[str, Any]): Payload to inspect.
+    
+    Returns:
+    	bool: `true` if the payload identifies WeFlow as its generator and WeChat as its platform, `false` otherwise.
+    """
     chatlab = payload.get("chatlab")
     meta = payload.get("meta")
     return (
@@ -275,6 +327,16 @@ _CHATLAB_VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 
 
 def _chatlab_placeholder(chatlab_type: int, content: str) -> str | None:
+    """
+    Determine the placeholder label for ChatLab message content.
+    
+    Parameters:
+    	chatlab_type (int): Numeric ChatLab message type used for placeholder lookup.
+    	content (str): Message content, optionally containing a media file path or URL.
+    
+    Returns:
+    	str | None: The corresponding image, video, or message-type placeholder, or None when no placeholder applies.
+    """
     normalized = content.replace("\\", "/").split("?", 1)[0].lower()
     suffix = "." + normalized.rsplit(".", 1)[-1] if "." in normalized else ""
     if suffix in _CHATLAB_IMAGE_EXTS:
@@ -288,6 +350,19 @@ def _parse_chatlab_messages(
     payload: dict[str, Any],
     settings: Settings,
 ) -> list[NormalizedMessage]:
+    """
+    Parse ChatLab messages into normalized messages.
+    
+    Parameters:
+    	payload (dict[str, Any]): Canonical ChatLab payload containing a messages array.
+    	settings (Settings): Import settings used to determine sender roles.
+    
+    Returns:
+    	list[NormalizedMessage]: Messages normalized, classified, and ordered by timestamp and source position.
+    
+    Raises:
+    	ParseError: If the payload does not contain a messages array.
+    """
     raw_messages = payload.get("messages")
     if not isinstance(raw_messages, list):
         raise ParseError("ChatLab payload 中缺少 messages 数组")

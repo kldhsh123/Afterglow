@@ -68,23 +68,25 @@ async def import_history(
     update_circadian: bool = True,
     update_proactive: bool = True,
 ) -> ImportReport:
-    """从导出 JSON 文件导入到 LanceDB。
-
-    plugin_name 强制使用某个 plugin；不传则按 plugin 注册顺序自动 match。
-    json_emoji_mode=raw 时自动归一化短方括号表情；normalized 时认为用户已预处理，
-    只识别统一标记 `[/表情]`。
-    label_progress_cb 透传给打标阶段，用于 CLI 显示进度（done, total）。
-    chunk_progress_cb(done, total)：三路 chunk 入库的合并进度。
-        total = friend + window + response_pair 的总 chunk 数；
-        done 单调递增（每路独立计数后汇总），用于 UI 显示文件内部细化进度。
-    split_progress_cb(done, total)：adaptive 切分阶段每完成一个 session 回调一次，
-        用于 UI 让进度数字在 split 阶段也动起来。
-    stage_cb(stage_msg)：每个内部阶段（解析/清洗/切分/向量化等）切换时回调一次，
-        UI 用于展示当前正在做的事，避免大库时长时间卡在某个百分比上没有具体文案。
-    update_circadian=False 时跳过作息画像生成，留给多文件批量导入的调用方在最末一次或
-    跑完所有文件后单独触发，避免中间文件覆盖最终画像。
-    update_proactive=False 时跳过主动开聊画像生成；批量导入应在全部文件入库后
-    从 dialogue_windows 统一重建，避免每个文件覆盖前一个文件的学习结果。
+    """
+    Import messages from an exported JSON file into the configured memory store.
+    
+    Parameters:
+        json_path (str | Path): Path to the exported JSON file.
+        settings (Settings): Import and storage configuration.
+        store (MemoryStore | None): Optional memory store to use.
+        embedder (EmbeddingClient | None): Optional embedding client to use.
+        plugin_name (str | None): Plugin name to use; automatic plugin selection is used when omitted.
+        json_emoji_mode (str): Emoji parsing mode, either ``"raw"`` or ``"normalized"``.
+        label_progress_cb (Callable[[int, int], None] | None): Callback for labeling progress.
+        chunk_progress_cb (Callable[[int, int], None] | None): Callback for combined chunk processing progress.
+        split_progress_cb (Callable[[int, int], None] | None): Callback for adaptive session-splitting progress.
+        stage_cb (Callable[[str], None] | None): Callback invoked when the import stage changes.
+        update_circadian (bool): Whether to generate the circadian profile.
+        update_proactive (bool): Whether to generate the proactive conversation profile.
+    
+    Returns:
+        ImportReport: Counts, duration, notes, and processing results for the import.
     """
     settings.require_identity()
 

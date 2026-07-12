@@ -59,7 +59,22 @@ def load_persona_dataset(
     plugin_name: str | None = None,
     json_emoji_mode: str = "raw",
 ) -> PersonaDataset:
-    """加载全部画像源，去重后按 plugin 时间线切分会话。"""
+    """
+    Load, deduplicate, clean, and segment chat files into a persona dataset.
+    
+    Parameters:
+        paths (Sequence[str | Path]): Chat JSON or JSONL files to process.
+        settings (Settings): Configuration used for parsing, cleaning, and session segmentation.
+        plugin_name (str | None): Optional parser plugin to use for all input files.
+        json_emoji_mode (str): Emoji handling mode for JSON message content.
+    
+    Returns:
+        PersonaDataset: Deduplicated messages, segmented sessions, and processing counts.
+    
+    Raises:
+        ValueError: If no input files are provided.
+        ParseError: If a source file cannot be loaded or parsed.
+    """
     source_paths = [Path(path) for path in paths]
     if not source_paths:
         raise ValueError("至少需要一个聊天 JSON 或 JSONL 文件")
@@ -123,7 +138,19 @@ def generate_persona_artifacts(
     plugin_name: str | None = None,
     json_emoji_mode: str = "raw",
 ) -> PersonaGenerationResult:
-    """基于全部文件生成 persona、风格画像和作息画像。"""
+    """
+    Generate persona, style, and circadian profiles from chat files and save them to disk.
+    
+    Parameters:
+        paths: Input chat JSON or JSONL files.
+        settings: Configuration used to parse messages and generate profiles.
+        out_dir: Directory for generated artifacts. Defaults to the configured persona data directory.
+        plugin_name: Optional parser plugin to use.
+        json_emoji_mode: Emoji handling mode for JSON message content.
+    
+    Returns:
+        A summary of the generated profiles, message statistics, and output file paths.
+    """
     dataset = load_persona_dataset(
         paths,
         settings,
@@ -180,7 +207,17 @@ def _message_identity(
     plugin_name: str,
     message: NormalizedMessage,
 ) -> tuple[object, ...]:
-    """使用稳定字段去重，同时避免不同平台的短 message id 互相碰撞。"""
+    """
+    Build a stable identity for deduplicating normalized messages across source files and plugins.
+    
+    Parameters:
+        plugin_name (str): Name of the plugin that parsed the message.
+        message (NormalizedMessage): Message whose identity is generated.
+    
+    Returns:
+        tuple[object, ...]: Identity tuple composed of plugin, sender, message, timestamp,
+            content, placeholder, and reply-target fields.
+    """
     raw = message.raw if isinstance(message.raw, dict) else {}
     has_native_id = any(
         key in raw and raw[key] not in (None, "")
@@ -199,6 +236,15 @@ def _message_identity(
 
 
 def _message_sort_key(message: NormalizedMessage) -> tuple[int, int, str, str]:
+    """Build a deterministic sort key for a normalized message.
+    
+    Parameters:
+    	message (NormalizedMessage): The message to sort.
+    
+    Returns:
+    	tuple[int, int, str, str]: A tuple ordered by timestamp, sequence number,
+    	message ID, and sender ID.
+    """
     return (
         message.timestamp_ms,
         message.seq,

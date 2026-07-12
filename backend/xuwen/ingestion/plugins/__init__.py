@@ -26,6 +26,15 @@ JSONL_RECORDS_KEY = "_afterglowJsonlRecords"
 
 
 def jsonl_records(payload: dict[str, Any]) -> list[dict[str, Any]] | None:
+    """
+    Extract JSONL records from a payload.
+    
+    Parameters:
+        payload (dict[str, Any]): Payload containing the JSONL records field.
+    
+    Returns:
+        list[dict[str, Any]] | None: The records when the field contains only dictionaries; otherwise, `None`.
+    """
     value = payload.get(JSONL_RECORDS_KEY)
     if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
         return None
@@ -71,9 +80,14 @@ class ImportPlugin(Protocol):
     """人类可读的展示名，比如 'QQChatExporter' / 'WeFlow'。"""
 
     def match(self, payload: dict[str, Any]) -> bool:
-        """判断这个 JSON 或中性 JSONL records 是否能由本插件解析。
-
-        例如：QQ 插件检查 `metadata.name` 是否含 "QQChatExporter"。
+        """
+        Determine whether the plugin can parse the supplied JSON or JSONL payload.
+        
+        Parameters:
+            payload (dict[str, Any]): The imported payload to evaluate.
+        
+        Returns:
+            bool: `true` if the payload matches the plugin's supported format, `false` otherwise.
         """
 
     def parse(
@@ -81,19 +95,44 @@ class ImportPlugin(Protocol):
         payload: dict[str, Any],
         settings: Settings,
     ) -> list[NormalizedMessage]:
-        """把原始 JSON 转为 NormalizedMessage 列表。"""
+        """
+        Parse the input payload into normalized messages.
+        
+        Parameters:
+            payload (dict[str, Any]): The source chat export data.
+            settings (Settings): Settings used to control parsing.
+        
+        Returns:
+            list[NormalizedMessage]: The parsed messages.
+        """
 
 
 @runtime_checkable
 class InspectableImportPlugin(Protocol):
     def inspect(self, payload: dict[str, Any]) -> ImportInspection:
-        """返回向导所需的格式、身份和消息数。"""
+        """
+        Inspect imported data for its format, identity candidates, and message count.
+        
+        Parameters:
+            payload (dict[str, Any]): Imported data to inspect.
+        
+        Returns:
+            ImportInspection: The detected format, identity candidates, and total message count.
+        """
 
 
 @runtime_checkable
 class ImageReferenceImportPlugin(Protocol):
     def extract_image_refs(self, payload: dict[str, Any]) -> list[ImportImageRef]:
-        """提取消息 ID 与导出目录内图片路径。"""
+        """
+        Extract image references from the imported payload.
+        
+        Parameters:
+            payload (dict[str, Any]): The imported export data.
+        
+        Returns:
+            list[ImportImageRef]: References linking message IDs to image names.
+        """
 
 
 # 注册表
@@ -124,11 +163,19 @@ def select_plugin(
     payload: dict[str, Any],
     preferred: str | None = None,
 ) -> ImportPlugin:
-    """选择能处理本 payload 的 plugin。
-
-    优先级：
-    1. 用户显式 --plugin 指定的（不再做 match 校验，相信用户）
-    2. 第一个 match() 返回 True 的内置 plugin
+    """
+    Select the plugin that should process the payload.
+    
+    Parameters:
+        payload (dict[str, Any]): The imported payload to identify.
+        preferred (str | None): The plugin name to use explicitly, if provided.
+    
+    Returns:
+        ImportPlugin: The selected import plugin.
+    
+    Raises:
+        ParseError: If the preferred plugin is unknown or no registered plugin
+            recognizes the payload.
     """
     if preferred:
         plugin = find_plugin(preferred)

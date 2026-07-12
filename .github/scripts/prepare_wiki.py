@@ -23,12 +23,39 @@ _INLINE_CODE_RE = re.compile(
 
 
 def prepare_wiki(root: Path, wiki_base_url: str) -> int:
+    """
+    Rewrite repository-relative Markdown links to wiki URLs.
+    
+    Parameters:
+        root (Path): Root directory containing the Markdown pages.
+        wiki_base_url (str): Base URL used for rewritten wiki links.
+    
+    Returns:
+        int: Number of links rewritten.
+    
+    Raises:
+        ValueError: If a link target resolves outside the wiki root.
+        FileNotFoundError: If a link target does not exist.
+    """
     root = root.resolve()
     rewritten = 0
     for page in sorted(root.glob("*.md")):
         original = page.read_text(encoding="utf-8")
         code_ranges = _code_ranges(original)
         def replace_link(match: re.Match[str]) -> str:
+            """
+            Rewrite a validated repository-relative Markdown link as a wiki URL.
+            
+            Parameters:
+                match (re.Match[str]): A Markdown link match containing its label, target path, and optional anchor.
+            
+            Returns:
+                str: The rewritten wiki link, or the original matched text when the link is inside a code range.
+            
+            Raises:
+                ValueError: If the link target resolves outside the wiki root.
+                FileNotFoundError: If the link target does not refer to an existing file.
+            """
             nonlocal rewritten
             if _position_in_ranges(match.start(), code_ranges):
                 return match.group(0)

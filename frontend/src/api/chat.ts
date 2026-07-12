@@ -127,7 +127,13 @@ export function cancelChatTurn(
   })
 }
 
-/** 解析单条 SSE 事件（多行 `data: ...`），抽出 delta.content */
+/**
+ * Processes a single SSE event and dispatches its trace, policy, silence, and content data.
+ *
+ * @param raw - The raw SSE event payload, which may contain multiple `data:` lines
+ * @param handlers - Callbacks invoked for data extracted from the event
+ * @throws `ChatStreamError` if a data payload is invalid JSON or contains a server-reported error
+ */
 function parseEvent(raw: string, handlers: StreamHandlers): void {
   const lines = raw.split('\n')
   for (const line of lines) {

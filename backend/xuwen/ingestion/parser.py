@@ -26,7 +26,18 @@ register_plugin(WeChatWeFlowPlugin())
 
 
 def load_qq_json(path: str | Path) -> dict[str, Any]:
-    """读取 JSON 或 JSONL；格式解释完全交给 plugin。"""
+    """
+    Load a JSON or JSONL chat record file.
+    
+    Parameters:
+        path (str | Path): Path to the input file.
+    
+    Returns:
+        dict[str, Any]: The decoded JSON object, or JSONL records wrapped under the module's record key.
+    
+    Raises:
+        ParseError: If the file does not exist, contains invalid JSON, or has an unsupported top-level structure.
+    """
     p = Path(path)
     if not p.exists():
         raise ParseError(f"找不到聊天记录文件：{p}")
@@ -43,6 +54,18 @@ def load_qq_json(path: str | Path) -> dict[str, Any]:
 
 
 def _load_jsonl_records(path: Path) -> dict[str, Any]:
+    """
+    Parse a JSONL/NDJSON file into JSON object records.
+    
+    Parameters:
+    	path (Path): Path to the JSONL/NDJSON file.
+    
+    Returns:
+    	dict[str, Any]: A mapping containing the parsed records under `JSONL_RECORDS_KEY`.
+    
+    Raises:
+    	ParseError: If the file contains invalid UTF-8, a malformed JSON line, a non-object JSON value, or no records.
+    """
     records: list[dict[str, Any]] = []
     try:
         with path.open("r", encoding="utf-8-sig") as f:
@@ -71,11 +94,30 @@ def parse_messages(
     *,
     plugin_name: str | None = None,
 ) -> list[NormalizedMessage]:
+    """
+    Parse chat data into normalized messages using the selected import plugin.
+    
+    Parameters:
+    	payload (dict[str, Any]): Chat data to parse.
+    	settings (Settings): Settings used during parsing.
+    	plugin_name (str | None): Optional preferred plugin name.
+    
+    Returns:
+    	list[NormalizedMessage]: The parsed and normalized messages.
+    """
     plugin = select_plugin(payload, preferred=plugin_name)
     return plugin.parse(payload, settings)
 
 
 def detect_plugin(payload: dict[str, Any]) -> ImportPlugin | None:
+    """Identify the registered plugin that matches the payload.
+    
+    Parameters:
+        payload (dict[str, Any]): The chat data to match against registered plugins.
+    
+    Returns:
+        ImportPlugin | None: The matching plugin, or `None` if no plugin matches.
+    """
     for plugin in list_plugins():
         try:
             if plugin.match(payload):

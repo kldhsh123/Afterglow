@@ -88,6 +88,17 @@ class Cleaner:
         *,
         json_emoji_mode: str = "raw",
     ) -> None:
+        """
+        Initialize a cleaner with configuration and optional PII redaction rules.
+        
+        Parameters:
+            settings (Settings): Cleaner and PII redaction configuration.
+            rules (list[PIIRule] | None): PII redaction rules to use when enabled. Loads configured rules when omitted.
+            json_emoji_mode (str): Emoji handling mode for JSON text; must be "raw" or "normalized".
+        
+        Raises:
+            ValueError: If `json_emoji_mode` is not supported.
+        """
         if json_emoji_mode not in JSON_EMOJI_MODES:
             raise ValueError(
                 f"json_emoji_mode 必须是 {' / '.join(JSON_EMOJI_MODES)}，"
@@ -164,10 +175,16 @@ class Cleaner:
         return text.strip()
 
     def _normalize_brackets(self, text: str) -> str:
-        """把 [图片: xxx.png] 这种带文件名的占位统一为 [图片]，
-        再把 QQ 自带文字表情 `[/汪汪]` / `[[爱心]]` 和微信内置 emoji `[微笑]`
-        都归一化为 [表情]，
-        避免模型学到这种字面 token。系统占位符（[图片] / [位置] / ...）保留原样。"""
+        """
+        Normalize bracketed media placeholders and emoji tokens in text.
+        
+        In ``"normalized"`` mode, converts ``[/表情]`` to ``[表情]``. In
+        ``"raw"`` mode, converts recognized QQ and WeChat emoji tokens, as well as
+        short bracketed tokens, to ``[表情]`` while preserving reserved placeholders.
+        
+        Returns:
+            str: The text with bracketed media placeholders and emoji tokens normalized.
+        """
         text = _BRACKET_MEDIA_RE.sub(lambda m: f"[{m.group(1)}]", text)
         if self.json_emoji_mode == "normalized":
             return text.replace("[/表情]", "[表情]")
@@ -184,10 +201,13 @@ class Cleaner:
         return text
 
     def _normalize_mentions(self, text: str) -> str:
-        """把 @自己 替换为 @你，@朋友 替换为 @我（站在 friend 视角生成训练样本）。
-
-        注意：模板中朋友是被模仿的对象，因此朋友说"@我"对应模型 "@Me/@你"。
-        这里直接转视角，让 chunk 文本里朋友提到自己时是"@我"，提到对方时是"@你"。
+        """Normalize configured self and friend mentions to conversational perspective.
+        
+        Parameters:
+            text (str): Text containing mentions to normalize.
+        
+        Returns:
+            str: Text with self mentions replaced by ``@你`` and friend mentions by ``@我``.
         """
         if self._self_mention_re is not None:
             text = self._self_mention_re.sub("@你", text)
