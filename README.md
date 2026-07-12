@@ -396,6 +396,15 @@ uv run python -m xuwen.ingestion.cli import 路径/到/你的聊天记录.json
 uv run python -m xuwen.ingestion.cli import qq_导出.json 小号_导出.json
 ```
 
+聊天导出中的文字表情占位符格式可能是 `[Toasted]`、`[微笑]`、`[[爱心]]`、`[/汪汪]` 等。默认的 `raw` 模式会将方括号内 1–12 个字符识别为表情，避免其内容污染常用词统计。高级用户也可以先自行处理JSON，把所有文字表情统一替换为 `[/表情]`，然后使用`normalized` 模式。该模式只识别 `[/表情]`，其他方括号文本会保留：
+
+```bash
+uv run python -m xuwen.ingestion.cli import 已处理的聊天记录.json \
+  --json-emoji-mode normalized
+```
+
+`--json-emoji-mode` 在消息导入和下一步 persona 分析中必须保持一致。
+
 - CLI 自动识别 Afterglow v1 / QQChatExporter / WeFlow 微信 JSON 格式
 - 默认只做轻量文本导入时，QQChatExporter 建议在高级选项勾选"仅保留文件元数据，不下载文件"
 - 需要历史图片检索时，必须另外保留实际包含 `resources/images/` 原图的导出目录
@@ -431,6 +440,13 @@ uv run python -m xuwen.ingestion.cli import-images 路径/到/导出目录
 
 ```bash
 uv run python scripts/analyze_persona.py 路径/到/你的聊天记录.json
+```
+
+如果导入时使用了 `normalized`，生成 persona 时也要传入相同模式：
+
+```bash
+uv run python scripts/analyze_persona.py 路径/到/已处理的聊天记录.json \
+  --json-emoji-mode normalized
 ```
 
 > **🔍 必做这一步。** 这一步生成四个文件到 `PERSONA_DATA_DIR`：

@@ -59,6 +59,7 @@ async def import_history(
     store: MemoryStore | None = None,
     embedder: EmbeddingClient | None = None,
     plugin_name: str | None = None,
+    json_emoji_mode: str = "raw",
     label_progress_cb: Callable[[int, int], None] | None = None,
     chunk_progress_cb: Callable[[int, int], None] | None = None,
     split_progress_cb: Callable[[int, int], None] | None = None,
@@ -69,6 +70,8 @@ async def import_history(
     """从导出 JSON 文件导入到 LanceDB。
 
     plugin_name 强制使用某个 plugin；不传则按 plugin 注册顺序自动 match。
+    json_emoji_mode=raw 时自动归一化短方括号表情；normalized 时认为用户已预处理，
+    只识别统一标记 `[/表情]`。
     label_progress_cb 透传给打标阶段，用于 CLI 显示进度（done, total）。
     chunk_progress_cb(done, total)：三路 chunk 入库的合并进度。
         total = friend + window + response_pair 的总 chunk 数；
@@ -102,7 +105,7 @@ async def import_history(
 
     # 2) clean
     _stage(f"正在清洗与去重 {len(parsed)} 条消息")
-    cleaner = Cleaner(settings)
+    cleaner = Cleaner(settings, json_emoji_mode=json_emoji_mode)
     cleaned = cleaner.clean_many(parsed)
 
     # 3) split

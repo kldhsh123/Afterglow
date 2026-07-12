@@ -46,6 +46,15 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="可选：输出目录（默认使用 settings.persona_data_dir）",
     )
+    parser.add_argument(
+        "--json-emoji-mode",
+        choices=("raw", "normalized"),
+        default="raw",
+        help=(
+            "JSON 表情占位符模式：raw（默认）自动把方括号内 1-12 个字符视为表情；"
+            "normalized 表示文件已预处理，只识别统一标记 [/表情]。"
+        ),
+    )
     args = parser.parse_args(argv)
 
     settings = get_settings()
@@ -55,7 +64,7 @@ def main(argv: list[str] | None = None) -> int:
     console.print(f"[bold]加载[/]：{args.json_path}")
     payload = load_qq_json(args.json_path)
     parsed = parse_messages(payload, settings)
-    cleaner = Cleaner(settings)
+    cleaner = Cleaner(settings, json_emoji_mode=args.json_emoji_mode)
     cleaned = cleaner.clean_many(parsed)
     sessions = split_sessions(cleaned, settings)
 
@@ -67,6 +76,7 @@ def main(argv: list[str] | None = None) -> int:
         sessions,
         friend_name=settings.friend_name,
         self_name=settings.self_name,
+        json_emoji_mode=args.json_emoji_mode,
     )
 
     out_dir.mkdir(parents=True, exist_ok=True)

@@ -65,6 +65,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="可选：强制使用某个 plugin（如 qqexporter_v5 / wechat_weflow）。不指定则自动识别。",
     )
     p_import.add_argument(
+        "--json-emoji-mode",
+        choices=("raw", "normalized"),
+        default="raw",
+        help=(
+            "JSON 表情占位符模式：raw（默认）自动把方括号内 1-12 个字符视为表情；"
+            "normalized 表示文件已由用户预处理，只识别统一标记 [/表情]。"
+        ),
+    )
+    p_import.add_argument(
         "--rebuild-tables",
         default="",
         help=(
@@ -221,6 +230,7 @@ async def _run_import(args: argparse.Namespace) -> int:
         )
     else:
         console.print(f"[bold]开始导入：[/]{paths[0]}")
+    console.print(f"[dim]JSON 表情模式：{args.json_emoji_mode}[/]")
 
     # 打标阶段进度回调：按 batch 打印「已打标 done/total」
     # 只有 labeling_enabled=true 时才会真正触发（否则 importer 内部跳过）
@@ -268,6 +278,7 @@ async def _run_import(args: argparse.Namespace) -> int:
                 store=store,
                 embedder=embedder,
                 plugin_name=args.plugin,
+                json_emoji_mode=args.json_emoji_mode,
                 label_progress_cb=_label_progress if settings.labeling_enabled else None,
                 # 中间文件跳过 circadian 计算，避免被后续文件覆盖；
                 # 最后一个文件触发，画像基于该文件的 cleaned 数据生成。
