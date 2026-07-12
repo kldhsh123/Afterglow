@@ -174,11 +174,6 @@ async def _run_persona_analysis(json_path: Path, settings: Settings) -> dict[str
         compute_circadian_profile,
         save_circadian_profile,
     )
-    from xuwen.persona.proactive_profile import (
-        PROACTIVE_PROFILE_FILENAME,
-        compute_proactive_profile,
-        save_proactive_profile,
-    )
     from xuwen.persona.style_profile import build_style_profile, save_style_profile
 
     settings.require_identity()
@@ -211,18 +206,10 @@ async def _run_persona_analysis(json_path: Path, settings: Settings) -> dict[str
     circadian = compute_circadian_profile(cleaned)
     save_circadian_profile(circadian, out_dir / CIRCADIAN_PROFILE_FILENAME)
 
-    proactive = compute_proactive_profile(
-        sessions,
-        min_gap_minutes=settings.proactive_learning_min_gap_minutes,
-        timezone=settings.app_timezone,
-    )
-    save_proactive_profile(proactive, out_dir / PROACTIVE_PROFILE_FILENAME)
-
     return {
         "friend_messages": sum(1 for s in sessions for m in s.messages if m.is_friend),
         "sessions": len(sessions),
         "circadian_summary": circadian.summary,
-        "proactive_summary": proactive.summary,
     }
 
 
@@ -444,6 +431,7 @@ async def run_import_task(task_id: str, settings: Settings) -> None:
     try:
         mgr.update(task_id, status="importing", stage="正在导入聊天记录…", progress=0.02)
         reports: list[dict[str, Any]] = []
+        warnings: list[str] = []
         total = len(task.files)
         for idx, path in enumerate(task.files):
             display_name = task.file_names[idx]
@@ -462,7 +450,7 @@ async def run_import_task(task_id: str, settings: Settings) -> None:
                 report_dict = {"raw": str(report)}
             reports.append({"file": display_name, "report": report_dict})
             _log(
-                f"  → 完成：朋友单条 {getattr(report, 'friend_chunks', 0)}，"
+                f"  → 完成：可向量化朋友消息 {getattr(report, 'friend_chunks', 0)}，"
                 f"对话窗口 {getattr(report, 'window_chunks', 0)}，"
                 f"响应 pair {getattr(report, 'response_pairs', 0)}"
             )
@@ -483,7 +471,9 @@ async def run_import_task(task_id: str, settings: Settings) -> None:
             try:
                 persona_stats = await _run_persona_analysis(Path(persona_source), settings)
             except Exception as e:
-                _log(f"  → 画像分析失败（已跳过）：{type(e).__name__}: {e}")
+                warning = f"画像分析失败（已跳过）：{type(e).__name__}: {e}"
+                _log(f"  → {warning}")
+                warnings.append(warning)
                 reports.append({"persona_error": f"{type(e).__name__}: {e}"})
             finally:
                 hb.cancel()
@@ -516,15 +506,19 @@ async def run_import_task(task_id: str, settings: Settings) -> None:
             )
             _log(f"  → 主动开聊画像完成：{proactive_summary}")
         except Exception as e:
-            _log(f"  → 主动开聊画像重建失败（已跳过）：{type(e).__name__}: {e}")
+            warning = f"主动开聊画像重建失败（已跳过）：{type(e).__name__}: {e}"
+            _log(f"  → {warning}")
+            warnings.append(warning)
             reports.append({"proactive_profile_error": f"{type(e).__name__}: {e}"})
 
-        _log(f"任务 {task_id} 完成")
+        final_stage = "导入完成（有警告）" if warnings else "导入完成"
+        _log(f"任务 {task_id} {final_stage}")
         mgr.update(
             task_id,
-            stage="导入完成",
+            stage=final_stage,
             progress=1.0,
             status="done",
+            error="\n".join(warnings),
             report={"files": reports},
         )
     except asyncio.CancelledError:

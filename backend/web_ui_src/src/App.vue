@@ -607,7 +607,11 @@ function subscribeTask(taskId: string) {
         // 任务结束清掉 localStorage 任务标记，但保留 uploadedFiles 列表
         persistImportTask(null)
       }
-    } catch { /* ignore */ }
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : String(e)
+      saveError.value = `导入进度响应格式错误：${detail}`
+      es.close()
+    }
   }
   es.onerror = () => { es.close() }
   importSse = es
@@ -894,7 +898,7 @@ const importStageElapsed = computed(() => {
 const importStatusTitle = computed(() => {
   const st = importTask.value?.status
   switch (st) {
-    case 'done': return '导入完成'
+    case 'done': return importTask.value?.error ? '导入完成（有警告）' : '导入完成'
     case 'failed': return '导入失败'
     case 'cancelled': return '已取消'
     case 'persona': return '生成人格画像中'
@@ -1993,7 +1997,7 @@ onMounted(async () => {
                 <div class="flex items-center gap-2 mb-1">
                   <Loader2 v-if="!['done','failed','cancelled'].includes(importTask.status)"
                     :size="16" class="animate-spin text-accent dark:text-night-accent" />
-                  <CheckCircle2 v-else-if="importTask.status === 'done'"
+                  <CheckCircle2 v-else-if="importTask.status === 'done' && !importTask.error"
                     :size="16" class="text-accent dark:text-night-accent" />
                   <AlertCircle v-else :size="16" class="text-warning" />
                   <span class="text-sm font-medium">{{ importStatusTitle }}</span>
