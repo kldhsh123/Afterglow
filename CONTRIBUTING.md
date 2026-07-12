@@ -31,7 +31,7 @@
 | 想做什么 | 入口 |
 |---|---|
 | 修小 bug / 改文档错别字 | 直接发 PR |
-| 新增导入插件（其它聊天平台） | 看 [`docs/wiki/Development.md`](docs/wiki/Development.md#导入插件开发) |
+| 新增导入插件（其它聊天平台） | 看 [`docs/wiki/开发文档.md`](docs/wiki/开发文档.md#导入插件开发) |
 | 改进配置向导 UI | 改 `backend/web_ui_src/`，详见 [`backend/web_ui_src/README.md`](backend/web_ui_src/README.md) |
 | 改主聊天前端（时光信笺） | 改 `frontend/`，详见 [`frontend/README.md`](frontend/README.md) |
 | 新增 / 改 prompt 模板 | `backend/xuwen/persona/templates/*.md.j2` |
@@ -60,9 +60,10 @@ npm install
 ```
 
 更详细的环境配置、模型和数据导入流程见
-[`Getting-Started.md`](docs/wiki/Getting-Started.md)、
-[`Configuration.md`](docs/wiki/Configuration.md) 和
-[`Importing-Chat-History.md`](docs/wiki/Importing-Chat-History.md)，本文不重复。
+[《快速开始》](docs/wiki/快速开始.md)、
+[《配置参考》](docs/wiki/配置参考.md)、
+[《后端环境变量》](docs/wiki/后端环境变量.md)、
+以及[《导入聊天记录》](docs/wiki/导入聊天记录.md)，本文不重复。
 
 ## 项目结构（贡献者视角）
 

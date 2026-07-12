@@ -70,7 +70,7 @@ docker compose exec backend bash
 
 ### 前端怎么办
 
-镜像里**只有后端**。前端按[快速开始](Getting-Started.md#启动前端可选)运行 `pnpm dev`，
+镜像里**只有后端**。前端按[快速开始](快速开始.md#启动前端可选)运行 `pnpm dev`，
 或自行用 Nginx 托管 `frontend/dist`。后端容器对外暴露 8000，前端请求发送到该端口。
 
 ### 与源码部署互操作
