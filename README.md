@@ -12,6 +12,7 @@
   <a href="docs/wiki/Getting-Started.md">快速开始</a> ·
   <a href="#整体架构">整体架构</a> ·
   <a href="docs/wiki/Home.md">使用文档</a> ·
+  <a href="https://qm.qq.com/cgi-bin/qm/qr?k=7rvmrvR100Is9aAp0ZsjmfiG7e0Cv6ZB&amp;jump_from=webapi&amp;authKey=mEN/epjvPHcT+Sb61/XO0Mi5egs2xJBhZm9Wm5MmgEWrpNa0ZOY3fzUf+pvqfijD">QQ 群</a> ·
   <a href="https://github.com/kldhsh123/Afterglow/releases/latest">下载版本</a>
 </p>
 
@@ -27,6 +28,13 @@
 </div>
 
 ---
+
+> [!IMPORTANT]
+> **我们需要你的回音** 💌  
+> 无论你是遇到了部署报错、发现了 Bug，还是 Afterglow 帮你在某个瞬间找回了熟悉的温度，我都非常想听听你的体验。  
+> *（我们会将您的故事以您所要求的匿名，或者显示名称展示在项目的[官方网站](https://afterglow.kldhsh.top/#testimonials)上。）*
+>
+> 👉 **[点击这里，前往 Discussions 留下你的反馈与故事](https://github.com/kldhsh123/Afterglow/discussions/new?category=general)**
 
 > [!IMPORTANT]
 > Afterglow 生成的是 **AI 续写**，不是原型人物本人。请在取得必要授权、理解隐私外发范围，并能清楚区分 AI 与现实人物的前提下使用。严禁冒名顶替、骚扰、诈骗、公开传播私人聊天，或把生成内容伪装成本人的话。
@@ -186,7 +194,7 @@ uv run uvicorn xuwen.chat_api.app:create_app --factory --reload
 
 ## 社区与贡献
 
-[Discussions](https://github.com/kldhsh123/Afterglow/discussions) · [问题反馈](https://github.com/kldhsh123/Afterglow/issues) · QQ 群 `330316577` · [赞助支持](https://afdian.com/a/kldhsh123) · [致谢](docs/wiki/Acknowledgements.md)
+[Discussions](https://github.com/kldhsh123/Afterglow/discussions) · [问题反馈](https://github.com/kldhsh123/Afterglow/issues) · [QQ 群 `330316577`](https://qm.qq.com/cgi-bin/qm/qr?k=7rvmrvR100Is9aAp0ZsjmfiG7e0Cv6ZB&jump_from=webapi&authKey=mEN/epjvPHcT+Sb61/XO0Mi5egs2xJBhZm9Wm5MmgEWrpNa0ZOY3fzUf+pvqfijD) · [赞助支持](https://afdian.com/a/kldhsh123) · [致谢](docs/wiki/Acknowledgements.md)
 
 Issue 和 PR 都欢迎提交。开始修改前请先阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
