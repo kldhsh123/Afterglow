@@ -1,0 +1,115 @@
+name: sync-wiki
+
+on:
+  pull_request:
+    paths:
+      - "docs/wiki/**"
+      - ".github/scripts/prepare_wiki.py"
+      - ".github/workflows/sync-wiki.yml"
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: afterglow-wiki-${{ github.event.pull_request.number || 'publish' }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout documentation source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Validate documentation mirror
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f docs/wiki/Home.md
+          test -f docs/wiki/_Sidebar.md
+          test -f docs/wiki/_Footer.md
+          test -n "$(find docs/wiki -maxdepth 1 -type f -name '*.md' -print -quit)"
+
+          if [[ -n "$(find docs/wiki -type l -print -quit)" ]]; then
+            echo "docs/wiki must not contain symbolic links" >&2
+            exit 1
+          fi
+          if [[ -n "$(find docs/wiki -maxdepth 1 -type f ! -name '*.md' -print -quit)" ]]; then
+            echo "docs/wiki may only contain Markdown pages" >&2
+            exit 1
+          fi
+          if [[ -n "$(find docs/wiki -mindepth 1 -type d -print -quit)" ]]; then
+            echo "docs/wiki must remain flat because GitHub Wiki pages are flat" >&2
+            exit 1
+          fi
+
+          preview_dir="${RUNNER_TEMP}/afterglow-wiki-preview"
+          mkdir -p "$preview_dir"
+          rsync -a docs/wiki/ "$preview_dir/"
+          python .github/scripts/prepare_wiki.py \
+            "$preview_dir" "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/wiki"
+
+  publish:
+    if: ${{ github.event_name == 'release' || github.event_name == 'workflow_dispatch' }}
+    needs: validate
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout documentation source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Clone and publish Wiki
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.WIKI_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          wiki_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.wiki.git"
+          wiki_dir="${RUNNER_TEMP}/afterglow-wiki"
+
+          gh auth setup-git
+          if ! git clone "$wiki_url" "$wiki_dir"; then
+            echo "Unable to clone the Wiki repository." >&2
+            echo "Enable Wikis and create the initial Home page, then rerun this workflow." >&2
+            exit 1
+          fi
+
+          test -d "$wiki_dir/.git"
+          test "$(git -C "$wiki_dir" remote get-url origin)" = "$wiki_url"
+
+          rsync -a --delete --exclude='.git/' docs/wiki/ "$wiki_dir/"
+          python .github/scripts/prepare_wiki.py \
+            "$wiki_dir" "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/wiki"
+          git -C "$wiki_dir" add -A
+
+          if git -C "$wiki_dir" diff --cached --quiet; then
+            echo "Wiki is already up to date."
+            exit 0
+          fi
+
+          git -C "$wiki_dir" diff --cached --stat
+          git -C "$wiki_dir" config user.name "github-actions[bot]"
+          git -C "$wiki_dir" config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$wiki_dir" commit -m "docs: sync wiki from ${GITHUB_SHA:0:12}"
+          git -C "$wiki_dir" push origin HEAD

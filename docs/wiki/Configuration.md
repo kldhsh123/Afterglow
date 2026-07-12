@@ -1,0 +1,73 @@
+# 配置参考
+
+配置文件位于 `backend/.env`，完整字段和默认值以 `backend/.env.example` 为准。修改 `.env` 后必须
+完全重启后端；`uvicorn --reload` 不会因环境文件变化重新加载 Settings。
+
+## 必填配置
+
+| 类别 | 字段 | 说明 |
+|---|---|---|
+| 自己 | `SELF_NAME`, `SELF_UID` | 当前用户名称和一个或多个平台 UID |
+| 目标人物 | `FRIEND_NAME`, `FRIEND_UID` | 需要模仿的人及其一个或多个 UID |
+| 聊天模型 | `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `CHAT_MODEL` | OpenAI 兼容聊天接口 |
+| Embedding | `EMBEDDING_API_URL`, `EMBEDDING_API_KEY`, `EMBEDDING_MODEL`, `EMBEDDING_DIM` | 历史记录向量化与检索 |
+| API 鉴权 | `XUWEN_API_KEY` | 客户端访问后端时使用的 Bearer token |
+
+同一个人的多个账号使用逗号分隔，例如：
+
+```env
+SELF_UID=u_qq_me,wxid_me
+FRIEND_UID=u_qq_friend,wxid_friend
+```
+
+不要把不同人物的 UID 合并到同一份 `FRIEND_UID`。
+
+## 模型角色
+
+| 角色 | 必需 | 用途 | 主要配置 |
+|---|---|---|---|
+| 主聊天模型 | 是 | 生成最终回复 | `OPENAI_*`, `CHAT_MODEL` |
+| Embedding | 是 | 向量化历史与查询 | `EMBEDDING_*` |
+| 打标模型 | 否 | mood/topic/importance 标签 | `LABELING_ENABLED`, `LABEL_*` |
+| 生活状态模型 | 否 | 生活时间线和网页意图判断 | `LIFE_*` |
+| 互动决策模型 | 否 | 在规则层后微调当前回复策略 | `RESPONSE_POLICY_*` |
+| Reranker | 否 | 对混合召回结果重新排序 | `CROSS_RERANK_*` |
+| 视觉模型 | 否 | 生成历史图片摘要 | `VISION_*` |
+| 联网搜索 | 否 | 获取公开实时信息 | `WEB_ACCESS_ENABLED`, `WEB_SEARCH_*` |
+
+模型推荐会随服务价格和能力变化，项目不把某个供应商设为硬依赖。确认接口协议、维度、并发限制、
+数据留存和训练政策后再配置真实聊天数据。
+
+## Embedding 限流
+
+```env
+EMBEDDING_BATCH_SIZE=64
+EMBEDDING_MAX_CONCURRENCY=4
+EMBEDDING_MAX_REQUESTS_PER_MINUTE=0
+```
+
+遇到 429 时先降低并发，再设置每分钟请求数。更换 Embedding 模型或维度后，需要重建对应向量表，
+不能继续复用旧向量。
+
+## API 鉴权
+
+只要 `XUWEN_API_KEY` 非空，后端就会验证 Bearer token。`API_AUTH_REQUIRED=false` 不会让一个已配置的
+key 失效；若要完全关闭鉴权，必须同时清空 key。生产或局域网环境不建议关闭。
+
+## AI 回复是否进入长期记忆
+
+`AI_GENERATED_LONG_TERM_ENABLED=false` 是默认值：长期模仿证据只来自真人历史，AI 回复不会跨会话
+成为长期素材。设为 `true` 后，AI 回复会以低权重进入长期检索，系统可能逐渐形成偏离原始人物的新习惯。
+开启前请阅读[负责任使用与数据隐私](Safety-and-Privacy.md)。
+
+## 完全离线
+
+可以把聊天、Embedding、打标、生活状态和视觉模型全部指向 Ollama、vLLM 等本地兼容服务，并关闭：
+
+```env
+WEB_ACCESS_ENABLED=false
+WEB_FETCH_ENABLED=false
+```
+
+只有所有模型与工具都在本机运行时，聊天文本才不会发送给外部 provider。
+

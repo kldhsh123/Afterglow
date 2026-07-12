@@ -8,7 +8,7 @@
 #   3) docker compose up -d
 #   4) docker compose logs backend | grep -iE "token|/config/"
 #      → 复制日志里的 setup token，浏览器打开 http://localhost:8000/config/
-#      → 跟着 7 步配置向导走完
+#      → 跟着 8 步配置向导走完
 #
 # 容器会自动检测到挂载目录是空的，进入首次配置模式；向导写入直接落到
 # 你这个目录里的 .env，重启即生效。导入聊天记录、LanceDB 向量库、persona
