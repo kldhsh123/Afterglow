@@ -132,6 +132,7 @@ async def import_history(
                     settings,
                     api_url=settings.resolved_adaptive_chunk_api_url,
                     api_key=settings.resolved_adaptive_chunk_api_key.get_secret_value(),
+                    timeout_seconds=settings.adaptive_chunk_timeout_seconds,
                 )
             else:
                 _stage(f"正在用启发式 adaptive 切分窗口（{len(sessions)} 个会话）")
