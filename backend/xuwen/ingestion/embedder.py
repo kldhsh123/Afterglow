@@ -104,7 +104,7 @@ class EmbeddingClient:
         self.settings = settings
         self._owned_client = client is None
         self._client = client or httpx.AsyncClient(
-            timeout=httpx.Timeout(60.0, connect=10.0),
+            timeout=httpx.Timeout(settings.embedding_timeout_seconds, connect=10.0),
         )
         self._url = _resolve_endpoint(str(settings.embedding_api_url), "/embeddings")
         self._headers = {
