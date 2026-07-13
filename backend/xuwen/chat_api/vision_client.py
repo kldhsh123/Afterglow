@@ -108,6 +108,8 @@ class VisionClient:
             "max_tokens": 120,
             "temperature": 0.3,
         }
+        if self.settings.llm_reasoning_effort != "null":
+            payload["reasoning_effort"] = self.settings.llm_reasoning_effort
 
         async for attempt in AsyncRetrying(
             stop=stop_after_attempt(3),

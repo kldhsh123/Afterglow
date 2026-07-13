@@ -21,6 +21,7 @@ RerankMode = Literal["auto", "always", "never"]
 CrossRerankProtocol = Literal["jina", "dashscope"]
 ChunkingStrategy = Literal["fixed", "adaptive"]
 ChatApiProtocol = Literal["chat_completions", "responses"]
+ReasoningEffort = Literal["none", "low", "medium", "high", "xhigh", "null"]
 
 # 关系类型到自然语言描述的默认映射（仅在用户未自定义 RELATIONSHIP_DESCRIPTION 时使用）
 _RELATIONSHIP_DEFAULTS: dict[RelationshipType, str] = {
@@ -114,6 +115,7 @@ class Settings(BaseSettings):
     chat_model: str = "gpt-4o-mini"
     chat_api_protocol: ChatApiProtocol = "chat_completions"
     chat_timeout_seconds: float = 60.0
+    llm_reasoning_effort: ReasoningEffort = "null"
 
     # ----- 联网检索（默认关闭）-----
     # 后端在调用主模型前可选查询 Tavily / SearXNG，并把摘要注入 prompt。

@@ -64,6 +64,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             resolved_settings,
             api_protocol=resolved_settings.chat_api_protocol,
             timeout_seconds=resolved_settings.chat_timeout_seconds,
+            include_reasoning_effort=True,
         )
         # life / response_policy / query_rewrite / rerank 都是 fail-open 设计：
         # 单次失败立刻退快路径（缓存 / 规则层 / 原 query / RRF 顺序），重试无意义只会放大延迟。
@@ -73,6 +74,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             api_url=resolved_settings.resolved_life_api_url,
             api_key=resolved_settings.resolved_life_api_key.get_secret_value(),
             timeout_seconds=resolved_settings.life_timeout_seconds,
+            include_reasoning_effort=True,
             max_retries=1,
         )
         response_policy_llm = LLMClient(
@@ -80,6 +82,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             api_url=resolved_settings.resolved_response_policy_api_url,
             api_key=resolved_settings.resolved_response_policy_api_key.get_secret_value(),
             timeout_seconds=resolved_settings.response_policy_timeout_seconds,
+            include_reasoning_effort=True,
             max_retries=1,
         )
         schedule_extractor_llm = LLMClient(
@@ -87,6 +90,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             api_url=resolved_settings.resolved_schedule_api_url,
             api_key=resolved_settings.resolved_schedule_api_key.get_secret_value(),
             timeout_seconds=resolved_settings.schedule_timeout_seconds,
+            include_reasoning_effort=True,
             max_retries=1,
         )
         extra_llms: list[LLMClient] = []
@@ -97,6 +101,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 api_url=resolved_settings.resolved_query_rewrite_api_url,
                 api_key=resolved_settings.resolved_query_rewrite_api_key.get_secret_value(),
                 timeout_seconds=resolved_settings.query_rewrite_timeout_seconds,
+                include_reasoning_effort=True,
                 max_retries=1,
             )
             extra_llms.append(query_rewrite_llm)
