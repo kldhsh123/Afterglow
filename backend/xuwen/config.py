@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import math
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
@@ -21,6 +22,7 @@ RerankMode = Literal["auto", "always", "never"]
 CrossRerankProtocol = Literal["jina", "dashscope"]
 ChunkingStrategy = Literal["fixed", "adaptive"]
 ChatApiProtocol = Literal["chat_completions", "responses"]
+ReasoningEffort = Literal["none", "low", "medium", "high", "xhigh", "null"]
 
 # 关系类型到自然语言描述的默认映射（仅在用户未自定义 RELATIONSHIP_DESCRIPTION 时使用）
 _RELATIONSHIP_DEFAULTS: dict[RelationshipType, str] = {
@@ -113,6 +115,8 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://api.openai.com/v1"
     chat_model: str = "gpt-4o-mini"
     chat_api_protocol: ChatApiProtocol = "chat_completions"
+    chat_timeout_seconds: float = 60.0
+    llm_reasoning_effort: ReasoningEffort = "null"
 
     # ----- 联网检索（默认关闭）-----
     # 后端在调用主模型前可选查询 Tavily / SearXNG，并把摘要注入 prompt。
@@ -139,6 +143,7 @@ class Settings(BaseSettings):
     life_model: str = ""
     life_temperature: float = 0.35
     life_max_tokens: int = 1500
+    life_timeout_seconds: float = 12.0
     # 最长多久让 life 模型重新判断一次当前状态。0 = 只按 next_update_at / 用户打断触发。
     life_update_interval_minutes: int = 60
     # 生活状态可建议延迟回复；这里限制实际 sleep 上限，避免请求被模型拖太久。
@@ -188,6 +193,7 @@ class Settings(BaseSettings):
     vision_api_key: SecretStr = Field(default=SecretStr(""))
     vision_model: str = "qwen-vl-plus"
     vision_describe_prompt: str = "请用一两句话客观描述这张图片的内容，不要发挥。"
+    vision_timeout_seconds: float = 15.0
     # 单张图片最大字节（base64 解码后）；超过会被拒绝
     vision_max_image_bytes: int = 8 * 1024 * 1024  # 8MB
     # 图片文件持久化目录（base64 原图按 sha256 文件名存盘）
@@ -198,6 +204,7 @@ class Settings(BaseSettings):
     embedding_api_key: SecretStr = Field(default=SecretStr(""))
     embedding_model: str = "xop3qwen8bembedding"
     embedding_dim: int = 4096
+    embedding_timeout_seconds: float = 60.0
     # 请求格式：array = OpenAI 标准（input 是 string[]，一次多条）
     #         single = 单条模式（input 是 string，一次只能一条），兼容 Gitee AI 等
     embedding_input_mode: Literal["array", "single"] = "array"
@@ -271,6 +278,7 @@ class Settings(BaseSettings):
     adaptive_chunk_model: str = ""
     adaptive_chunk_temperature: float = 0.0
     adaptive_chunk_max_tokens: int = 900
+    adaptive_chunk_timeout_seconds: float = 60.0
     adaptive_chunk_max_messages_per_call: int = 80
     adaptive_chunk_target_chars: int = 700
     adaptive_chunk_max_chars: int = 1400
@@ -317,6 +325,7 @@ class Settings(BaseSettings):
     query_rewrite_temperature: float = 0.0
     query_rewrite_max_tokens: int = 240
     query_rewrite_max_variants: int = 3
+    query_rewrite_timeout_seconds: float = 30.0
     # 可选：RRF 召回后调用小模型对候选记忆语义重排。
     rerank_enabled: bool = False
     rerank_mode: RerankMode = "auto"
@@ -360,6 +369,7 @@ class Settings(BaseSettings):
     response_policy_model: str = ""
     response_policy_temperature: float = 0.2
     response_policy_max_tokens: int = 260
+    response_policy_timeout_seconds: float = 8.0
 
     # ----- 定时任务提取小模型（默认关闭）-----
     # 主聊天模型仅需在回复里输出 <schedule-hint>明天早上7点叫我起床</schedule-hint>，
@@ -372,6 +382,7 @@ class Settings(BaseSettings):
     schedule_model: str = ""
     schedule_temperature: float = 0.1
     schedule_max_tokens: int = 400
+    schedule_timeout_seconds: float = 60.0
     # 单轮最多解析的 hint 数量，防止主模型刷屏导致小模型成本失控
     schedule_max_hints_per_turn: int = 5
     # 整批解析的总超时（秒），到点未完成则 fail-open 返回空列表。
@@ -461,6 +472,7 @@ class Settings(BaseSettings):
     label_api_url: str = "https://open.bigmodel.cn/api/paas/v4"
     label_api_key: SecretStr = Field(default=SecretStr(""))
     label_model: str = "glm-4-flash"
+    label_timeout_seconds: float = 30.0
     # 单次 LLM 调用最多塞几条消息（受小模型上下文窗口与可靠性影响）
     label_batch_size: int = 8
     # 打标 API 最大并发批次数。1 = 上一批处理完再下一批；GLM-4-Flash 并发 20 可设 15。
@@ -613,18 +625,23 @@ class Settings(BaseSettings):
             raise ValueError("调优整数参数必须 >= 0")
         return v
 
-    @field_validator("rerank_timeout_seconds")
+    @field_validator(
+        "chat_timeout_seconds",
+        "life_timeout_seconds",
+        "vision_timeout_seconds",
+        "embedding_timeout_seconds",
+        "adaptive_chunk_timeout_seconds",
+        "query_rewrite_timeout_seconds",
+        "rerank_timeout_seconds",
+        "cross_rerank_timeout_seconds",
+        "response_policy_timeout_seconds",
+        "schedule_timeout_seconds",
+        "label_timeout_seconds",
+    )
     @classmethod
-    def _check_rerank_timeout(cls, v: float) -> float:
-        if v <= 0:
-            raise ValueError("rerank_timeout_seconds 必须 > 0")
-        return v
-
-    @field_validator("cross_rerank_timeout_seconds")
-    @classmethod
-    def _check_cross_rerank_timeout(cls, v: float) -> float:
-        if v <= 0:
-            raise ValueError("cross_rerank_timeout_seconds 必须 > 0")
+    def _check_model_timeout(cls, v: float) -> float:
+        if not math.isfinite(v) or v <= 0:
+            raise ValueError("模型 timeout 必须为有限正数")
         return v
 
     @field_validator("web_search_max_results")

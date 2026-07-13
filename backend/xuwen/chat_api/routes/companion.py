@@ -46,7 +46,6 @@ from xuwen.persona.prompt import build_chat_messages
 
 router = APIRouter(prefix="/v1/companion", tags=["companion"])
 logger = logging.getLogger(__name__)
-_COMPANION_RESPONSE_POLICY_TIMEOUT_SECONDS = 8.0
 
 _ASSUMED_USER_STATE_PATTERNS = (
     "你还没睡",
@@ -493,12 +492,12 @@ async def _generate_proactive_response(
                     trace_id=trace_id,
                     metrics=state.metrics,
                 ),
-                timeout=_COMPANION_RESPONSE_POLICY_TIMEOUT_SECONDS,
+                timeout=state.settings.response_policy_timeout_seconds,
             )
         except TimeoutError:
             logger.warning(
                 "主动聊天互动策略小模型超时 %.1fs，沿用规则层决策",
-                _COMPANION_RESPONSE_POLICY_TIMEOUT_SECONDS,
+                state.settings.response_policy_timeout_seconds,
             )
             state.metrics.record(
                 "companion.response.policy.refined",
