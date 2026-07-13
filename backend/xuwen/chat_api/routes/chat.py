@@ -55,6 +55,7 @@ from xuwen.chat_api.turn_coordinator import TurnSnapshot
 from xuwen.chat_api.vision_client import VisionClient
 from xuwen.chat_api.web_fetch import render_url_context, resolve_fetch_urls
 from xuwen.chat_api.web_search import render_web_context, should_search_web
+from xuwen.companion.life import LifeSnapshot
 from xuwen.companion.response_policy import (
     ResponseDecision,
     decide_response_policy,
@@ -72,10 +73,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["chat"])
 
 _CHAT_RETRIEVAL_TIMEOUT_SECONDS = 15.0
-_CHAT_LIFE_TIMEOUT_SECONDS = 12.0
 _CHAT_RELATIONSHIP_TIMEOUT_SECONDS = 5.0
-_CHAT_RESPONSE_POLICY_TIMEOUT_SECONDS = 8.0
-_CHAT_VISION_TIMEOUT_SECONDS = 15.0
 
 
 class ChatTurnCancelRequest(BaseModel):
@@ -196,12 +194,12 @@ async def chat_completions(
             async with VisionClient(state.settings) as vc:
                 vlm_descriptions = await asyncio.wait_for(
                     vc.describe_images(images_in_last),
-                    timeout=_CHAT_VISION_TIMEOUT_SECONDS,
+                    timeout=state.settings.vision_timeout_seconds,
                 )
         except TimeoutError:
             logger.warning(
                 "VLM 描图超时 %.1fs，使用占位描述",
-                _CHAT_VISION_TIMEOUT_SECONDS,
+                state.settings.vision_timeout_seconds,
             )
             state.metrics.record("vision.describe", 0.0, error="TimeoutError")
             vlm_descriptions = ["[图片：识别超时]"] * len(images_in_last)
@@ -309,7 +307,7 @@ async def chat_completions(
     # 仍是 life 决策的核心信号，影响很小；多数轮走快路径（缓存早退）则几乎零成本。
     life_markdown = state.relationship_memory.load_markdown()
 
-    async def _life_in_parallel():
+    async def _life_in_parallel() -> LifeSnapshot:
         async with state.life_apply_lock:
             try:
                 return await asyncio.wait_for(
@@ -324,12 +322,12 @@ async def chat_completions(
                         trace_id=trace_id,
                         metrics=state.metrics,
                     ),
-                    timeout=_CHAT_LIFE_TIMEOUT_SECONDS,
+                    timeout=state.settings.life_timeout_seconds,
                 )
             except TimeoutError:
                 logger.warning(
                     "life 决策超时 %.1fs，沿用当前 snapshot",
-                    _CHAT_LIFE_TIMEOUT_SECONDS,
+                    state.settings.life_timeout_seconds,
                 )
                 state.metrics.record("life.decide", 0.0, error="TimeoutError")
                 return state.life.snapshot()
@@ -410,12 +408,12 @@ async def chat_completions(
                     trace_id=trace_id,
                     metrics=state.metrics,
                 ),
-                timeout=_CHAT_RESPONSE_POLICY_TIMEOUT_SECONDS,
+                timeout=state.settings.response_policy_timeout_seconds,
             )
         except TimeoutError:
             logger.warning(
                 "互动策略小模型超时 %.1fs，沿用规则层决策",
-                _CHAT_RESPONSE_POLICY_TIMEOUT_SECONDS,
+                state.settings.response_policy_timeout_seconds,
             )
             state.metrics.record("response.policy.refined", 0.0, error="TimeoutError")
         state.metrics.record(
