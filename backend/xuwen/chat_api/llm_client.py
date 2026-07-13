@@ -214,7 +214,12 @@ class LLMClient:
             self._include_reasoning_effort
             and self.settings.llm_reasoning_effort != "null"
         ):
-            payload["reasoning_effort"] = self.settings.llm_reasoning_effort
+            if self._api_protocol == "responses":
+                payload["reasoning"] = {
+                    "effort": self.settings.llm_reasoning_effort,
+                }
+            else:
+                payload["reasoning_effort"] = self.settings.llm_reasoning_effort
         if params.temperature is not None:
             payload["temperature"] = params.temperature
         if params.top_p is not None:
