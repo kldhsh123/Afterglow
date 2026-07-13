@@ -151,6 +151,8 @@ class Labeler:
             "max_tokens": 600,
             "response_format": {"type": "json_object"},
         }
+        if self.settings.llm_reasoning_effort != "null":
+            payload["reasoning_effort"] = self.settings.llm_reasoning_effort
 
         async for attempt in AsyncRetrying(
             stop=stop_after_attempt(3),

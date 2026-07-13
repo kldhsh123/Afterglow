@@ -62,6 +62,7 @@ class LLMClient:
         api_url: str | None = None,
         api_key: str | None = None,
         api_protocol: ChatApiProtocol = "chat_completions",
+        include_reasoning_effort: bool = False,
         max_retries: int = 3,
     ) -> None:
         self.settings = settings
@@ -70,6 +71,7 @@ class LLMClient:
             timeout=httpx.Timeout(timeout_seconds, connect=10.0),
         )
         self._api_protocol = api_protocol
+        self._include_reasoning_effort = include_reasoning_effort
         self._url = _resolve_llm_endpoint(
             api_url or str(settings.openai_base_url),
             api_protocol,
@@ -208,6 +210,11 @@ class LLMClient:
             payload["messages"] = messages
         if params is None:
             params = GenerationParams()
+        if (
+            self._include_reasoning_effort
+            and self.settings.llm_reasoning_effort != "null"
+        ):
+            payload["reasoning_effort"] = self.settings.llm_reasoning_effort
         if params.temperature is not None:
             payload["temperature"] = params.temperature
         if params.top_p is not None:
