@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import math
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
@@ -639,8 +640,8 @@ class Settings(BaseSettings):
     )
     @classmethod
     def _check_model_timeout(cls, v: float) -> float:
-        if v <= 0:
-            raise ValueError("模型 timeout 必须 > 0")
+        if not math.isfinite(v) or v <= 0:
+            raise ValueError("模型 timeout 必须为有限正数")
         return v
 
     @field_validator("web_search_max_results")
