@@ -58,6 +58,7 @@ from xuwen.chat_api.state import AppState, get_state
 from xuwen.chat_api.vision_client import VisionClient
 from xuwen.chat_api.web_fetch import render_url_context, resolve_fetch_urls
 from xuwen.chat_api.web_search import render_web_context, should_search_web
+from xuwen.companion.life import LifeSnapshot
 from xuwen.companion.response_policy import (
     ResponseDecision,
     decide_response_policy,
@@ -73,10 +74,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["responses"])
 
 _RESPONSES_RETRIEVAL_TIMEOUT_SECONDS = 15.0
-_RESPONSES_LIFE_TIMEOUT_SECONDS = 12.0
 _RESPONSES_RELATIONSHIP_TIMEOUT_SECONDS = 5.0
-_RESPONSES_RESPONSE_POLICY_TIMEOUT_SECONDS = 8.0
-_RESPONSES_VISION_TIMEOUT_SECONDS = 15.0
 
 
 @router.post("/v1/responses", response_model=None)
@@ -122,12 +120,12 @@ async def responses(
                 async with VisionClient(state.settings) as vc:
                     vlm_descriptions = await asyncio.wait_for(
                         vc.describe_images(last_user_images),
-                        timeout=_RESPONSES_VISION_TIMEOUT_SECONDS,
+                        timeout=state.settings.vision_timeout_seconds,
                     )
             except TimeoutError:
                 logger.warning(
                     "Responses VLM 描图超时 %.1fs，使用占位描述",
-                    _RESPONSES_VISION_TIMEOUT_SECONDS,
+                    state.settings.vision_timeout_seconds,
                 )
                 state.metrics.record("responses.vision.describe", 0.0, error="TimeoutError")
                 vlm_descriptions = ["[图片：识别超时]"] * len(last_user_images)
@@ -217,7 +215,7 @@ async def responses(
     # life 进 Layer A 并发：memory_context 改用 recent，relationship_context 同步读 markdown
     life_markdown = state.relationship_memory.load_markdown()
 
-    async def _life_in_parallel():
+    async def _life_in_parallel() -> LifeSnapshot:
         async with state.life_apply_lock:
             try:
                 return await asyncio.wait_for(
@@ -232,12 +230,12 @@ async def responses(
                         trace_id=trace_id,
                         metrics=state.metrics,
                     ),
-                    timeout=_RESPONSES_LIFE_TIMEOUT_SECONDS,
+                    timeout=state.settings.life_timeout_seconds,
                 )
             except TimeoutError:
                 logger.warning(
                     "Responses life 决策超时 %.1fs，沿用当前 snapshot",
-                    _RESPONSES_LIFE_TIMEOUT_SECONDS,
+                    state.settings.life_timeout_seconds,
                 )
                 state.metrics.record("responses.life.decide", 0.0, error="TimeoutError")
                 return state.life.snapshot()
@@ -321,12 +319,12 @@ async def responses(
                     trace_id=trace_id,
                     metrics=state.metrics,
                 ),
-                timeout=_RESPONSES_RESPONSE_POLICY_TIMEOUT_SECONDS,
+                timeout=state.settings.response_policy_timeout_seconds,
             )
         except TimeoutError:
             logger.warning(
                 "Responses 互动策略小模型超时 %.1fs，沿用规则层决策",
-                _RESPONSES_RESPONSE_POLICY_TIMEOUT_SECONDS,
+                state.settings.response_policy_timeout_seconds,
             )
             state.metrics.record("response.policy.refined", 0.0, error="TimeoutError")
         state.metrics.record(
