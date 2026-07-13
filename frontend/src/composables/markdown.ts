@@ -20,7 +20,7 @@ function backendBaseUrl(): string {
       }
     }
   } catch {
-    /* ignore */
+    /* 忽略读取失败 */
   }
   return ''
 }

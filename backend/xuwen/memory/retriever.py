@@ -332,7 +332,7 @@ async def _search_variants(
     *,
     extra_filter: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Run vector search for one or more query variants and merge by row id."""
+    """对一个或多个查询变体执行向量检索，并按行 ID 合并结果。"""
     if not vectors:
         return []
     tasks = [
@@ -701,7 +701,7 @@ def _fuse(
         chunk: ScoredChunk = entry["chunk"]
         rrf = entry["rrf"]
 
-        # source weight
+        # 来源权重
         if chunk.source == "ai_generated":
             src_w = settings.ai_generated_source_weight
         elif chunk.source == "human_original_image":
@@ -711,7 +711,7 @@ def _fuse(
         else:
             src_w = settings.history_source_weight
 
-        # recency
+        # 时效性权重
         rec_w = recency_weight(
             chunk.timestamp_ms,
             half_life_days=settings.recency_half_life_days,
@@ -719,7 +719,7 @@ def _fuse(
             now=now_ms,
         )
 
-        # warmth
+        # 温暖度权重
         warm = 1.0 + chunk.warmth * settings.warmth_boost
 
         pair_w = 1.35 if chunk.kind == "response_pair" else 1.0

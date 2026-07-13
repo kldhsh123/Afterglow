@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // Afterglow 配置向导（后端自带，不依赖 frontend 项目）
-// 6 步：token → 身份 → 关系 → 聊天 AI → 向量服务(含打标推荐) → 导入聊天记录 → 设置密码
+// 向导步骤：访问令牌 → 身份 → 关系 → 聊天 AI → 向量服务（含打标推荐）→ 导入聊天记录 → 设置密码
 import { computed, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import {
   ArrowLeft, ArrowRight, CheckCircle2, AlertCircle, Loader2,
@@ -16,12 +16,12 @@ import {
 const step = ref(0)
 const totalSteps = 8
 
-// ---- token ----
+// ---- 访问令牌 ----
 const tokenInput = ref(getToken())
 const tokenError = ref('')
 const tokenChecking = ref(false)
 
-// ---- form ----
+// ---- 表单 ----
 const form = reactive({
   SELF_NAME: '',
   SELF_UID: '',
@@ -172,7 +172,7 @@ function loadPersistedFiles(): UploadedFile[] {
   }
 }
 
-// step 1: 从聊天文件识别 UID
+// 第 1 步：从聊天文件识别 UID
 const inspecting = ref(false)
 const inspectError = ref('')
 const inspectCandidates = ref<IdentityCandidate[]>([])
@@ -193,7 +193,7 @@ const relationships = [
 
 const progress = computed(() => Math.round(((step.value) / (totalSteps)) * 100))
 
-// ---- token check ----
+// ---- 访问令牌校验 ----
 async function checkToken() {
   if (!tokenInput.value.trim()) {
     tokenError.value = '请粘贴后端控制台打印的 setup token'
@@ -217,8 +217,8 @@ async function checkToken() {
     rerankerPresets.value = presetsData.reranker
     crossRerankerPresets.value = presetsData.cross_reranker
     step.value = 1
-    // token 校验成功后才尝试恢复未完成的导入任务，
-    // 否则用旧 token 调 /import/* 会 401，且用户没机会更新 token。
+    // 访问令牌校验成功后才尝试恢复未完成的导入任务，
+    // 否则用旧令牌调用 /import/* 会返回 401，且用户没机会更新令牌。
     await tryResumeUnfinishedImport()
   } catch (e) {
     tokenError.value = (e as Error).message || '校验失败'
@@ -256,8 +256,8 @@ async function tryResumeUnfinishedImport() {
 }
 
 async function loadExistingValues() {
-  // 已写入的 .env 字段反向填回 form，让用户重开页面能接着填
-  // secret 字段后端只回 mask，这里跳过（form 字段保持空，用户重新填）
+  // 已写入的 .env 字段反向填回表单，让用户重开页面能接着填
+  // 密钥字段后端只返回掩码，这里跳过（表单字段保持空，用户重新填）
   const BOOL_FIELDS = new Set([
     'LABELING_ENABLED',
     'VISION_ENABLED',
@@ -282,20 +282,20 @@ async function loadExistingValues() {
         ;(form as any)[k] = v.value
       }
     }
-  } catch { /* first run, no .env yet */ }
+  } catch { /* 首次运行时可能还没有 .env */ }
 }
 
 async function next() {
   if (step.value >= totalSteps) return
   // 静默保存当前状态到 .env：用户随时关网页都不会丢已填字段。
   // saveConfig 内部会跳过空字符串字段，避免覆盖之前已填好的字段。
-  // step 0（token 校验）不写 .env，跳过
+  // 第 0 步（访问令牌校验）不写 .env，跳过
   if (step.value > 0) await saveConfig({ silent: true })
   step.value += 1
 }
 function prev() { if (step.value > 0) step.value -= 1 }
 
-// ---- presets ----
+// ---- 服务预设 ----
 function applyChatPreset(p: Preset) {
   // custom 预设也带示例 base_url，让用户看到 URL 格式后替换
   // 如果用户已经填的是某个真实中转站（不在任何已知 preset 里），点 custom 不覆盖
@@ -309,6 +309,8 @@ function applyChatPreset(p: Preset) {
       return
     }
   }
+  // 当前内置服务商预设只承诺兼容 Chat Completions。
+  form.CHAT_API_PROTOCOL = 'chat_completions'
   form.OPENAI_BASE_URL = p.base_url
   form.CHAT_MODEL = p.default_model
   chatTest.value = null
@@ -378,7 +380,7 @@ const chunkingStrategyLocked = computed<boolean>(() => {
   return ['pending', 'parsing', 'importing', 'labeling', 'persona'].includes(st)
 })
 
-// ---- tests ----
+// ---- 连通性测试 ----
 async function testChat() {
   chatTesting.value = true; chatTest.value = null
   try {
@@ -419,7 +421,7 @@ async function testLabel() {
   } finally { labelTesting.value = false }
 }
 
-// ---- api key ----
+// ---- API 密钥 ----
 async function genApiKey() {
   const data = await api.generateApiKey()
   form.XUWEN_API_KEY = data.token
@@ -430,9 +432,9 @@ function copyApiKey() {
   }
 }
 
-// ---- step 1: 选文件 → 上传 + 嗅探 + 合并候选 ----
+// ---- 第 1 步：选文件 → 上传 + 嗅探 + 合并候选 ----
 // 多文件场景：同时上传多份导出（QQ + 微信 / 多账号），后端逐个嗅探，
-// 前端合并候选按 UID 去重；step 5 直接复用这些已上传文件，不再要求重传。
+// 前端合并候选按 UID 去重；第 7 步直接复用这些已上传文件，不再要求重传。
 function mergeCandidates(prev: IdentityCandidate[], next: IdentityCandidate[]): IdentityCandidate[] {
   const rank = { self: 0, friend: 1, unknown: 2 } as const
   const map = new Map<string, IdentityCandidate>(prev.map(c => [c.uid, c]))
@@ -456,7 +458,7 @@ async function onIdentifyFilesPicked(ev: Event) {
   inspectError.value = ''
   try {
     const res = await api.uploadFiles(files)
-    // 累加到已上传列表（step 5 会直接用）
+    // 累加到已上传列表（第 7 步会直接使用）
     uploadedFiles.value.push(...res.uploaded)
 
     // 合并候选 + 更新格式
@@ -545,7 +547,7 @@ const unassignedCandidates = computed<IdentityCandidate[]>(() => {
   )
 })
 
-// ---- import flow ----
+// ---- 导入流程 ----
 function removeUploaded(idx: number) {
   uploadedFiles.value.splice(idx, 1)
   persistUploadedFiles(uploadedFiles.value)
@@ -590,6 +592,13 @@ async function startImport() {
 function subscribeTask(taskId: string) {
   if (importSse) importSse.close()
   const es = new EventSource(api.taskStreamUrl(taskId))
+  let consecutiveErrors = 0
+  es.onopen = () => {
+    consecutiveErrors = 0
+    if (saveError.value.startsWith('导入进度连接暂时中断')) {
+      saveError.value = ''
+    }
+  }
   es.onmessage = (ev) => {
     try {
       importTask.value = JSON.parse(ev.data)
@@ -604,7 +613,18 @@ function subscribeTask(taskId: string) {
       es.close()
     }
   }
-  es.onerror = () => { es.close() }
+  es.onerror = () => {
+    consecutiveErrors += 1
+    if (es.readyState === EventSource.CLOSED) {
+      saveError.value = '导入进度连接已关闭，请刷新页面恢复任务状态。'
+      importSse = null
+      return
+    }
+    if (consecutiveErrors >= 2) {
+      saveError.value = '导入进度连接暂时中断，浏览器正在自动重连…'
+    }
+    // 不主动关闭：EventSource 会按浏览器原生策略自动重连。
+  }
   importSse = es
 }
 
@@ -612,7 +632,7 @@ async function cancelImport() {
   if (importTask.value) await api.cancelTask(importTask.value.task_id)
 }
 
-// ---- save ----
+// ---- 保存配置 ----
 async function saveConfig(opts: { silent?: boolean } = {}): Promise<boolean> {
   saving.value = true; saveError.value = ''
   try {
@@ -788,7 +808,7 @@ const canNext = computed(() => {
       }
       return true
     }
-    // step 5: 高级功能可选可跳过；开了视觉/联网搜索的话强制必填关键字段
+    // 第 5 步：高级功能可选可跳过；开启视觉或联网搜索时强制填写关键字段
     case 5: {
       // 自定义（非复用打标）模式下必须填三件套
       if (!form.LIFE_REUSE_LABEL || !form.LABELING_ENABLED) {
@@ -838,11 +858,15 @@ const canNext = computed(() => {
 })
 
 const currentPresetApplyUrl = computed(() => {
+  if (form.CHAT_API_PROTOCOL !== 'chat_completions') return undefined
   return chatPresets.value.find(p => p.id !== 'custom' && p.base_url === form.OPENAI_BASE_URL)?.apply_url
 })
 
 // 选中态判定：先匹配真实 preset，匹配不到（base_url 是用户自填的）则视为自定义中转站
 const currentChatPresetId = computed(() => {
+  if (form.CHAT_API_PROTOCOL !== 'chat_completions') {
+    return form.OPENAI_BASE_URL ? 'custom' : ''
+  }
   const match = chatPresets.value.find(p => p.id !== 'custom' && p.base_url === form.OPENAI_BASE_URL)
   if (match) return match.id
   if (form.OPENAI_BASE_URL) return 'custom'
@@ -904,8 +928,8 @@ onMounted(async () => {
   const persisted = loadPersistedFiles()
   if (persisted.length) uploadedFiles.value = persisted
 
-  // 有保存的 token → 自动校验 + 进入向导 + 恢复未完成的导入（在 checkToken 内部）
-  // 无 token / token 失效时停在 step 0，等用户手动粘贴。
+  // 有保存的访问令牌 → 自动校验、进入向导并恢复未完成的导入（在 checkToken 内部）
+  // 没有访问令牌或令牌失效时停在第 0 步，等待用户手动粘贴。
   if (tokenInput.value) await checkToken()
 })
 </script>
@@ -959,7 +983,7 @@ onMounted(async () => {
         <section class="rounded-2xl bg-paper-soft dark:bg-night-bg-soft shadow-letter
                         border border-ink/5 dark:border-night-text/10 p-6 sm:p-8">
 
-          <!-- step 0: token -->
+          <!-- 第 0 步：访问令牌 -->
           <div v-if="step === 0" class="space-y-5">
             <div class="flex items-center gap-2 text-accent dark:text-night-accent">
               <KeyRound :size="18" />
@@ -1000,7 +1024,7 @@ onMounted(async () => {
             </button>
           </div>
 
-          <!-- step 1: 身份 -->
+          <!-- 第 1 步：身份 -->
           <div v-else-if="step === 1" class="space-y-5">
             <div>
               <h2 class="text-lg font-medium">你和朋友是谁</h2>
@@ -1141,7 +1165,7 @@ onMounted(async () => {
             </p>
           </div>
 
-          <!-- step 2: 关系 -->
+          <!-- 第 2 步：关系 -->
           <div v-else-if="step === 2" class="space-y-5">
             <div>
               <h2 class="text-lg font-medium">你们是什么关系</h2>
@@ -1167,7 +1191,7 @@ onMounted(async () => {
             </label>
           </div>
 
-          <!-- step 3: 聊天 AI -->
+          <!-- 第 3 步：聊天 AI -->
           <div v-else-if="step === 3" class="space-y-5">
             <div>
               <h2 class="text-lg font-medium">选一个聊天 AI</h2>
@@ -1262,7 +1286,7 @@ onMounted(async () => {
             </label>
           </div>
 
-          <!-- step 4: 向量服务 + 打标 -->
+          <!-- 第 4 步：向量服务 + 打标 -->
           <div v-else-if="step === 4" class="space-y-5">
             <div>
               <h2 class="text-lg font-medium">选一个向量服务</h2>
@@ -1450,7 +1474,7 @@ onMounted(async () => {
             </label>
           </div>
 
-          <!-- step 5: 可选功能 -->
+          <!-- 第 5 步：可选功能 -->
           <div v-else-if="step === 5" class="space-y-5">
             <div>
               <h2 class="text-lg font-medium">可选功能</h2>
@@ -1705,7 +1729,7 @@ onMounted(async () => {
             </div>
           </div>
 
-          <!-- step 6: 检索增强（可选） -->
+          <!-- 第 6 步：检索增强（可选） -->
           <div v-else-if="step === 6" class="space-y-5">
             <div>
               <h2 class="text-lg font-medium">检索增强（可选）</h2>
@@ -1715,7 +1739,7 @@ onMounted(async () => {
               </p>
             </div>
 
-            <!-- query rewrite -->
+            <!-- Query Rewrite -->
             <div class="rounded-xl border border-ink/10 dark:border-night-text/10 p-4 space-y-3">
               <label class="flex items-start gap-3 cursor-pointer">
                 <input v-model="form.QUERY_REWRITE_ENABLED" type="checkbox"
@@ -1788,7 +1812,7 @@ onMounted(async () => {
             </div>
           </div>
 
-          <!-- step 7: 导入 -->
+          <!-- 第 7 步：导入 -->
           <div v-else-if="step === 7" class="space-y-5">
             <div>
               <h2 class="text-lg font-medium">导入聊天记录</h2>
@@ -1935,7 +1959,7 @@ onMounted(async () => {
                 {{ resumeHint }}
               </div>
 
-              <!-- 已上传列表（来自 step 1） -->
+              <!-- 已上传列表（来自第 1 步） -->
               <div v-if="uploadedFiles.length" class="space-y-2">
                 <div v-for="f in uploadedFiles" :key="f.saved_as"
                   class="flex items-center gap-3 p-3 rounded-lg bg-paper dark:bg-night-bg
@@ -1962,7 +1986,7 @@ onMounted(async () => {
                 </button>
               </div>
 
-              <!-- 空状态：step 1 没上传文件 -->
+              <!-- 空状态：第 1 步没有上传文件 -->
               <div v-else class="rounded-xl p-6 text-center bg-paper dark:bg-night-bg
                                  border border-dashed border-ink/15 dark:border-night-text/15">
                 <FileText :size="22" class="mx-auto text-ink-soft dark:text-night-text-soft" />
@@ -2029,7 +2053,7 @@ onMounted(async () => {
             </div>
           </div>
 
-          <!-- step 8: 设置访问密码 -->
+          <!-- 第 8 步：设置访问密码 -->
           <div v-else-if="step === 8" class="space-y-5">
             <div>
               <h2 class="text-lg font-medium">设置访问密码（XUWEN_API_KEY）</h2>

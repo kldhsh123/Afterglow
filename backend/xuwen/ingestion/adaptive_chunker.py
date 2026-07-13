@@ -1,7 +1,6 @@
-"""Adaptive dialogue windowing for imported chat history.
+"""为导入的聊天记录执行自适应对话窗口切分。
 
-The adaptive path keeps raw messages immutable. The optional model only returns
-segment boundaries; Python code still renders and stores the original text.
+自适应路径不会修改原始消息；可选模型只返回分段边界，原文仍由 Python 代码渲染和存储。
 """
 
 from __future__ import annotations
@@ -53,7 +52,7 @@ async def build_adaptive_windows(
     progress_cb: Callable[[int, int], None] | None = None,
     max_concurrency: int = 1,
 ) -> list[MessageWindow]:
-    """Build dialogue windows from topic-sized adaptive segments.
+    """根据按话题划分的自适应分段构建对话窗口。
 
     progress_cb(done, total)：每完成一个 session 的切分后回调一次。
         done 单调递增；total = 实际被处理的 session 数（已剔除空会话）。
@@ -138,11 +137,10 @@ async def _model_segments_batched(
     llm: LLMClient,
     model: str,
 ) -> list[_TurnSegment]:
-    """Ask the model for boundaries in bounded message batches.
+    """让模型在大小受限的消息批次中判断边界。
 
-    Long sessions are common in exported chat logs. Keeping model calls bounded
-    avoids overlong prompts while still using semantic boundaries for the full
-    session instead of falling back entirely to heuristics.
+    导出的聊天记录经常包含很长的会话；限制单次模型调用规模可以避免提示词过长，
+    同时仍能覆盖完整会话的语义边界，而不是完全退回启发式切分。
     """
     segments: list[_TurnSegment] = []
     for offset, batch in _turn_batches_by_message_count(

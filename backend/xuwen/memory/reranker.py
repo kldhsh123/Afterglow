@@ -1,7 +1,7 @@
-"""Optional LLM-assisted query rewrite and semantic reranking.
+"""可选的 LLM 辅助查询改写与语义重排。
 
-Both helpers are deliberately fail-open: if the model call fails or returns
-invalid JSON, retrieval falls back to the existing vector + RRF ranking.
+两个辅助流程都刻意采用失败开放策略：模型调用失败或返回无效 JSON 时，
+检索会退回现有的向量检索与 RRF 排序。
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ _AMBIGUOUS_SHORT_RE = re.compile(
 
 
 class QueryRewriter:
-    """Rewrite short, colloquial user input into retrieval-friendly variants."""
+    """把简短、口语化的用户输入改写为更适合检索的多个变体。"""
 
     def __init__(self, settings: Settings, llm: LLMClient) -> None:
         self.settings = settings
@@ -39,7 +39,7 @@ class QueryRewriter:
         trace_id: str = "",
         metrics: MetricsRecorder | None = None,
     ) -> list[str]:
-        """Return query variants, always including the original query first."""
+        """返回查询变体，并始终把原始查询放在首位。"""
         original = query_text.strip()
         if not original or not self.settings.query_rewrite_enabled:
             return [original]
@@ -101,7 +101,7 @@ class QueryRewriter:
 
 
 class SemanticReranker:
-    """Rerank fused retrieval candidates with an OpenAI-compatible chat model."""
+    """使用 OpenAI 兼容聊天模型重排融合后的检索候选。"""
 
     def __init__(self, settings: Settings, llm: LLMClient) -> None:
         self.settings = settings

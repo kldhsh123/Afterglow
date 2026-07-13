@@ -296,7 +296,7 @@ def _timezone(name: str) -> tzinfo:
     try:
         return ZoneInfo(name)
     except (ZoneInfoNotFoundError, ValueError):
-        # datetime.UTC does not depend on the system IANA database or tzdata.
+        # datetime.UTC 不依赖系统的 IANA 时区数据库或 tzdata。
         return UTC
 
 

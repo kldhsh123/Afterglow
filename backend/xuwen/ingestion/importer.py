@@ -115,12 +115,12 @@ async def import_history(
             # 身份嗅探/计数是可选能力，失败不能让已经成功的 parse 回退为导入失败。
             pass
 
-    # 2) clean
+    # 2）清洗
     _stage(f"正在清洗与去重 {len(parsed)} 条消息")
     cleaner = Cleaner(settings, json_emoji_mode=json_emoji_mode)
     cleaned = cleaner.clean_many(parsed)
 
-    # 3) split
+    # 3）切分
     _stage("正在切分会话")
     sessions = split_sessions(cleaned, settings)
     adaptive_llm: LLMClient | None = None

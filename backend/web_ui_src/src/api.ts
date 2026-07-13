@@ -79,7 +79,7 @@ async function jsonRequest<T>(path: string, init: RequestInit = {}): Promise<T> 
   return body as T
 }
 
-// ---------- Types ----------
+// ---------- 类型 ----------
 
 export interface SetupStatus {
   identity_ok: boolean
@@ -164,7 +164,7 @@ export interface ImportTaskState {
   report: any
 }
 
-// ---------- API ----------
+// ---------- 接口 ----------
 
 export const api = {
   ping: () => jsonRequest<{ ok: boolean; ts: number }>('/ping'),

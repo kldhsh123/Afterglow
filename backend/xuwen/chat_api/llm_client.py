@@ -324,6 +324,49 @@ class LLMClient:
                 detail={"status": resp.status_code, "request_id": request_id},
             ) from e
 
+        if self._api_protocol == "responses":
+            failure = _responses_failure_reason(data)
+            if failure:
+                _record_model_call(
+                    metrics,
+                    trace_id=trace_id,
+                    stage=stage,
+                    attempt=attempt_number,
+                    payload=payload,
+                    url=self._url,
+                    latency_ms=(time.perf_counter() - start) * 1000,
+                    status="error",
+                    status_code=resp.status_code,
+                    upstream_request_id=request_id or "",
+                    request=request_summary,
+                    response=_json_response_summary(data),
+                    error=failure,
+                )
+                raise LLMError(
+                    "LLM Responses 请求执行失败",
+                    detail={"request_id": request_id, "reason": failure},
+                )
+            if _responses_has_refusal(data):
+                _record_model_call(
+                    metrics,
+                    trace_id=trace_id,
+                    stage=stage,
+                    attempt=attempt_number,
+                    payload=payload,
+                    url=self._url,
+                    latency_ms=(time.perf_counter() - start) * 1000,
+                    status="error",
+                    status_code=resp.status_code,
+                    upstream_request_id=request_id or "",
+                    request=request_summary,
+                    response=_json_response_summary(data),
+                    error="responses_refusal",
+                )
+                raise LLMError(
+                    "主模型拒绝处理当前请求",
+                    detail={"request_id": request_id, "reason": "responses_refusal"},
+                )
+
         try:
             text = _extract_content_text(data, self._api_protocol)
         except (KeyError, IndexError, TypeError, ValueError) as e:
@@ -462,6 +505,15 @@ class LLMClient:
                         event_type = str(chunk.get("type") or "")
                         if event_type == "response.output_text.delta":
                             content = chunk.get("delta")
+                        elif event_type == "response.refusal.delta":
+                            stream_error = "responses_refusal"
+                            raise LLMError(
+                                "主模型拒绝处理当前请求",
+                                detail={
+                                    "request_id": request_id,
+                                    "reason": "responses_refusal",
+                                },
+                            )
                         elif event_type in {"response.completed", "response.incomplete"}:
                             response = chunk.get("response")
                             if isinstance(response, dict) and isinstance(
@@ -587,10 +639,12 @@ def _extract_content_text(
         return str(content or "")
 
     output_text = data.get("output_text")
-    if isinstance(output_text, str):
+    if isinstance(output_text, str) and output_text:
         return output_text
     output = data.get("output")
     if not isinstance(output, list):
+        if isinstance(output_text, str):
+            return output_text
         raise ValueError("Responses output 缺失")
     texts: list[str] = []
     for item in output:
@@ -600,10 +654,42 @@ def _extract_content_text(
         if not isinstance(content, list):
             continue
         for part in content:
-            if not isinstance(part, dict) or part.get("type") != "output_text":
+            if not isinstance(part, dict):
                 continue
-            texts.append(str(part.get("text") or ""))
+            if part.get("type") == "output_text":
+                texts.append(str(part.get("text") or ""))
     return "".join(texts)
+
+
+def _responses_failure_reason(data: dict[str, Any]) -> str:
+    status = str(data.get("status") or "").strip().lower()
+    if status in {"failed", "cancelled"}:
+        return f"responses_{status}"
+    error = data.get("error")
+    if isinstance(error, dict):
+        code = str(error.get("code") or error.get("type") or "error")
+        return f"responses_{code}"
+    if error:
+        return "responses_error"
+    return ""
+
+
+def _responses_has_refusal(data: dict[str, Any]) -> bool:
+    output = data.get("output")
+    if not isinstance(output, list):
+        return False
+    for item in output:
+        if not isinstance(item, dict):
+            continue
+        content = item.get("content")
+        if not isinstance(content, list):
+            continue
+        if any(
+            isinstance(part, dict) and part.get("type") == "refusal"
+            for part in content
+        ):
+            return True
+    return False
 
 
 def _attempt_number(state: RetryCallState) -> int:

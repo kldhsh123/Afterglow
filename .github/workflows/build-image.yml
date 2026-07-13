@@ -63,7 +63,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # 自动生成镜像 tag：
-      #   - Release v0.2.3 → 0.2.3, 0.2, latest
+      #   - 正式发布 v0.2.3 → 0.2.3, 0.2, latest
       #   - prerelease 不推 latest
       #   - workflow_dispatch → VERSION 文件值；可选 latest
       - name: Resolve image tags

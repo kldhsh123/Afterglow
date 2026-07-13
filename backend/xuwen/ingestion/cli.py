@@ -1,4 +1,4 @@
-"""xuwen ingestion CLI。
+"""xuwen 聊天记录导入命令行工具。
 
 用法：
     uv run python -m xuwen.ingestion.cli import <path-to-qq-json>
@@ -565,11 +565,10 @@ def _parse_rebuild_tables(raw: str) -> list[str]:
 
 
 def _delete_lancedb_table_dirs(settings: Settings, tables: list[str]) -> None:
-    """Delete LanceDB table directories before connecting.
+    """连接前删除 LanceDB 表目录。
 
-    LanceDB's drop_table can block on some local file-system combinations. For
-    the offline CLI rebuild path, deleting the selected table directories before
-    opening the DB is simpler and lets ensure_tables recreate them immediately.
+    LanceDB 的 `drop_table` 在部分本地文件系统组合下可能阻塞；对于离线 CLI
+    重建流程，连接数据库前删除选定表目录更简单，之后 `ensure_tables` 会立即重建。
     """
     db_path = Path(settings.lance_db_path)
     for table in tables:

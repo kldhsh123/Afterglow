@@ -101,7 +101,7 @@ def status(settings: Settings = Depends(_settings_dep)) -> dict[str, Any]:
     }
 
 
-# ---------- Schema ----------
+# ---------- 配置结构 ----------
 
 
 @router.get("/schema")

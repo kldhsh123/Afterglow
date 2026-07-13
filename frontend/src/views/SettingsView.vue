@@ -35,7 +35,7 @@ onMounted(async () => {
   try {
     memory.setStats(await fetchMemoryStats())
   } catch {
-    /* ignore */
+    /* 忽略错误 */
   }
 })
 
