@@ -261,7 +261,7 @@ def _adaptive_context_for_message(
     idx: int,
     settings: Settings,
 ) -> tuple[list[NormalizedMessage], list[NormalizedMessage]]:
-    """Collect context by character budget for adaptive chunking."""
+    """按字符预算收集自适应切分所需的上下文。"""
     budget = max(0, settings.single_context_max_chars)
     if budget <= 0:
         before = list(messages[max(0, idx - settings.single_context_before) : idx])

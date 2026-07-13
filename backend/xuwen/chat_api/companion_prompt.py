@@ -1,4 +1,4 @@
-"""Shared prompt helpers for companion state, memory, and stickers."""
+"""陪伴状态、记忆与表情包相关的共享提示词辅助函数。"""
 
 from __future__ import annotations
 
@@ -71,7 +71,7 @@ def build_persona_card_with_companion_context(
     response_policy_context: str = "",
     include_schedule_hint: bool = False,
 ) -> str:
-    """Load persona card and append high-priority companion context.
+    """加载人格卡片，并追加高优先级的陪伴上下文。
 
     `include_schedule_hint`：是否注入 <schedule-hint> 内部协议指引。
     只有真正会调用 schedule_extractor 并把结果回传给客户端的路由（目前仅
@@ -116,10 +116,9 @@ def render_life_memory_context(
     *,
     max_items: int = 8,
 ) -> str:
-    """Compress retrieved history for the life-state controller.
+    """压缩检索到的历史记录，供生活状态控制器使用。
 
-    The life model should learn preferences and tone from this text, not treat it
-    as evidence about what happened today.
+    生活状态模型应从中学习偏好和语气，不应把这些内容当作今天已经发生之事的证据。
     """
     lines: list[str] = []
     seen: set[str] = set()

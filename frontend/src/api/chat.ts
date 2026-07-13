@@ -62,7 +62,7 @@ export function streamChat(
           const body = await resp.json()
           detail = body?.error?.message || body?.detail || detail
         } catch {
-          /* ignore */
+          /* 忽略取消请求时的异常 */
         }
         throw new ChatStreamError(detail, resp.status)
       }

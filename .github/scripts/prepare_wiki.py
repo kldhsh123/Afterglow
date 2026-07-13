@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate and rewrite repository-relative Markdown links for GitHub Wiki."""
+"""校验仓库相对 Markdown 链接，并将其改写为 GitHub Wiki 链接。"""
 
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ def prepare_wiki(root: Path, wiki_base_url: str) -> int:
 
 
 def _code_ranges(text: str) -> list[tuple[int, int]]:
-    """Return fenced and inline code ranges that Markdown links must ignore."""
+    """返回围栏代码和行内代码区间，改写 Markdown 链接时应跳过这些位置。"""
     ranges = [
         (match.start(), match.end())
         for match in _FENCED_CODE_RE.finditer(text)

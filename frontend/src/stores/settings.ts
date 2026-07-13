@@ -140,7 +140,7 @@ export const useSettingsStore = defineStore('settings', () => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
   }
 
-  // 任何变化都持久化（rough but effective）
+// 任何变化都持久化（简单但有效）
   watch(
     [
       appName,

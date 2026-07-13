@@ -82,7 +82,7 @@ onMounted(async () => {
     const stats = await fetchMemoryStats()
     memory.setStats(stats)
   } catch {
-    /* ignore */
+    /* 忽略元数据拉取失败 */
   }
 })
 

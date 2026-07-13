@@ -47,7 +47,7 @@ export function stickerImageUrl(name: string): string {
   return streamUrl(`/v1/stickers/${encodeURIComponent(name)}/image`)
 }
 
-/* ---------- documents ---------- */
+/* ---------- 文档 ---------- */
 
 export interface DocumentExtractResult {
   filename: string
@@ -71,7 +71,7 @@ export async function extractDocument(file: File): Promise<DocumentExtractResult
       const body = await resp.json()
       detail = body?.detail || body?.error?.message || detail
     } catch {
-      /* ignore */
+      /* 忽略错误 */
     }
     throw new Error(detail)
   }
@@ -82,7 +82,7 @@ export function getSupportedDocumentFormats(): Promise<{ extensions: string[] }>
   return jsonRequest('/v1/documents/formats')
 }
 
-/* ---------- debug ---------- */
+/* ---------- 调试 ---------- */
 
 export function getDebugStats(): Promise<Record<string, unknown>> {
   return jsonRequest('/debug/stats')
