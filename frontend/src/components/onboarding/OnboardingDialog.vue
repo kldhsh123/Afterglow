@@ -42,7 +42,7 @@ const canNextFromName = () =>
           </p>
         </div>
 
-        <!-- step 0：欢迎 -->
+        <!-- 第 0 步：欢迎 -->
         <div v-if="step === 0" class="space-y-4">
           <p class="text-sm leading-relaxed">
             这是一个本地工具，所有聊天数据都存在你电脑上。
@@ -57,7 +57,7 @@ const canNextFromName = () =>
           </button>
         </div>
 
-        <!-- step 1：身份 -->
+        <!-- 第 1 步：身份 -->
         <div v-else-if="step === 1" class="space-y-4">
           <label class="block">
             <span class="text-sm">你叫什么</span>
@@ -102,7 +102,7 @@ const canNextFromName = () =>
           </div>
         </div>
 
-        <!-- step 2：关系 -->
+        <!-- 第 2 步：关系 -->
         <div v-else-if="step === 2" class="space-y-4">
           <p class="text-sm">你们是什么关系？</p>
           <div class="grid grid-cols-2 gap-2">

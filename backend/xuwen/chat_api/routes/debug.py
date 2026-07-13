@@ -77,6 +77,7 @@ def config_snapshot(state: AppState = Depends(get_state)) -> dict[str, Any]:
         "relationship_type": s.relationship_type,
         "persona_template": s.persona_template,
         "chat_model": s.chat_model,
+        "chat_api_protocol": s.chat_api_protocol,
         "debug": {
             "endpoints_enabled": s.debug_endpoints_enabled,
             "model_full_payloads_enabled": s.debug_model_full_payloads_enabled,

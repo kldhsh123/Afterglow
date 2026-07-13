@@ -65,6 +65,7 @@ _TITLES: dict[str, str] = {
     "OPENAI_API_KEY": "聊天 AI 密钥",
     "OPENAI_BASE_URL": "聊天 AI 接口地址",
     "CHAT_MODEL": "聊天 AI 模型名",
+    "CHAT_API_PROTOCOL": "主模型 API 协议",
     "EMBEDDING_API_KEY": "向量服务密钥",
     "EMBEDDING_API_URL": "向量服务接口地址",
     "EMBEDDING_MODEL": "向量模型名",
@@ -93,6 +94,8 @@ _TITLES: dict[str, str] = {
 
 # 高级字段（向导默认折叠）。
 _ADVANCED_KEYS: set[str] = {
+    "SELF_UIDS",
+    "FRIEND_UIDS",
     "SESSION_GAP_MINUTES",
     "CHUNKING_STRATEGY",
     "WINDOW_SIZE",
@@ -116,6 +119,7 @@ _ADVANCED_KEYS: set[str] = {
     "RESPONSE_PAIR_TOP_K",
     "FRIEND_TOP_K",
     "WINDOW_TOP_K",
+    "HISTORY_IMAGE_TOP_K",
     "LIVE_TOP_K",
     "FINAL_CONTEXT_K",
     "RRF_K",
@@ -124,6 +128,7 @@ _ADVANCED_KEYS: set[str] = {
     "WARMTH_BOOST",
     "LIVE_SOURCE_WEIGHT",
     "HISTORY_SOURCE_WEIGHT",
+    "HISTORY_IMAGE_SOURCE_WEIGHT",
     "AI_GENERATED_SOURCE_WEIGHT",
     "AI_GENERATED_LONG_TERM_ENABLED",
     "QUERY_REWRITE_ENABLED",

@@ -79,7 +79,7 @@ async function jsonRequest<T>(path: string, init: RequestInit = {}): Promise<T> 
   return body as T
 }
 
-// ---------- Types ----------
+// ---------- 类型 ----------
 
 export interface SetupStatus {
   identity_ok: boolean
@@ -130,6 +130,7 @@ export interface UploadedFile {
   saved_as: string
   size: number
   format: string
+  format_label?: string
   total_messages?: number
   candidates?: IdentityCandidate[]
   error?: string
@@ -142,7 +143,8 @@ export interface IdentityCandidate {
 }
 
 export interface InspectResult {
-  format: 'qqexporter_v5' | 'wechat_weflow' | 'unknown'
+  format: string
+  format_label: string
   total_messages: number
   candidates: IdentityCandidate[]
   error: string
@@ -162,7 +164,7 @@ export interface ImportTaskState {
   report: any
 }
 
-// ---------- API ----------
+// ---------- 接口 ----------
 
 export const api = {
   ping: () => jsonRequest<{ ok: boolean; ts: number }>('/ping'),
@@ -174,10 +176,15 @@ export const api = {
       body: JSON.stringify({ values, dry_run: false }),
     }),
   presets: () => jsonRequest<PresetsResponse>('/presets'),
-  testChat: (base_url: string, api_key: string, model: string) =>
+  testChat: (
+    base_url: string,
+    api_key: string,
+    model: string,
+    protocol: 'chat_completions' | 'responses' = 'chat_completions',
+  ) =>
     jsonRequest<TestResult>('/test/chat', {
       method: 'POST',
-      body: JSON.stringify({ base_url, api_key, model }),
+      body: JSON.stringify({ base_url, api_key, model, protocol }),
     }),
   testEmbedding: (
     base_url: string,
@@ -219,10 +226,10 @@ export const api = {
     return body
   },
 
-  startImport: (files: string[], file_names: string[], persona_source: string | null = null) =>
+  startImport: (files: string[], file_names: string[]) =>
     jsonRequest<{ task_id: string; status: string }>('/import/start', {
       method: 'POST',
-      body: JSON.stringify({ files, file_names, persona_source }),
+      body: JSON.stringify({ files, file_names }),
     }),
 
   listTasks: () =>

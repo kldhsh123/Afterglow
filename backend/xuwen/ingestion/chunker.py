@@ -1,4 +1,4 @@
-"""混合 chunk 生成器：单条朋友发言（索引 A） + 对话窗口（索引 B）。
+"""混合 chunk 生成器：生成 A/B/C 三类历史文本 chunk。
 
 索引 A: friend_messages
     - 每条朋友消息一个 chunk
@@ -11,6 +11,10 @@
     - 对话窗口（splitter 已经切好）
     - text = "speaker: ... \n speaker: ..." 拼接
     - 含起止 seq、时间、消息数、是否含媒体等
+
+索引 C: response_pairs
+    - 以用户输入作为 embedding 文本
+    - 召回后给 prompt 提供对应的朋友回复和附近上下文
 
 warmth 暖度评分目前用简单的关键词启发式给一个 0~1 的分；
 后续可以由 persona.analyzer 用 LLM 标注样本替换。
@@ -257,7 +261,7 @@ def _adaptive_context_for_message(
     idx: int,
     settings: Settings,
 ) -> tuple[list[NormalizedMessage], list[NormalizedMessage]]:
-    """Collect context by character budget for adaptive chunking."""
+    """按字符预算收集自适应切分所需的上下文。"""
     budget = max(0, settings.single_context_max_chars)
     if budget <= 0:
         before = list(messages[max(0, idx - settings.single_context_before) : idx])

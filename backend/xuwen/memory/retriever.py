@@ -1,10 +1,13 @@
 """混合检索器：多路召回 → RRF 融合 → 时间衰减 / source 权重 / warmth boost。
 
 设计：
-- 三路召回
-    A. friend_messages 向量召回（top_k = settings.friend_top_k）
-    B. dialogue_windows 向量召回（top_k = settings.window_top_k）
-    C. live_messages 最近若干条（按 conversation_id 过滤）—— 非向量，无需 embedding
+- 五路向量召回
+    1. response_pairs（用户输入 -> 朋友回复）
+    2. friend_messages（单条朋友发言）
+    3. dialogue_windows（多轮对话窗口）
+    4. history_images（历史图片的离线视觉摘要）
+    5. live_messages（运行时记忆的语义召回）
+- 当前会话的 recent_live 另按 conversation_id 直接读取，不依赖 query vector
 - 融合：RRF（Reciprocal Rank Fusion），按 chunk_id 去重；同一 chunk 在多路出现得分相加
 - 后处理 boost：
     final = rrf * source_weight * recency * (1 + warmth * settings.warmth_boost)
@@ -54,7 +57,7 @@ class _RawHit:
 
     row: dict[str, Any]
     rank: int
-    kind: str  # "response_pair" / "friend" / "window" / "live"
+    kind: str  # "response_pair" / "friend" / "window" / "history_image" / "live"
 
 
 class HybridRetriever:
@@ -132,7 +135,7 @@ class HybridRetriever:
         final_k = query.final_k or self.settings.final_context_k
         now = query.now_ms or now_ms()
 
-        # 2) 五路召回：以前是串行 await，现在 asyncio.gather 真并发（store.search_* 用了 to_thread）。
+        # 2) 五路向量召回 + Recent Live：用 asyncio.gather 并发执行。
         #    store 的 _vector_search 是同步 LanceDB 调用，靠线程池让多路真正并行执行。
         live_top_k = self.settings.live_top_k
         live_filter = _compute_live_filter(query, self.settings)
@@ -329,7 +332,7 @@ async def _search_variants(
     *,
     extra_filter: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Run vector search for one or more query variants and merge by row id."""
+    """对一个或多个查询变体执行向量检索，并按行 ID 合并结果。"""
     if not vectors:
         return []
     tasks = [
@@ -698,7 +701,7 @@ def _fuse(
         chunk: ScoredChunk = entry["chunk"]
         rrf = entry["rrf"]
 
-        # source weight
+        # 来源权重
         if chunk.source == "ai_generated":
             src_w = settings.ai_generated_source_weight
         elif chunk.source == "human_original_image":
@@ -708,7 +711,7 @@ def _fuse(
         else:
             src_w = settings.history_source_weight
 
-        # recency
+        # 时效性权重
         rec_w = recency_weight(
             chunk.timestamp_ms,
             half_life_days=settings.recency_half_life_days,
@@ -716,7 +719,7 @@ def _fuse(
             now=now_ms,
         )
 
-        # warmth
+        # 温暖度权重
         warm = 1.0 + chunk.warmth * settings.warmth_boost
 
         pair_w = 1.35 if chunk.kind == "response_pair" else 1.0

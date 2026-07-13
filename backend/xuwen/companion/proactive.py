@@ -872,8 +872,8 @@ def _file_mtime_ns(path: Path) -> int | None:
 
 
 def _idle_minutes_from_decision(_decision: ProactiveDecision) -> float | None:
-    # Decision intentionally exposes only normalized features. Poll scheduling can still
-    # use the configured interval; precise idle gating is rechecked when the candidate is due.
+    # 决策对象刻意只暴露归一化后的特征。轮询调度仍可使用配置的间隔；
+    # 候选到期时会再次精确检查空闲条件。
     return None
 
 

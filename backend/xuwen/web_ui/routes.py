@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ValidationError
 
-from xuwen.config import Settings
+from xuwen.config import ChatApiProtocol, Settings
 from xuwen.web_ui.connectivity import (
     TestResult,
     test_embedding,
@@ -101,7 +101,7 @@ def status(settings: Settings = Depends(_settings_dep)) -> dict[str, Any]:
     }
 
 
-# ---------- Schema ----------
+# ---------- 配置结构 ----------
 
 
 @router.get("/schema")
@@ -277,6 +277,7 @@ class TestChatPayload(BaseModel):
     base_url: str
     api_key: str
     model: str
+    protocol: ChatApiProtocol = "chat_completions"
 
 
 class TestEmbeddingPayload(BaseModel):
@@ -294,7 +295,12 @@ def _test_result_to_dict(r: TestResult) -> dict[str, Any]:
 
 @router.post("/test/chat")
 async def post_test_chat(payload: TestChatPayload) -> dict[str, Any]:
-    result = await test_openai_chat(payload.base_url, payload.api_key, payload.model)
+    result = await test_openai_chat(
+        payload.base_url,
+        payload.api_key,
+        payload.model,
+        payload.protocol,
+    )
     return _test_result_to_dict(result)
 
 
@@ -331,11 +337,11 @@ async def inspect_upload(
     settings: Settings = Depends(_settings_dep),
     file: UploadFile = File(...),
 ) -> dict[str, Any]:
-    """单文件嗅探：读 JSON 顶部识别格式和双方候选身份，不入库不保留。
+    """单文件嗅探：识别 JSON / JSONL 格式和双方候选身份，不入库不保留。
 
     用于配置向导第 1 步"从聊天文件识别"按钮。返回结构：
         {
-          "format": "qqexporter_v5" | "wechat_weflow" | "unknown",
+          "format": "<plugin-defined>" | "unknown",
           "total_messages": int,
           "candidates": [{ name, uid, role_hint: "self"/"friend"/"unknown" }, ...],
           "error": str | ""
@@ -372,6 +378,7 @@ async def inspect_upload(
 
     return {
         "format": result.format,
+        "format_label": result.format_label,
         "total_messages": result.total_messages,
         "candidates": [
             {"name": c.name, "uid": c.uid, "role_hint": c.role_hint}
@@ -386,7 +393,7 @@ async def upload_files(
     settings: Settings = Depends(_settings_dep),
     files: list[UploadFile] = File(...),
 ) -> dict[str, Any]:
-    """上传一个或多个聊天记录 JSON。仅保存到磁盘，不触发导入。
+    """上传一个或多个聊天记录 JSON / JSONL。仅保存到磁盘，不触发导入。
 
     每个文件同时做一次顶部嗅探，返回：消息数、格式识别结果、双方身份候选。
     这样前端在向导第 1 步选文件时一次请求就能拿到全部信息（持久上传 + 身份识别）。
@@ -426,6 +433,7 @@ async def upload_files(
                     "saved_as": str(dest),
                     "size": size,
                     "format": "unknown",
+                    "format_label": "未知格式",
                     "total_messages": 0,
                     "candidates": [],
                     "error": f"嗅探失败：{e}",
@@ -439,6 +447,7 @@ async def upload_files(
                 "saved_as": str(dest),
                 "size": size,
                 "format": ir.format,
+                "format_label": ir.format_label,
                 "total_messages": ir.total_messages,
                 "candidates": [
                     {"name": c.name, "uid": c.uid, "role_hint": c.role_hint}
@@ -453,7 +462,8 @@ async def upload_files(
 class StartImportPayload(BaseModel):
     files: list[str]  # 服务器侧绝对路径
     file_names: list[str]
-    persona_source: str | None = None  # 作为画像参考的文件路径
+    # 兼容旧版前端；画像现在始终合并 files 中的全部文件。
+    persona_source: str | None = None
 
 
 @router.post("/import/start")
@@ -494,21 +504,7 @@ async def start_import(
             raise HTTPException(status_code=404, detail=f"文件不存在：{raw}")
         paths.append(p)
 
-    persona_source: Path | None = None
-    if payload.persona_source:
-        ps = Path(payload.persona_source).resolve()
-        try:
-            ps.relative_to(upload_dir)
-        except ValueError:
-            raise HTTPException(
-                status_code=400,
-                detail=f"非法画像参考路径：{payload.persona_source}",
-            ) from None
-        if not ps.exists():
-            raise HTTPException(status_code=404, detail=f"画像参考文件不存在：{payload.persona_source}")
-        persona_source = ps
-
-    task = mgr.create(paths, payload.file_names, persona_source=persona_source)
+    task = mgr.create(paths, payload.file_names)
     handle = asyncio.create_task(run_import_task(task.task_id, settings))
     mgr.attach_handle(task.task_id, handle)
     return {"task_id": task.task_id, "status": task.status, "reused": False}

@@ -1,7 +1,6 @@
-"""WeChat WeFlow（arkme-json）导入 plugin。
+"""WeChat WeFlow（arkme-json / ChatLab JSONL）导入 plugin。
 
 WeFlow 是把微信本地聊天记录导出成 JSON 的工具，与 QQChatExporter 同类但格式不同。
-参考：https://github.com/weflow（导出器作者社区维护）
 
 数据结构（顶层）：
     {
@@ -42,13 +41,19 @@ from typing import Any
 from xuwen.config import Settings
 from xuwen.core.errors import ParseError
 from xuwen.core.models import MessageKind, NormalizedMessage, SenderRole
+from xuwen.ingestion.plugins import (
+    ImportIdentityCandidate,
+    ImportImageRef,
+    ImportInspection,
+    jsonl_records,
+)
 
 
 class WeChatWeFlowPlugin:
-    """WeChat WeFlow / arkme-json 导出 JSON 的解析插件。"""
+    """WeChat WeFlow 的 arkme-json 与 ChatLab JSONL 解析插件。"""
 
     name = "wechat_weflow"
-    display_name = "WeChat (WeFlow arkme-json)"
+    display_name = "WeFlow"
 
     def match(self, payload: dict[str, Any]) -> bool:
         """识别 WeFlow 特征字段。
@@ -57,18 +62,31 @@ class WeChatWeFlowPlugin:
         - 顶层 `weflow` 是 dict 且 format 字段含 'arkme'（最严格）；
         - 同时存在 `session` + `senders` + `messages` 三个 WeFlow 特有结构（兜底）。
         """
-        weflow = payload.get("weflow")
+        canonical = _canonical_payload(payload)
+        if canonical is None:
+            return False
+        weflow = canonical.get("weflow")
         if isinstance(weflow, dict):
             fmt = str(weflow.get("format") or "").lower()
             if "arkme" in fmt or "weflow" in str(weflow.get("generator") or "").lower():
                 return True
+        chatlab = canonical.get("chatlab")
+        meta = canonical.get("meta")
+        if (
+            isinstance(chatlab, dict)
+            and str(chatlab.get("generator") or "").lower() == "weflow"
+            and isinstance(meta, dict)
+            and str(meta.get("platform") or "").lower() == "wechat"
+            and isinstance(canonical.get("messages"), list)
+        ):
+            return True
         # 兜底：三个结构同时存在且 senders 是带 wxid 的 list
         if (
-            isinstance(payload.get("session"), dict)
-            and isinstance(payload.get("senders"), list)
-            and isinstance(payload.get("messages"), list)
+            isinstance(canonical.get("session"), dict)
+            and isinstance(canonical.get("senders"), list)
+            and isinstance(canonical.get("messages"), list)
         ):
-            senders = payload["senders"]
+            senders = canonical["senders"]
             if senders and isinstance(senders[0], dict) and "wxid" in senders[0]:
                 return True
         return False
@@ -78,11 +96,17 @@ class WeChatWeFlowPlugin:
         payload: dict[str, Any],
         settings: Settings,
     ) -> list[NormalizedMessage]:
-        raw_messages = payload.get("messages")
+        canonical = _canonical_payload(payload)
+        if canonical is None:
+            raise ParseError("JSONL 不符合 WeFlow ChatLab 格式")
+        if _looks_like_chatlab(canonical):
+            return _parse_chatlab_messages(canonical, settings)
+
+        raw_messages = canonical.get("messages")
         if not isinstance(raw_messages, list):
             raise ParseError("payload 中缺少 messages 数组")
 
-        sender_index = _build_sender_index(payload.get("senders"))
+        sender_index = _build_sender_index(canonical.get("senders"))
 
         messages: list[NormalizedMessage] = []
         for idx, raw in enumerate(raw_messages):
@@ -97,6 +121,246 @@ class WeChatWeFlowPlugin:
 
         messages.sort(key=lambda m: (m.timestamp_ms, m.seq))
         return messages
+
+    def inspect(self, payload: dict[str, Any]) -> ImportInspection:
+        source_is_jsonl = jsonl_records(payload) is not None
+        canonical = _canonical_payload(payload)
+        if canonical is None:
+            return ImportInspection("unknown", [], 0, "无法识别 WeFlow 格式")
+        if _looks_like_chatlab(canonical):
+            members: dict[str, str] = {}
+            for item in canonical.get("members") or []:
+                if not isinstance(item, dict):
+                    continue
+                uid = str(item.get("platformId") or "")
+                if uid:
+                    members[uid] = str(
+                        item.get("groupNickname") or item.get("accountName") or uid
+                    )
+            for message in canonical.get("messages") or []:
+                if not isinstance(message, dict):
+                    continue
+                uid = str(message.get("sender") or "")
+                if uid and uid not in members:
+                    members[uid] = str(
+                        message.get("groupNickname") or message.get("accountName") or uid
+                    )
+            return ImportInspection(
+                format="weflow_chatlab_jsonl" if source_is_jsonl else "weflow_chatlab",
+                candidates=[
+                    ImportIdentityCandidate(name=name, uid=uid)
+                    for uid, name in members.items()
+                ],
+                total_messages=len(canonical.get("messages") or []),
+                format_label="WeFlow ChatLab JSONL" if source_is_jsonl else "WeFlow ChatLab",
+            )
+
+        senders = canonical.get("senders") or []
+        messages = canonical.get("messages") or []
+        self_sender_id: int | None = None
+        for message in messages:
+            if isinstance(message, dict) and message.get("isSend") == 1:
+                sender_id = message.get("senderID")
+                if isinstance(sender_id, int):
+                    self_sender_id = sender_id
+                    break
+        candidates: list[ImportIdentityCandidate] = []
+        for sender in senders:
+            if not isinstance(sender, dict):
+                continue
+            uid = str(sender.get("wxid") or "")
+            if not uid:
+                continue
+            role = (
+                "self"
+                if self_sender_id is not None and sender.get("senderID") == self_sender_id
+                else "friend" if self_sender_id is not None else "unknown"
+            )
+            candidates.append(
+                ImportIdentityCandidate(
+                    name=str(sender.get("displayName") or uid),
+                    uid=uid,
+                    role_hint=role,  # type: ignore[arg-type]
+                )
+            )
+        candidates.sort(key=lambda candidate: 0 if candidate.role_hint == "self" else 1)
+        return ImportInspection(
+            "wechat_weflow",
+            candidates,
+            len(messages),
+            format_label="WeFlow arkme-json",
+        )
+
+    def extract_image_refs(self, payload: dict[str, Any]) -> list[ImportImageRef]:
+        canonical = _canonical_payload(payload)
+        if canonical is None or not _looks_like_chatlab(canonical):
+            return []
+        refs: list[ImportImageRef] = []
+        for idx, raw in enumerate(canonical.get("messages") or []):
+            if not isinstance(raw, dict):
+                continue
+            content = str(raw.get("content") or "").strip()
+            if _chatlab_placeholder(_parse_int(raw.get("type"), default=99), content) != "[图片]":
+                continue
+            message_id = str(
+                raw.get("platformMessageId")
+                or raw.get("_jsonlSourceId")
+                or f"local-{idx}"
+            )
+            if message_id and content:
+                refs.append(ImportImageRef(message_id, content))
+        return refs
+
+
+def _canonical_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
+    records = jsonl_records(payload)
+    if records is None:
+        return payload
+    first = records[0]
+    if first.get("_type") != "header":
+        return None
+    chatlab = first.get("chatlab")
+    meta = first.get("meta")
+    if (
+        not isinstance(chatlab, dict)
+        or str(chatlab.get("generator") or "").lower() != "weflow"
+        or not isinstance(meta, dict)
+        or str(meta.get("platform") or "").lower() != "wechat"
+    ):
+        return None
+    members: list[dict[str, Any]] = []
+    messages: list[dict[str, Any]] = []
+    for record in records[1:]:
+        item = {key: value for key, value in record.items() if key != "_type"}
+        if record.get("_type") == "member":
+            members.append(item)
+        elif record.get("_type") == "message":
+            messages.append(item)
+        else:
+            return None
+    return {
+        "chatlab": chatlab,
+        "meta": meta,
+        "members": members,
+        "messages": messages,
+        "sourceFormat": "weflow_chatlab_jsonl",
+    }
+
+
+def _looks_like_chatlab(payload: dict[str, Any]) -> bool:
+    chatlab = payload.get("chatlab")
+    meta = payload.get("meta")
+    return (
+        isinstance(chatlab, dict)
+        and str(chatlab.get("generator") or "").lower() == "weflow"
+        and isinstance(meta, dict)
+        and str(meta.get("platform") or "").lower() == "wechat"
+    )
+
+
+_CHATLAB_PLACEHOLDERS: dict[int, str] = {
+    1: "[图片]",
+    2: "[语音]",
+    3: "[视频]",
+    4: "[文件]",
+    5: "[表情]",
+    8: "[位置]",
+    23: "[通话]",
+    24: "[小程序]",
+    27: "[名片]",
+}
+
+_CHATLAB_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
+_CHATLAB_VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
+
+
+def _chatlab_placeholder(chatlab_type: int, content: str) -> str | None:
+    normalized = content.replace("\\", "/").split("?", 1)[0].lower()
+    suffix = "." + normalized.rsplit(".", 1)[-1] if "." in normalized else ""
+    if suffix in _CHATLAB_IMAGE_EXTS:
+        return "[图片]"
+    if suffix in _CHATLAB_VIDEO_EXTS:
+        return "[视频]"
+    return _CHATLAB_PLACEHOLDERS.get(chatlab_type)
+
+
+def _parse_chatlab_messages(
+    payload: dict[str, Any],
+    settings: Settings,
+) -> list[NormalizedMessage]:
+    raw_messages = payload.get("messages")
+    if not isinstance(raw_messages, list):
+        raise ParseError("ChatLab payload 中缺少 messages 数组")
+
+    messages: list[NormalizedMessage] = []
+    for idx, raw in enumerate(raw_messages):
+        if not isinstance(raw, dict):
+            continue
+        sender_wxid = str(raw.get("sender") or "")
+        sender_name = str(raw.get("groupNickname") or raw.get("accountName") or sender_wxid)
+        chatlab_type = _parse_int(raw.get("type"), default=99)
+        content = str(raw.get("content") or "").strip()
+        content_lower = content.lower()
+        recalled = chatlab_type == 80 and any(
+            hint.lower() in content_lower for hint in _RECALL_HINTS
+        )
+        is_system = chatlab_type == 80 and not recalled
+        role = _infer_role(
+            sender_wxid=sender_wxid,
+            is_send=-1,
+            settings=settings,
+            is_system=is_system,
+        )
+        reply_id = str(raw.get("replyToMessageId") or "")
+        placeholder = _chatlab_placeholder(chatlab_type, content)
+        placeholders = [placeholder] if placeholder else []
+        is_reply = chatlab_type == 25 or bool(reply_id)
+        text_content = _strip_quoted_tail(content) if is_reply else content
+
+        if recalled:
+            kind = MessageKind.RECALLED
+        elif is_system:
+            kind = MessageKind.SYSTEM
+        elif is_reply:
+            kind = MessageKind.REPLY
+        elif chatlab_type in {0, 7, 24, 99} and content and not placeholder:
+            kind = MessageKind.TEXT
+        elif placeholders:
+            kind = MessageKind.PLACEHOLDER
+        elif content:
+            kind = MessageKind.TEXT
+        else:
+            kind = MessageKind.UNKNOWN
+
+        timestamp = _parse_int(raw.get("timestamp"), default=0)
+        timestamp_ms = timestamp if timestamp >= 1_000_000_000_000 else timestamp * 1000
+        messages.append(
+            NormalizedMessage(
+                message_id=str(
+                    raw.get("platformMessageId")
+                    or raw.get("_jsonlSourceId")
+                    or f"local-{idx}"
+                ),
+                seq=idx,
+                timestamp_ms=timestamp_ms,
+                sender_uid=sender_wxid,
+                sender_name=sender_name,
+                sender_role=role,
+                kind=kind,
+                raw_type=f"chatlab_{chatlab_type}",
+                text="" if placeholder else text_content,
+                placeholders=placeholders,
+                reply_to_id=reply_id or None,
+                reply_to_summary=content[len(text_content) :].strip()[:120] or None,
+                recalled=recalled,
+                system=is_system,
+                has_media=bool(placeholders),
+                raw=raw,
+            )
+        )
+
+    messages.sort(key=lambda message: (message.timestamp_ms, message.seq))
+    return messages
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +401,7 @@ _RECALL_HINTS = (
     "撤回了一条信息",
     "已撤回",
     "撤回了消息",
+    "recalled a message",
 )
 
 # 微信内置 emoji token：`[微笑]` `[捂脸]` `[破涕为笑]` 等（中文 1-4 字 + 方括号）。

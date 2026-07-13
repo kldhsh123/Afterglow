@@ -25,7 +25,7 @@ from tenacity import (
     wait_exponential,
 )
 
-from xuwen.config import Settings
+from xuwen.config import ChatApiProtocol, Settings
 from xuwen.core.errors import LLMError
 from xuwen.core.metrics import MetricsRecorder
 from xuwen.ingestion.embedder import _resolve_endpoint
@@ -51,7 +51,7 @@ class GenerationParams:
 
 
 class LLMClient:
-    """OpenAI Chat Completions 兼容客户端。"""
+    """OpenAI Chat Completions / Responses 兼容客户端。"""
 
     def __init__(
         self,
@@ -61,6 +61,7 @@ class LLMClient:
         timeout_seconds: float = 60.0,
         api_url: str | None = None,
         api_key: str | None = None,
+        api_protocol: ChatApiProtocol = "chat_completions",
         max_retries: int = 3,
     ) -> None:
         self.settings = settings
@@ -68,9 +69,10 @@ class LLMClient:
         self._client = client or httpx.AsyncClient(
             timeout=httpx.Timeout(timeout_seconds, connect=10.0),
         )
-        self._url = _resolve_endpoint(
+        self._api_protocol = api_protocol
+        self._url = _resolve_llm_endpoint(
             api_url or str(settings.openai_base_url),
-            "/chat/completions",
+            api_protocol,
         )
         resolved_key = api_key or settings.openai_api_key.get_secret_value()
         # 重试次数：主聊天 LLM 默认 3（没有兜底，必须撑住短暂网络抖动）；
@@ -98,7 +100,7 @@ class LLMClient:
 
     async def complete_chat(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         params: GenerationParams | None = None,
         *,
         model: str | None = None,
@@ -126,7 +128,7 @@ class LLMClient:
 
     async def stream_chat(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         params: GenerationParams | None = None,
         *,
         model: str | None = None,
@@ -188,7 +190,7 @@ class LLMClient:
 
     def _build_payload(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         params: GenerationParams | None,
         *,
         model: str | None,
@@ -196,9 +198,14 @@ class LLMClient:
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": model or self.settings.chat_model,
-            "messages": messages,
             "stream": stream,
         }
+        if self._api_protocol == "responses":
+            payload["input"] = _responses_input(messages)
+            # Responses 默认会保存响应；Afterglow 的隐私边界要求上游不持久化。
+            payload["store"] = False
+        else:
+            payload["messages"] = messages
         if params is None:
             params = GenerationParams()
         if params.temperature is not None:
@@ -206,10 +213,15 @@ class LLMClient:
         if params.top_p is not None:
             payload["top_p"] = params.top_p
         if params.max_tokens is not None:
-            payload["max_tokens"] = params.max_tokens
-        if params.presence_penalty is not None:
+            token_key = (
+                "max_output_tokens"
+                if self._api_protocol == "responses"
+                else "max_tokens"
+            )
+            payload[token_key] = params.max_tokens
+        if params.presence_penalty is not None and self._api_protocol == "chat_completions":
             payload["presence_penalty"] = params.presence_penalty
-        if params.frequency_penalty is not None:
+        if params.frequency_penalty is not None and self._api_protocol == "chat_completions":
             payload["frequency_penalty"] = params.frequency_penalty
         return payload
 
@@ -312,9 +324,52 @@ class LLMClient:
                 detail={"status": resp.status_code, "request_id": request_id},
             ) from e
 
+        if self._api_protocol == "responses":
+            failure = _responses_failure_reason(data)
+            if failure:
+                _record_model_call(
+                    metrics,
+                    trace_id=trace_id,
+                    stage=stage,
+                    attempt=attempt_number,
+                    payload=payload,
+                    url=self._url,
+                    latency_ms=(time.perf_counter() - start) * 1000,
+                    status="error",
+                    status_code=resp.status_code,
+                    upstream_request_id=request_id or "",
+                    request=request_summary,
+                    response=_json_response_summary(data),
+                    error=failure,
+                )
+                raise LLMError(
+                    "LLM Responses 请求执行失败",
+                    detail={"request_id": request_id, "reason": failure},
+                )
+            if _responses_has_refusal(data):
+                _record_model_call(
+                    metrics,
+                    trace_id=trace_id,
+                    stage=stage,
+                    attempt=attempt_number,
+                    payload=payload,
+                    url=self._url,
+                    latency_ms=(time.perf_counter() - start) * 1000,
+                    status="error",
+                    status_code=resp.status_code,
+                    upstream_request_id=request_id or "",
+                    request=request_summary,
+                    response=_json_response_summary(data),
+                    error="responses_refusal",
+                )
+                raise LLMError(
+                    "主模型拒绝处理当前请求",
+                    detail={"request_id": request_id, "reason": "responses_refusal"},
+                )
+
         try:
-            content = data["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError) as e:
+            text = _extract_content_text(data, self._api_protocol)
+        except (KeyError, IndexError, TypeError, ValueError) as e:
             _record_model_call(
                 metrics,
                 trace_id=trace_id,
@@ -331,10 +386,13 @@ class LLMClient:
                 error="missing_content",
             )
             raise LLMError(
-                "LLM 响应缺少 choices[0].message.content",
+                (
+                    "LLM 响应缺少 output_text"
+                    if self._api_protocol == "responses"
+                    else "LLM 响应缺少 choices[0].message.content"
+                ),
                 detail={"request_id": request_id},
             ) from e
-        text = str(content or "")
         _record_model_call(
             metrics,
             trace_id=trace_id,
@@ -372,6 +430,7 @@ class LLMClient:
         preview_parts: list[str] = []
         full_parts: list[str] = []
         stream_error = ""
+        stream_usage: dict[str, Any] | None = None
         async with self._client.stream(
             "POST", self._url, headers=self._headers, json=payload
         ) as resp:
@@ -442,11 +501,40 @@ class LLMClient:
                         # 单条 chunk 解析失败时跳过，让其它 chunk 继续；
                         # 上层若拿到空字符串说明整段流都失败
                         continue
-                    try:
-                        delta = chunk["choices"][0]["delta"]
-                    except (KeyError, IndexError, TypeError):
-                        continue
-                    content = delta.get("content")
+                    if self._api_protocol == "responses":
+                        event_type = str(chunk.get("type") or "")
+                        if event_type == "response.output_text.delta":
+                            content = chunk.get("delta")
+                        elif event_type == "response.refusal.delta":
+                            stream_error = "responses_refusal"
+                            raise LLMError(
+                                "主模型拒绝处理当前请求",
+                                detail={
+                                    "request_id": request_id,
+                                    "reason": "responses_refusal",
+                                },
+                            )
+                        elif event_type in {"response.completed", "response.incomplete"}:
+                            response = chunk.get("response")
+                            if isinstance(response, dict) and isinstance(
+                                response.get("usage"), dict
+                            ):
+                                stream_usage = response["usage"]
+                            continue
+                        elif event_type in {"error", "response.failed"}:
+                            stream_error = event_type
+                            raise LLMError(
+                                "LLM Responses 流返回错误事件",
+                                detail={"request_id": request_id},
+                            )
+                        else:
+                            continue
+                    else:
+                        try:
+                            delta = chunk["choices"][0]["delta"]
+                        except (KeyError, IndexError, TypeError):
+                            continue
+                        content = delta.get("content")
                     if isinstance(content, str) and content:
                         pieces += 1
                         chars += len(content)
@@ -487,9 +575,121 @@ class LLMClient:
                         content_preview=_short_text("".join(preview_parts), 240),
                         content_text="".join(full_parts),
                         include_full=include_full_payloads,
+                        usage=stream_usage,
                     ),
                     error=stream_error,
                 )
+
+
+def _resolve_llm_endpoint(base_url: str, protocol: ChatApiProtocol) -> str:
+    """允许基础地址或任一 LLM endpoint，并切换到所选协议。"""
+    url = base_url.rstrip("/")
+    for suffix in ("/chat/completions", "/responses"):
+        if url.endswith(suffix):
+            url = url[: -len(suffix)]
+            break
+    target = "/responses" if protocol == "responses" else "/chat/completions"
+    return _resolve_endpoint(url, target)
+
+
+def _responses_input(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    converted: list[dict[str, Any]] = []
+    for message in messages:
+        item = dict(message)
+        content = item.get("content")
+        if isinstance(content, list):
+            parts: list[dict[str, Any]] = []
+            for raw_part in content:
+                if not isinstance(raw_part, dict):
+                    continue
+                part_type = str(raw_part.get("type") or "")
+                if part_type == "text":
+                    parts.append(
+                        {"type": "input_text", "text": str(raw_part.get("text") or "")}
+                    )
+                elif part_type == "image_url":
+                    image = raw_part.get("image_url")
+                    if isinstance(image, dict):
+                        image_url = str(image.get("url") or "")
+                        detail = image.get("detail")
+                    else:
+                        image_url = str(image or "")
+                        detail = None
+                    if image_url:
+                        image_part: dict[str, Any] = {
+                            "type": "input_image",
+                            "image_url": image_url,
+                        }
+                        if detail is not None:
+                            image_part["detail"] = detail
+                        parts.append(image_part)
+                elif part_type in {"input_text", "input_image", "input_file"}:
+                    parts.append(dict(raw_part))
+            item["content"] = parts
+        converted.append(item)
+    return converted
+
+
+def _extract_content_text(
+    data: dict[str, Any],
+    protocol: ChatApiProtocol,
+) -> str:
+    if protocol == "chat_completions":
+        content = data["choices"][0]["message"]["content"]
+        return str(content or "")
+
+    output_text = data.get("output_text")
+    if isinstance(output_text, str) and output_text:
+        return output_text
+    output = data.get("output")
+    if not isinstance(output, list):
+        if isinstance(output_text, str):
+            return output_text
+        raise ValueError("Responses output 缺失")
+    texts: list[str] = []
+    for item in output:
+        if not isinstance(item, dict) or item.get("type") != "message":
+            continue
+        content = item.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "output_text":
+                texts.append(str(part.get("text") or ""))
+    return "".join(texts)
+
+
+def _responses_failure_reason(data: dict[str, Any]) -> str:
+    status = str(data.get("status") or "").strip().lower()
+    if status in {"failed", "cancelled"}:
+        return f"responses_{status}"
+    error = data.get("error")
+    if isinstance(error, dict):
+        code = str(error.get("code") or error.get("type") or "error")
+        return f"responses_{code}"
+    if error:
+        return "responses_error"
+    return ""
+
+
+def _responses_has_refusal(data: dict[str, Any]) -> bool:
+    output = data.get("output")
+    if not isinstance(output, list):
+        return False
+    for item in output:
+        if not isinstance(item, dict):
+            continue
+        content = item.get("content")
+        if not isinstance(content, list):
+            continue
+        if any(
+            isinstance(part, dict) and part.get("type") == "refusal"
+            for part in content
+        ):
+            return True
+    return False
 
 
 def _attempt_number(state: RetryCallState) -> int:
@@ -533,6 +733,8 @@ def _record_model_call(
 
 def _request_summary(payload: dict[str, Any], *, include_full: bool) -> dict[str, Any]:
     messages = payload.get("messages")
+    if not isinstance(messages, list):
+        messages = payload.get("input")
     message_summaries: list[dict[str, Any]] = []
     role_counts: dict[str, int] = {}
     all_texts: list[str] = []
@@ -563,7 +765,9 @@ def _request_summary(payload: dict[str, Any], *, include_full: bool) -> dict[str
         "stream": payload.get("stream"),
         "temperature": payload.get("temperature"),
         "top_p": payload.get("top_p"),
-        "max_tokens": payload.get("max_tokens"),
+        "max_tokens": payload.get("max_tokens") or payload.get("max_output_tokens"),
+        "api_protocol": "responses" if "input" in payload else "chat_completions",
+        "store": payload.get("store"),
         "presence_penalty": payload.get("presence_penalty"),
         "frequency_penalty": payload.get("frequency_penalty"),
         "message_count": len(messages) if isinstance(messages, list) else 0,
@@ -585,9 +789,9 @@ def _message_text_and_images(content: object) -> tuple[str, int]:
     for part in content:
         if not isinstance(part, dict):
             continue
-        if part.get("type") == "text":
+        if part.get("type") in {"text", "input_text", "output_text"}:
             texts.append(str(part.get("text") or ""))
-        elif part.get("type") == "image_url":
+        elif part.get("type") in {"image_url", "input_image"}:
             images += 1
     return "\n".join(texts), images
 
@@ -607,6 +811,7 @@ def _json_response_summary(data: dict[str, Any]) -> dict[str, Any]:
     return {
         "keys": sorted(str(key) for key in data.keys()),
         "choice_count": len(data.get("choices", [])) if isinstance(data.get("choices"), list) else 0,
+        "output_count": len(data.get("output", [])) if isinstance(data.get("output"), list) else 0,
     }
 
 
@@ -626,13 +831,9 @@ def _content_response_summary(
     )
     if include_full:
         summary["content_text"] = text
-    usage = data.get("usage")
-    if isinstance(usage, dict):
-        summary["usage"] = {
-            key: usage.get(key)
-            for key in ("prompt_tokens", "completion_tokens", "total_tokens")
-            if key in usage
-        }
+    usage = _usage_summary(data.get("usage"))
+    if usage:
+        summary["usage"] = usage
     return summary
 
 
@@ -643,6 +844,7 @@ def _stream_response_summary(
     content_preview: str,
     content_text: str,
     include_full: bool,
+    usage: dict[str, Any] | None,
 ) -> dict[str, Any]:
     summary: dict[str, Any] = {
         "stream_chunks": stream_chunks,
@@ -651,6 +853,29 @@ def _stream_response_summary(
     }
     if include_full:
         summary["content_text"] = content_text
+    usage_summary = _usage_summary(usage)
+    if usage_summary:
+        summary["usage"] = usage_summary
+    return summary
+
+
+def _usage_summary(raw: object) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    summary = {
+        key: raw.get(key)
+        for key in (
+            "prompt_tokens",
+            "completion_tokens",
+            "input_tokens",
+            "output_tokens",
+            "total_tokens",
+        )
+        if key in raw
+    }
+    details = raw.get("prompt_tokens_details") or raw.get("input_tokens_details")
+    if isinstance(details, dict) and "cached_tokens" in details:
+        summary["cached_tokens"] = details.get("cached_tokens")
     return summary
 
 

@@ -7,7 +7,7 @@ import re
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime, tzinfo
 from itertools import pairwise
 from pathlib import Path
 from typing import Any, Literal
@@ -292,11 +292,12 @@ def _window_rows_to_sessions(
     )
 
 
-def _timezone(name: str) -> ZoneInfo:
+def _timezone(name: str) -> tzinfo:
     try:
         return ZoneInfo(name)
     except (ZoneInfoNotFoundError, ValueError):
-        return ZoneInfo("UTC")
+        # datetime.UTC 不依赖系统的 IANA 时区数据库或 tzdata。
+        return UTC
 
 
 def save_proactive_profile(profile: ProactiveProfile, path: Path) -> None:

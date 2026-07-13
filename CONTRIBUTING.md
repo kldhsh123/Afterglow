@@ -26,12 +26,30 @@
 - 项目在 `dev` 分支推进，发布前 squash 到 `main`。**请把 PR 提到 `dev`**。
 - 如果是大改动（新增模型适配、改检索策略、动 prompt 模板等），**建议先开 Issue 讨论**，避免实现完发现方向不被接受。
 
+## 不作为缺陷处理的设计边界
+
+提交 Issue 或着手“修复”前，请先确认问题是否属于下面两项刻意保留的设计。未经讨论，不要提交改变这些边界的 PR。
+
+### 主聊天调用链采用 fail-fast
+
+在主聊天调用链中，任一关键步骤发生错误时，程序会立即终止当前请求并返回具体错误信息。这属于项目的刻意设计，而非异常行为。
+
+Afterglow 更重视单次对话链路的完整性和最终生成效果。如果在检索、状态处理、关系记忆或 Prompt 构建等关键环节发生异常后仍继续执行，可能导致上下文缺失、错误状态进入 Prompt，或聊天效果明显下降。因此，目前采用 fail-fast 策略，不接受通过吞掉异常、注入空结果或无提示降级来让主请求“继续跑完”的修复。
+
+这里的“主聊天调用链”指 `/v1/chat/completions`、`/v1/responses` 等在线回复请求从上下文准备到最终生成的关键路径。离线导入、目录扫描等批处理任务可以按各自契约跳过单个坏文件并给出警告，不受这一条限制。
+
+### 当前只面向个人单用户场景
+
+Afterglow 当前的设计目标是个人使用场景，不包含多人同时使用、租户隔离或高并发服务场景。代码内部为了降低单次请求延迟而使用并发，不代表系统承诺支持多个用户共享同一实例和状态。
+
+因此，单纯针对多用户并发、共享状态竞争、租户间数据隔离或高并发吞吐提出的问题，现阶段不属于项目目标范围，也不会作为有效缺陷处理。若未来项目定位发生变化，再考虑补充相应的并发隔离、线程安全与容量设计。
+
 ## 找事做
 
 | 想做什么 | 入口 |
 |---|---|
 | 修小 bug / 改文档错别字 | 直接发 PR |
-| 新增导入插件（其它聊天平台） | 看 [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) 的 plugin 章节 |
+| 新增导入插件（其它聊天平台） | 看 [`docs/wiki/开发文档.md`](docs/wiki/开发文档.md#导入插件开发) |
 | 改进配置向导 UI | 改 `backend/web_ui_src/`，详见 [`backend/web_ui_src/README.md`](backend/web_ui_src/README.md) |
 | 改主聊天前端（时光信笺） | 改 `frontend/`，详见 [`frontend/README.md`](frontend/README.md) |
 | 新增 / 改 prompt 模板 | `backend/xuwen/persona/templates/*.md.j2` |
@@ -59,7 +77,11 @@ cd ../backend/web_ui_src
 npm install
 ```
 
-更详细的环境配置 / 模型选型 / 数据导入流程见根 [`README.md`](README.md) 和 [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)，本文不重复。
+更详细的环境配置、模型和数据导入流程见
+[《快速开始》](docs/wiki/快速开始.md)、
+[《配置参考》](docs/wiki/配置参考.md)、
+[《后端环境变量》](docs/wiki/后端环境变量.md)、
+以及[《导入聊天记录》](docs/wiki/导入聊天记录.md)，本文不重复。
 
 ## 项目结构（贡献者视角）
 
@@ -77,7 +99,7 @@ Afterglow/
 │   ├── web_ui_src/      # 配置向导前端源码（构建到 ../xuwen/web_ui/static/）
 │   └── scripts/         # 离线脚本（import / analyze_persona / eval_retrieval）
 ├── frontend/            # Vue 3 时光信笺主聊天 UI（测试调试用）
-├── docs/                # API.md / DEVELOPMENT.md
+├── docs/wiki/           # 可审查的文档源，Actions 同步到 GitHub Wiki
 └── .github/             # Issue 模板 / FUNDING
 ```
 
@@ -203,6 +225,7 @@ Closes #123
 - [ ] 改了 `frontend/` 跑过 `npx vue-tsc --noEmit`
 - [ ] 没有 `.env` / `.data/` / 真实聊天 JSON 跟着进 PR
 - [ ] 新功能 / bug fix 带了对应的测试
+- [ ] 新增长文档已放入 `docs/wiki/`，并更新 `Home.md` / `_Sidebar.md`
 - [ ] 标题 + 描述讲清楚"做了什么"和"为什么"
 - [ ] 如果对应一个 Issue，PR 里写 `Closes #N`
 

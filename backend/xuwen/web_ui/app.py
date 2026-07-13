@@ -197,7 +197,7 @@ def create_config_app(
                 )
             return HTMLResponse(text)
 
-        # favicon
+        # 站点图标
         @app.get("/favicon.svg", include_in_schema=False)
         @app.get("/favicon.ico", include_in_schema=False)
         async def _favicon() -> Response:

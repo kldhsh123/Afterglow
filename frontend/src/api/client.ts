@@ -37,7 +37,7 @@ export async function jsonRequest<T>(
       const body = await readJson(resp, url)
       detail = body?.error?.message || body?.detail || detail
     } catch {
-      /* ignore */
+      /* 忽略响应体解析失败 */
     }
     if (traceId) detail = `${detail} (trace_id: ${traceId})`
     throw new Error(detail)

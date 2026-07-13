@@ -1,0 +1,44 @@
+{
+  "maxChecksPerIssue": 3,
+  "invalidAction": "label",
+  "responseLanguage": "zh-CN",
+  "templates": [
+    {
+      "label": "bug",
+      "path": ".github/ISSUE_TEMPLATE/bug-report.yml",
+      "name": "Bug report"
+    },
+    {
+      "label": "增强",
+      "path": ".github/ISSUE_TEMPLATE/feature-request.yml",
+      "name": "Feature request"
+    }
+  ],
+  "labels": {
+    "invalid": "needs-template-fix",
+    "valid": "template-ok",
+    "maxChecksReached": "template-check-limit",
+    "unmatchedTemplate": "needs-template-label",
+    "manualReview": "no-ai-template"
+  },
+  "manualReview": {
+    "enabled": true
+  },
+  "comments": {
+    "valid": true,
+    "invalid": true,
+    "maxChecksReached": true,
+    "unmatchedTemplate": true
+  },
+  "addValidLabel": false,
+  "removeInvalidLabelWhenValid": true,
+  "model": {
+    "baseUrlEnv": "ISSUE_AI_BASE_URL",
+    "apiKeyEnv": "ISSUE_AI_API_KEY",
+    "nameEnv": "ISSUE_AI_MODEL",
+    "temperatureEnv": "ISSUE_AI_TEMPERATURE",
+    "maxTokensEnv": "ISSUE_AI_MAX_TOKENS",
+    "timeoutMsEnv": "ISSUE_AI_TIMEOUT_MS",
+    "extraHeadersEnv": "ISSUE_AI_EXTRA_HEADERS_JSON"
+  }
+}

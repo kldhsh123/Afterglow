@@ -1,0 +1,16 @@
+{
+  "_meta": {
+    "invalidFallback": "Used only when the model marks an issue invalid but does not provide suggestedComment/reason.",
+    "missingHeader": "Used only in fallback invalid comments before listing missing fields from the model."
+  },
+  "closeInstruction": "This issue will be closed automatically. You can edit it using the guidance above, then reopen it to trigger another check.",
+  "validFallback": "This issue has passed the template check.",
+  "invalidFallback": "This issue is missing required template information.",
+  "missingHeader": "Please add or improve:",
+  "labelModeInstruction": "Please edit the issue with the missing information. It will be checked again after it is reopened.",
+  "manualReviewInstruction": "If you think this bot made a mistake, reply with:\n{{manualReviewTrigger}}\nThen reopen this issue.",
+  "manualReviewConfirmation": "Manual review requested. This issue will no longer be processed by the AI template checker.",
+  "noConfiguredLabels": "none configured",
+  "maxChecksReached": "This issue has already been checked {{maxChecks}} times for the \"{{templateName}}\" template.\n\nThe automatic template check will not run again for this issue. Please ask a maintainer to review it manually.",
+  "unmatchedTemplate": "This issue does not have a label that maps to a configured issue template, so the AI template check could not run.\n\nExpected one of these template labels: {{expectedLabels}}.\n\nPlease create the issue from one of the repository issue forms, or ask a maintainer to add the correct template label."
+}

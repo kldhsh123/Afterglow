@@ -37,7 +37,8 @@ from xuwen.ingestion.chunker import (
 )
 from xuwen.ingestion.cleaner import Cleaner
 from xuwen.ingestion.embedder import EmbeddingClient
-from xuwen.ingestion.parser import load_qq_json, parse_messages
+from xuwen.ingestion.parser import load_qq_json
+from xuwen.ingestion.plugins import InspectableImportPlugin, select_plugin
 from xuwen.ingestion.splitter import build_windows, split_sessions
 from xuwen.memory.schema import (
     TABLE_DIALOGUE_WINDOWS,
@@ -59,6 +60,7 @@ async def import_history(
     store: MemoryStore | None = None,
     embedder: EmbeddingClient | None = None,
     plugin_name: str | None = None,
+    json_emoji_mode: str = "raw",
     label_progress_cb: Callable[[int, int], None] | None = None,
     chunk_progress_cb: Callable[[int, int], None] | None = None,
     split_progress_cb: Callable[[int, int], None] | None = None,
@@ -69,6 +71,8 @@ async def import_history(
     """从导出 JSON 文件导入到 LanceDB。
 
     plugin_name 强制使用某个 plugin；不传则按 plugin 注册顺序自动 match。
+    json_emoji_mode=raw 时自动归一化短方括号表情；normalized 时认为用户已预处理，
+    只识别统一标记 `[/表情]`。
     label_progress_cb 透传给打标阶段，用于 CLI 显示进度（done, total）。
     chunk_progress_cb(done, total)：三路 chunk 入库的合并进度。
         total = friend + window + response_pair 的总 chunk 数；
@@ -95,17 +99,28 @@ async def import_history(
     start = time.perf_counter()
     _stage("正在解析消息")
     payload = load_qq_json(json_path)
-    raw_count = len(payload.get("messages") or [])
 
     # 1) parse（plugin 自动识别）
-    parsed = parse_messages(payload, settings, plugin_name=plugin_name)
+    plugin = select_plugin(payload, preferred=plugin_name)
+    parsed = plugin.parse(payload, settings)
+    raw_messages = payload.get("messages")
+    raw_count = max(
+        len(raw_messages) if isinstance(raw_messages, list) else 0,
+        len(parsed),
+    )
+    if isinstance(plugin, InspectableImportPlugin):
+        try:
+            raw_count = max(plugin.inspect(payload).total_messages, len(parsed))
+        except Exception:
+            # 身份嗅探/计数是可选能力，失败不能让已经成功的 parse 回退为导入失败。
+            pass
 
-    # 2) clean
+    # 2）清洗
     _stage(f"正在清洗与去重 {len(parsed)} 条消息")
-    cleaner = Cleaner(settings)
+    cleaner = Cleaner(settings, json_emoji_mode=json_emoji_mode)
     cleaned = cleaner.clean_many(parsed)
 
-    # 3) split
+    # 3）切分
     _stage("正在切分会话")
     sessions = split_sessions(cleaned, settings)
     adaptive_llm: LLMClient | None = None

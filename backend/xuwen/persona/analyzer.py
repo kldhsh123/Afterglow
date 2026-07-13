@@ -34,6 +34,9 @@ _EMOJI_RE = re.compile(
     r"[\U0001F300-\U0001FAFF\U0001F600-\U0001F64F☀-➿⌀-⏿]"
 )
 _PLACEHOLDER_RE = re.compile(r"\[(图片|语音|视频|文件|表情|动画表情|撤回)\]")
+# 兼容未重新导入的历史数据：腾讯可能把表情写成任意中英文方括号名称。
+# 与导入清洗规则一致，方括号内 1-12 个字符一律不参与 persona 文本统计。
+_SHORT_BRACKET_PLACEHOLDER_RE = re.compile(r"\[[^\[\]\n]{1,12}\]")
 _TOKEN_RE = re.compile(r"[一-鿿]+|[A-Za-z]+")
 # 长串 base64url（>= 15 字符）通常是 uid 或 url 片段，统计时跳过
 _LONG_BASE64_RE = re.compile(r"^[A-Za-z0-9_-]{15,}$")
@@ -131,8 +134,11 @@ def analyze_persona(
     top_n_terms: int = 60,
     top_n_phrases: int = 30,
     sample_count: int = 20,
+    json_emoji_mode: str = "raw",
 ) -> PersonaReport:
     """对一组 sessions 做画像分析，返回 PersonaReport。"""
+    if json_emoji_mode not in {"raw", "normalized"}:
+        raise ValueError("json_emoji_mode 必须是 raw 或 normalized")
     flat: list[NormalizedMessage] = [m for s in sessions for m in s.messages]
     friend_msgs = [m for m in flat if m.is_friend and _is_useful_for_persona(m)]
 
@@ -141,12 +147,12 @@ def analyze_persona(
         self_name=self_name,
         total_messages=len(flat),
         friend_message_count=len(friend_msgs),
-        top_terms=_top_terms(friend_msgs, top_n_terms),
-        top_phrases=_top_phrases(friend_msgs, top_n_phrases),
+        top_terms=_top_terms(friend_msgs, top_n_terms, json_emoji_mode),
+        top_phrases=_top_phrases(friend_msgs, top_n_phrases, json_emoji_mode),
         length=_length_stats(friend_msgs),
         punctuation=_punctuation_stats(friend_msgs),
         media=_media_stats(friend_msgs),
-        samples=_sample_pairs(sessions, sample_count),
+        samples=_sample_pairs(sessions, sample_count, json_emoji_mode),
     )
 
 
@@ -168,11 +174,13 @@ def _is_useful_for_persona(m: NormalizedMessage) -> bool:
     return bool(m.text.strip())
 
 
-def _top_terms(messages: list[NormalizedMessage], n: int) -> list[TermStat]:
+def _top_terms(
+    messages: list[NormalizedMessage], n: int, json_emoji_mode: str
+) -> list[TermStat]:
     """高频词（基于 jieba 分词，过滤停用词与短词）。"""
     counter: Counter[str] = Counter()
     for m in messages:
-        text = _strip_placeholders(m.text)
+        text = _strip_placeholders(m.text, json_emoji_mode)
         for token in jieba.cut(text):
             token = token.strip()
             if not token or token in _STOPWORDS or token in _PUNCTUATION:
@@ -188,11 +196,13 @@ def _top_terms(messages: list[NormalizedMessage], n: int) -> list[TermStat]:
     return [TermStat(term=t, count=c) for t, c in counter.most_common(n)]
 
 
-def _top_phrases(messages: list[NormalizedMessage], n: int) -> list[TermStat]:
+def _top_phrases(
+    messages: list[NormalizedMessage], n: int, json_emoji_mode: str
+) -> list[TermStat]:
     """高频短语（2-4 字符 n-gram，候选朋友"口头禅"）。"""
     counter: Counter[str] = Counter()
     for m in messages:
-        text = _strip_placeholders(m.text)
+        text = _strip_placeholders(m.text, json_emoji_mode)
         # 仅在汉字 token 上做 n-gram，避免标点干扰
         for run in _TOKEN_RE.findall(text):
             if len(run) < 2:
@@ -271,7 +281,9 @@ def _media_stats(messages: list[NormalizedMessage]) -> MediaStats:
     )
 
 
-def _sample_pairs(sessions: list[Session], n: int) -> list[DialogueSample]:
+def _sample_pairs(
+    sessions: list[Session], n: int, json_emoji_mode: str
+) -> list[DialogueSample]:
     """抽取 self → friend 的相邻对作为典型样本。
 
     多样性策略：
@@ -286,11 +298,9 @@ def _sample_pairs(sessions: list[Session], n: int) -> list[DialogueSample]:
             prev, curr = msgs[i - 1], msgs[i]
             if not prev.is_self or not curr.is_friend:
                 continue
-            user_text = _strip_placeholders(prev.text).strip()
-            friend_text = curr.text.strip()
+            user_text = _strip_placeholders(prev.text, json_emoji_mode).strip()
+            friend_text = _strip_placeholders(curr.text, json_emoji_mode).strip()
             if len(friend_text) < 4:
-                continue
-            if _PLACEHOLDER_RE.fullmatch(friend_text):
                 continue
             pairs.append(
                 DialogueSample(
@@ -358,8 +368,11 @@ def _sample_pairs(sessions: list[Session], n: int) -> list[DialogueSample]:
     return out[:n]
 
 
-def _strip_placeholders(text: str) -> str:
-    return _PLACEHOLDER_RE.sub(" ", text)
+def _strip_placeholders(text: str, json_emoji_mode: str = "raw") -> str:
+    text = _PLACEHOLDER_RE.sub(" ", text)
+    if json_emoji_mode == "normalized":
+        return text.replace("[/表情]", " ")
+    return _SHORT_BRACKET_PLACEHOLDER_RE.sub(" ", text)
 
 
 # ---------------------------------------------------------------------------

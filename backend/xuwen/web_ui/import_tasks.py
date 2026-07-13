@@ -6,7 +6,7 @@
 - 实际导入复用现有 xuwen.ingestion.importer.import_history，但跑在后台 task 里。
 - 文件上传后存到 settings.config_ui_uploads_dir，导入完成后保留（用户可手动清）。
 - 后台日志通过 print(flush=True) 直接打到 stdout，让用户在终端也能看到进度。
-- 完成所有文件入库后，自动用用户指定的 persona_source 跑画像分析，
+- 完成所有文件入库后，自动合并全部文件跑画像分析，
   产出 persona_card.md / persona_report.json / persona_style_profile.json
   / circadian_profile.json 到 settings.persona_data_dir。
 """
@@ -43,7 +43,6 @@ class ImportTask:
     started_at: float = field(default_factory=time.time)
     finished_at: float | None = None
     report: dict[str, Any] | None = None
-    persona_source: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -61,8 +60,6 @@ class ImportTaskManager:
         self,
         files: list[Path],
         file_names: list[str],
-        *,
-        persona_source: Path | None = None,
     ) -> ImportTask:
         task_id = uuid.uuid4().hex[:16]
         task = ImportTask(
@@ -70,7 +67,6 @@ class ImportTaskManager:
             files=[str(p) for p in files],
             file_names=file_names,
             status="pending",
-            persona_source=str(persona_source) if persona_source else None,
         )
         self._tasks[task_id] = task
         return task
@@ -138,91 +134,31 @@ def get_manager() -> ImportTaskManager:
     return _MANAGER
 
 
-def _pick_persona_source(files: list[str]) -> str | None:
-    """没指定 persona_source 时，挑消息数最多的那个文件作为画像参考。"""
-    if not files:
-        return None
-    from xuwen.web_ui.inspect_file import inspect_chat_file
-
-    best: tuple[int, str] = (-1, files[0])
-    for p in files:
-        try:
-            ir = inspect_chat_file(Path(p))
-            if ir.total_messages > best[0]:
-                best = (ir.total_messages, p)
-        except Exception:
-            continue
-    return best[1]
-
-
-async def _run_persona_analysis(json_path: Path, settings: Settings) -> dict[str, Any]:
-    """生成 persona 卡片 + 风格画像 + 作息画像（参考 scripts/analyze_persona.py）。
+async def _run_persona_analysis(
+    json_paths: list[Path],
+    settings: Settings,
+) -> dict[str, Any]:
+    """合并全部文件生成 persona 卡片、风格画像和作息画像。
 
     返回简要统计供前端展示。
     """
-    from xuwen.ingestion.cleaner import Cleaner
-    from xuwen.ingestion.parser import load_qq_json, parse_messages
-    from xuwen.ingestion.splitter import split_sessions
-    from xuwen.persona.analyzer import analyze_persona
-    from xuwen.persona.card import (
-        render_persona_card,
-        save_persona_card,
-        save_persona_report,
-    )
-    from xuwen.persona.circadian import (
-        CIRCADIAN_PROFILE_FILENAME,
-        compute_circadian_profile,
-        save_circadian_profile,
-    )
-    from xuwen.persona.proactive_profile import (
-        PROACTIVE_PROFILE_FILENAME,
-        compute_proactive_profile,
-        save_proactive_profile,
-    )
-    from xuwen.persona.style_profile import build_style_profile, save_style_profile
+    from xuwen.persona.generator import generate_persona_artifacts
 
-    settings.require_identity()
-    out_dir = settings.persona_data_dir
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    payload = await asyncio.to_thread(load_qq_json, json_path)
-    parsed = await asyncio.to_thread(parse_messages, payload, settings)
-    cleaner = Cleaner(settings)
-    cleaned = await asyncio.to_thread(cleaner.clean_many, parsed)
-    sessions = split_sessions(cleaned, settings)
-
-    report = await asyncio.to_thread(
-        analyze_persona,
-        sessions,
-        friend_name=settings.friend_name,
-        self_name=settings.self_name,
+    result = await asyncio.to_thread(
+        generate_persona_artifacts,
+        json_paths,
+        settings,
     )
-    save_persona_report(report, out_dir / "persona_report.json")
-    save_persona_card(render_persona_card(report), out_dir / "persona_card.md")
-
-    style_profile = await asyncio.to_thread(
-        build_style_profile,
-        sessions,
-        friend_name=settings.friend_name,
-        self_name=settings.self_name,
-    )
-    save_style_profile(style_profile, out_dir / "persona_style_profile.json")
-
-    circadian = compute_circadian_profile(cleaned)
-    save_circadian_profile(circadian, out_dir / CIRCADIAN_PROFILE_FILENAME)
-
-    proactive = compute_proactive_profile(
-        sessions,
-        min_gap_minutes=settings.proactive_learning_min_gap_minutes,
-        timezone=settings.app_timezone,
-    )
-    save_proactive_profile(proactive, out_dir / PROACTIVE_PROFILE_FILENAME)
 
     return {
-        "friend_messages": sum(1 for s in sessions for m in s.messages if m.is_friend),
-        "sessions": len(sessions),
-        "circadian_summary": circadian.summary,
-        "proactive_summary": proactive.summary,
+        "source_files": result.source_files,
+        "parsed_messages": result.parsed_messages,
+        "unique_messages": result.unique_messages,
+        "duplicate_messages": result.duplicate_messages,
+        "friend_messages": result.friend_messages,
+        "sessions": result.sessions,
+        "circadian_sample_size": result.circadian_sample_size,
+        "circadian_summary": result.circadian_summary,
     }
 
 
@@ -433,7 +369,7 @@ async def run_import_task(task_id: str, settings: Settings) -> None:
 
     阶段：
     1. 逐文件向量化入库 + 打标（85% 进度区间）
-    2. 用 persona_source 跑画像分析（15% 进度区间）
+    2. 合并全部文件跑画像分析（15% 进度区间）
     """
     mgr = get_manager()
     task = mgr.get(task_id)
@@ -444,6 +380,7 @@ async def run_import_task(task_id: str, settings: Settings) -> None:
     try:
         mgr.update(task_id, status="importing", stage="正在导入聊天记录…", progress=0.02)
         reports: list[dict[str, Any]] = []
+        warnings: list[str] = []
         total = len(task.files)
         for idx, path in enumerate(task.files):
             display_name = task.file_names[idx]
@@ -462,28 +399,25 @@ async def run_import_task(task_id: str, settings: Settings) -> None:
                 report_dict = {"raw": str(report)}
             reports.append({"file": display_name, "report": report_dict})
             _log(
-                f"  → 完成：朋友单条 {getattr(report, 'friend_chunks', 0)}，"
+                f"  → 完成：可向量化朋友消息 {getattr(report, 'friend_chunks', 0)}，"
                 f"对话窗口 {getattr(report, 'window_chunks', 0)}，"
                 f"响应 pair {getattr(report, 'response_pairs', 0)}"
             )
 
         # ===== 阶段 2：persona 画像 =====
-        persona_source = task.persona_source or _pick_persona_source(task.files)
-        if persona_source:
-            persona_name = (
-                task.file_names[task.files.index(persona_source)]
-                if persona_source in task.files
-                else Path(persona_source).name
-            )
-            stage = f"生成人格画像与作息分析（参考 {persona_name}）…"
+        if task.files:
+            persona_paths = [Path(path) for path in task.files]
+            stage = f"合并 {len(persona_paths)} 个文件生成人格画像与作息分析…"
             _log(stage)
             mgr.update(task_id, status="persona", stage=stage, progress=0.90)
             hb = asyncio.create_task(_heartbeat(task_id, stage, time.time()))
             persona_stats: dict[str, Any] | None = None
             try:
-                persona_stats = await _run_persona_analysis(Path(persona_source), settings)
+                persona_stats = await _run_persona_analysis(persona_paths, settings)
             except Exception as e:
-                _log(f"  → 画像分析失败（已跳过）：{type(e).__name__}: {e}")
+                warning = f"画像分析失败（已跳过）：{type(e).__name__}: {e}"
+                _log(f"  → {warning}")
+                warnings.append(warning)
                 reports.append({"persona_error": f"{type(e).__name__}: {e}"})
             finally:
                 hb.cancel()
@@ -493,13 +427,12 @@ async def run_import_task(task_id: str, settings: Settings) -> None:
                     pass
             if persona_stats:
                 _log(
-                    f"  → 画像完成：朋友消息 {persona_stats['friend_messages']}，"
+                    f"  → 画像完成：合并 {persona_stats['source_files']} 个文件，"
+                    f"去重后 {persona_stats['unique_messages']} 条消息，"
+                    f"朋友消息 {persona_stats['friend_messages']}，"
                     f"会话 {persona_stats['sessions']}，作息：{persona_stats['circadian_summary']}"
                 )
-                for r in reports:
-                    if r.get("file") == persona_name:
-                        r["persona"] = persona_stats
-                        break
+                reports.append({"persona": persona_stats})
 
         stage = "基于全部导入记录重建主动开聊画像…"
         _log(stage)
@@ -516,15 +449,19 @@ async def run_import_task(task_id: str, settings: Settings) -> None:
             )
             _log(f"  → 主动开聊画像完成：{proactive_summary}")
         except Exception as e:
-            _log(f"  → 主动开聊画像重建失败（已跳过）：{type(e).__name__}: {e}")
+            warning = f"主动开聊画像重建失败（已跳过）：{type(e).__name__}: {e}"
+            _log(f"  → {warning}")
+            warnings.append(warning)
             reports.append({"proactive_profile_error": f"{type(e).__name__}: {e}"})
 
-        _log(f"任务 {task_id} 完成")
+        final_stage = "导入完成（有警告）" if warnings else "导入完成"
+        _log(f"任务 {task_id} {final_stage}")
         mgr.update(
             task_id,
-            stage="导入完成",
+            stage=final_stage,
             progress=1.0,
             status="done",
+            error="\n".join(warnings),
             report={"files": reports},
         )
     except asyncio.CancelledError:
