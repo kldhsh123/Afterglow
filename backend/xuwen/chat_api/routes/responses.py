@@ -16,7 +16,7 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -58,6 +58,7 @@ from xuwen.chat_api.state import AppState, get_state
 from xuwen.chat_api.vision_client import VisionClient
 from xuwen.chat_api.web_fetch import render_url_context, resolve_fetch_urls
 from xuwen.chat_api.web_search import render_web_context, should_search_web
+from xuwen.companion.life import LifeSnapshot
 from xuwen.companion.response_policy import (
     ResponseDecision,
     decide_response_policy,
@@ -73,10 +74,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["responses"])
 
 _RESPONSES_RETRIEVAL_TIMEOUT_SECONDS = 15.0
-_RESPONSES_LIFE_TIMEOUT_SECONDS = 12.0
 _RESPONSES_RELATIONSHIP_TIMEOUT_SECONDS = 5.0
-_RESPONSES_RESPONSE_POLICY_TIMEOUT_SECONDS = 8.0
-_RESPONSES_VISION_TIMEOUT_SECONDS = 15.0
 
 
 @router.post("/v1/responses", response_model=None)
@@ -122,12 +120,12 @@ async def responses(
                 async with VisionClient(state.settings) as vc:
                     vlm_descriptions = await asyncio.wait_for(
                         vc.describe_images(last_user_images),
-                        timeout=_RESPONSES_VISION_TIMEOUT_SECONDS,
+                        timeout=state.settings.vision_timeout_seconds,
                     )
             except TimeoutError:
                 logger.warning(
                     "Responses VLM 描图超时 %.1fs，使用占位描述",
-                    _RESPONSES_VISION_TIMEOUT_SECONDS,
+                    state.settings.vision_timeout_seconds,
                 )
                 state.metrics.record("responses.vision.describe", 0.0, error="TimeoutError")
                 vlm_descriptions = ["[图片：识别超时]"] * len(last_user_images)
@@ -217,7 +215,7 @@ async def responses(
     # life 进 Layer A 并发：memory_context 改用 recent，relationship_context 同步读 markdown
     life_markdown = state.relationship_memory.load_markdown()
 
-    async def _life_in_parallel():
+    async def _life_in_parallel() -> LifeSnapshot:
         async with state.life_apply_lock:
             try:
                 return await asyncio.wait_for(
@@ -232,12 +230,12 @@ async def responses(
                         trace_id=trace_id,
                         metrics=state.metrics,
                     ),
-                    timeout=_RESPONSES_LIFE_TIMEOUT_SECONDS,
+                    timeout=state.settings.life_timeout_seconds,
                 )
             except TimeoutError:
                 logger.warning(
                     "Responses life 决策超时 %.1fs，沿用当前 snapshot",
-                    _RESPONSES_LIFE_TIMEOUT_SECONDS,
+                    state.settings.life_timeout_seconds,
                 )
                 state.metrics.record("responses.life.decide", 0.0, error="TimeoutError")
                 return state.life.snapshot()
@@ -321,12 +319,12 @@ async def responses(
                     trace_id=trace_id,
                     metrics=state.metrics,
                 ),
-                timeout=_RESPONSES_RESPONSE_POLICY_TIMEOUT_SECONDS,
+                timeout=state.settings.response_policy_timeout_seconds,
             )
         except TimeoutError:
             logger.warning(
                 "Responses 互动策略小模型超时 %.1fs，沿用规则层决策",
-                _RESPONSES_RESPONSE_POLICY_TIMEOUT_SECONDS,
+                state.settings.response_policy_timeout_seconds,
             )
             state.metrics.record("response.policy.refined", 0.0, error="TimeoutError")
         state.metrics.record(
@@ -652,6 +650,7 @@ async def _pseudo_stream_events(
     previous_response_id: str | None,
 ) -> AsyncIterator[bytes]:
     """假流式：把完整 assistant_text 按 Responses 事件协议一次性包装发出。"""
+    format_event = _new_event_formatter()
     created_at = int(time.time())
     message_id = _new_message_id()
     base_response = {
@@ -665,8 +664,8 @@ async def _pseudo_stream_events(
         "policy": policy.model_dump(),
         "previous_response_id": previous_response_id,
     }
-    yield _format_event("response.created", {"response": base_response})
-    yield _format_event("response.in_progress", {"response": base_response})
+    yield format_event("response.created", {"response": base_response})
+    yield format_event("response.in_progress", {"response": base_response})
     item = {
         "id": message_id,
         "type": "message",
@@ -674,31 +673,31 @@ async def _pseudo_stream_events(
         "status": "in_progress",
         "content": [],
     }
-    yield _format_event(
+    yield format_event(
         "response.output_item.added",
         {"output_index": 0, "item": item},
     )
     content_part = {"type": "output_text", "text": "", "annotations": []}
-    yield _format_event(
+    yield format_event(
         "response.content_part.added",
         {"item_id": message_id, "output_index": 0, "content_index": 0, "part": content_part},
     )
     if assistant_text:
-        yield _format_event(
+        yield format_event(
             "response.output_text.delta",
             {"item_id": message_id, "output_index": 0, "content_index": 0, "delta": assistant_text},
         )
-    yield _format_event(
+    yield format_event(
         "response.output_text.done",
         {"item_id": message_id, "output_index": 0, "content_index": 0, "text": assistant_text},
     )
     final_part = {**content_part, "text": assistant_text}
-    yield _format_event(
+    yield format_event(
         "response.content_part.done",
         {"item_id": message_id, "output_index": 0, "content_index": 0, "part": final_part},
     )
     final_item = {**item, "status": "completed", "content": [final_part]}
-    yield _format_event(
+    yield format_event(
         "response.output_item.done",
         {"output_index": 0, "item": final_item},
     )
@@ -709,7 +708,7 @@ async def _pseudo_stream_events(
         "output_text": assistant_text,
         "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
     }
-    yield _format_event("response.completed", {"response": completed})
+    yield format_event("response.completed", {"response": completed})
     yield b"data: [DONE]\n\n"
 
 
@@ -805,9 +804,33 @@ def _build_completed_response(
 # ---------------------------------------------------------------------------
 
 
-def _format_event(event_type: str, payload: dict[str, Any]) -> bytes:
-    body = json.dumps(payload, ensure_ascii=False)
+def _format_event(
+    event_type: str,
+    payload: dict[str, Any],
+    *,
+    sequence_number: int,
+) -> bytes:
+    body = json.dumps(
+        {**payload, "type": event_type, "sequence_number": sequence_number},
+        ensure_ascii=False,
+    )
     return f"event: {event_type}\ndata: {body}\n\n".encode()
+
+
+def _new_event_formatter() -> Callable[[str, dict[str, Any]], bytes]:
+    sequence_number = 0
+
+    def format_event(event_type: str, payload: dict[str, Any]) -> bytes:
+        nonlocal sequence_number
+        event = _format_event(
+            event_type,
+            payload,
+            sequence_number=sequence_number,
+        )
+        sequence_number += 1
+        return event
+
+    return format_event
 
 
 async def _stream_silenced(
@@ -820,6 +843,7 @@ async def _stream_silenced(
     previous_response_id: str | None,
 ) -> AsyncIterator[bytes]:
     """决策层选择不回复时的 Responses 事件序列。"""
+    format_event = _new_event_formatter()
     created_at = int(time.time())
     message_id = _new_message_id()
     base_response = {
@@ -833,8 +857,8 @@ async def _stream_silenced(
         "policy": policy.model_dump(),
         "previous_response_id": previous_response_id,
     }
-    yield _format_event("response.created", {"response": base_response})
-    yield _format_event("response.in_progress", {"response": base_response})
+    yield format_event("response.created", {"response": base_response})
+    yield format_event("response.in_progress", {"response": base_response})
 
     item = {
         "id": message_id,
@@ -843,12 +867,12 @@ async def _stream_silenced(
         "status": "in_progress",
         "content": [],
     }
-    yield _format_event(
+    yield format_event(
         "response.output_item.added",
         {"output_index": 0, "item": item},
     )
     content_part = {"type": "output_text", "text": "", "annotations": []}
-    yield _format_event(
+    yield format_event(
         "response.content_part.added",
         {
             "item_id": message_id,
@@ -858,7 +882,7 @@ async def _stream_silenced(
         },
     )
     if sentinel:
-        yield _format_event(
+        yield format_event(
             "response.output_text.delta",
             {
                 "item_id": message_id,
@@ -867,7 +891,7 @@ async def _stream_silenced(
                 "delta": sentinel,
             },
         )
-    yield _format_event(
+    yield format_event(
         "response.output_text.done",
         {
             "item_id": message_id,
@@ -877,7 +901,7 @@ async def _stream_silenced(
         },
     )
     final_part = {**content_part, "text": sentinel}
-    yield _format_event(
+    yield format_event(
         "response.content_part.done",
         {
             "item_id": message_id,
@@ -891,7 +915,7 @@ async def _stream_silenced(
         "status": "completed",
         "content": [final_part],
     }
-    yield _format_event(
+    yield format_event(
         "response.output_item.done",
         {"output_index": 0, "item": final_item},
     )
@@ -902,7 +926,7 @@ async def _stream_silenced(
         "output_text": sentinel,
         "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
     }
-    yield _format_event("response.completed", {"response": completed_response})
+    yield format_event("response.completed", {"response": completed_response})
     yield b"data: [DONE]\n\n"
 
 
@@ -922,6 +946,7 @@ async def _stream_response(
     decision: ResponseDecision,
 ) -> AsyncIterator[bytes]:
     """正常流式：把主模型 delta 翻译成 Responses 事件序列。"""
+    format_event = _new_event_formatter()
     created_at = int(time.time())
     message_id = _new_message_id()
     buffer: list[str] = []
@@ -940,8 +965,8 @@ async def _stream_response(
         "policy": policy.model_dump(),
         "previous_response_id": previous_response_id,
     }
-    yield _format_event("response.created", {"response": base_response})
-    yield _format_event("response.in_progress", {"response": base_response})
+    yield format_event("response.created", {"response": base_response})
+    yield format_event("response.in_progress", {"response": base_response})
 
     item = {
         "id": message_id,
@@ -950,12 +975,12 @@ async def _stream_response(
         "status": "in_progress",
         "content": [],
     }
-    yield _format_event(
+    yield format_event(
         "response.output_item.added",
         {"output_index": 0, "item": item},
     )
     content_part = {"type": "output_text", "text": "", "annotations": []}
-    yield _format_event(
+    yield format_event(
         "response.content_part.added",
         {
             "item_id": message_id,
@@ -979,7 +1004,7 @@ async def _stream_response(
             if not filtered:
                 continue
             buffer.append(filtered)
-            yield _format_event(
+            yield format_event(
                 "response.output_text.delta",
                 {
                     "item_id": message_id,
@@ -991,7 +1016,7 @@ async def _stream_response(
         tail = output_filter.flush()
         if tail:
             buffer.append(tail)
-            yield _format_event(
+            yield format_event(
                 "response.output_text.delta",
                 {
                     "item_id": message_id,
@@ -1011,7 +1036,7 @@ async def _stream_response(
             (time.perf_counter() - _stream_start) * 1000,
             error=e.code,
         )
-        yield _format_event(
+        yield format_event(
             "response.failed",
             {
                 "response": {
@@ -1028,7 +1053,7 @@ async def _stream_response(
         return
 
     assistant_text = "".join(buffer)
-    yield _format_event(
+    yield format_event(
         "response.output_text.done",
         {
             "item_id": message_id,
@@ -1038,7 +1063,7 @@ async def _stream_response(
         },
     )
     final_part = {**content_part, "text": assistant_text}
-    yield _format_event(
+    yield format_event(
         "response.content_part.done",
         {
             "item_id": message_id,
@@ -1052,7 +1077,7 @@ async def _stream_response(
         "status": "completed",
         "content": [final_part],
     }
-    yield _format_event(
+    yield format_event(
         "response.output_item.done",
         {"output_index": 0, "item": final_item},
     )
@@ -1063,7 +1088,7 @@ async def _stream_response(
         "output_text": assistant_text,
         "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
     }
-    yield _format_event("response.completed", {"response": completed_response})
+    yield format_event("response.completed", {"response": completed_response})
     yield b"data: [DONE]\n\n"
 
     # 流结束后用累积 raw 跑 life-update apply（不影响已发出事件）。

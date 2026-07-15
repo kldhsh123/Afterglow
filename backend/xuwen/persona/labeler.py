@@ -69,12 +69,17 @@ class Labeler:
         settings: Settings,
         *,
         client: httpx.AsyncClient | None = None,
-        timeout_seconds: float = 30.0,
+        timeout_seconds: float | None = None,
     ) -> None:
         self.settings = settings
         self._owned_client = client is None
+        effective_timeout = (
+            timeout_seconds
+            if timeout_seconds is not None
+            else settings.label_timeout_seconds
+        )
         self._client = client or httpx.AsyncClient(
-            timeout=httpx.Timeout(timeout_seconds, connect=10.0),
+            timeout=httpx.Timeout(effective_timeout, connect=10.0),
         )
         self._url = _resolve_endpoint(str(settings.label_api_url), "/chat/completions")
         self._headers = {
@@ -146,6 +151,8 @@ class Labeler:
             "max_tokens": 600,
             "response_format": {"type": "json_object"},
         }
+        if self.settings.llm_reasoning_effort != "null":
+            payload["reasoning_effort"] = self.settings.llm_reasoning_effort
 
         async for attempt in AsyncRetrying(
             stop=stop_after_attempt(3),
