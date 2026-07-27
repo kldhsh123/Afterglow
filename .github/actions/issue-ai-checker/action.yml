@@ -55,4 +55,4 @@ runs:
         ISSUE_AI_MAX_TOKENS: ${{ inputs.model-max-tokens }}
         ISSUE_AI_TIMEOUT_MS: ${{ inputs.model-timeout-ms }}
         ISSUE_AI_EXTRA_HEADERS_JSON: ${{ inputs.model-extra-headers-json }}
-      run: node "$GITHUB_ACTION_PATH/.github/review-issue/issue-ai-checker.mjs"
+      run: node "$GITHUB_ACTION_PATH/issue-ai-checker.mjs"
