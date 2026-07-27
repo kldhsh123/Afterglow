@@ -24,8 +24,6 @@
   <a href="https://github.com/kldhsh123/Afterglow/issues"><img alt="Issues" src="https://img.shields.io/github/issues/kldhsh123/Afterglow?style=flat-square"></a>
 </p>
 
-<sub>臆想症 · 过去 / 当下 / 未来：其一，过去</sub>
-
 </div>
 
 ---
