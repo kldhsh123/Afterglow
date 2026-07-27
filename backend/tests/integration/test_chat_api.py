@@ -59,6 +59,11 @@ def _embedding_response(req: httpx.Request) -> httpx.Response:
     )
 
 
+class _NoopProactiveContextCache:
+    async def append_turn(self, **_: object) -> None:
+        pass
+
+
 def test_info_endpoint(settings: Settings):
     app = create_app(settings)
     with respx.mock(assert_all_called=False):
@@ -72,7 +77,7 @@ def test_info_endpoint(settings: Settings):
 
 
 def test_debug_stats_include_database_perf(settings: Settings):
-    app = create_app(settings)
+    app = create_app(settings.model_copy(update={"debug_endpoints_enabled": True}))
     with respx.mock(assert_all_called=False):
         with TestClient(app) as client:
             r = client.get("/debug/stats")
@@ -353,6 +358,7 @@ async def test_chat_completions_silence_skips_web_tools(
         writeback=object(),
         life_apply_lock=asyncio.Lock(),
         pending_life_tasks=set(),
+        proactive_context_cache=_NoopProactiveContextCache(),
         web_search=SpySearch(),
         web_fetch=object(),
     )
@@ -516,25 +522,42 @@ def test_chat_completions_includes_policy_field_in_normal_path(settings: Setting
 
 def test_companion_proactive_endpoint(settings: Settings):
     app = create_app(settings)
+    calls = {"opening_judge": 0}
+
+    def _proactive_response(req: httpx.Request) -> httpx.Response:
+        body = json.loads(req.read())
+        system_prompt = str(body.get("messages", [{}])[0].get("content", ""))
+        if "你只做质量判断" in system_prompt:
+            calls["opening_judge"] += 1
+            content = json.dumps(
+                {
+                    "should_rewrite": False,
+                    "reason": "候选消息可直接发送",
+                    "rewrite_instruction": "",
+                },
+                ensure_ascii=False,
+            )
+        else:
+            content = "[图片]中午吃了吗"
+        return httpx.Response(
+            200,
+            json={
+                "id": "x",
+                "object": "chat.completion",
+                "model": "gpt-4o-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": content},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        )
+
     with respx.mock(assert_all_called=False) as router:
         router.post("https://embedding.test/v1/embeddings").mock(side_effect=_embedding_response)
-        router.post("https://llm.test/v1/chat/completions").mock(
-            return_value=httpx.Response(
-                200,
-                json={
-                    "id": "x",
-                    "object": "chat.completion",
-                    "model": "gpt-4o-mini",
-                    "choices": [
-                        {
-                            "index": 0,
-                            "message": {"role": "assistant", "content": "[图片]中午吃了吗"},
-                            "finish_reason": "stop",
-                        }
-                    ],
-                },
-            )
-        )
+        router.post("https://llm.test/v1/chat/completions").mock(side_effect=_proactive_response)
         with TestClient(app) as client:
             r = client.post(
                 "/v1/companion/proactive",
@@ -543,6 +566,7 @@ def test_companion_proactive_endpoint(settings: Settings):
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["message"] == "中午吃了吗"
+    assert calls["opening_judge"] == 1
     assert body["life"]["current_activity"]
     assert body["trace_id"] == r.headers["x-request-id"]
 
@@ -769,6 +793,7 @@ def test_memory_search_endpoint_empty_query_returns_empty_result(settings: Setti
         "response_pairs": [],
         "friend_examples": [],
         "dialogue_windows": [],
+        "history_images": [],
         "recent_live": [],
         "trace_id": r.headers["x-request-id"],
     }
@@ -982,6 +1007,7 @@ async def test_responses_silence_skips_web_tools(
         responses_store=FakeResponsesStore(),
         life_apply_lock=asyncio.Lock(),
         pending_life_tasks=set(),
+        proactive_context_cache=_NoopProactiveContextCache(),
         web_search=SpySearch(),
         web_fetch=object(),
     )
