@@ -127,7 +127,7 @@ Afterglow/
 
 ```bash
 cd backend
-uv run ruff check xuwen
+uv run ruff check xuwen scripts
 uv run ruff format xuwen   # 可选，本项目不强制 format
 uv run mypy xuwen
 ```
@@ -153,7 +153,26 @@ cd backend/web_ui_src && npx vue-tsc --noEmit
 
 ### 测试
 
-新功能或者修复BUG必须在本地测试可用并不会影响到其他功能后提交。
+后端测试位于 `backend/tests/`：
+
+- `tests/unit/`：不依赖外部服务的单元测试
+- `tests/integration/`：使用临时目录和 mock 服务验证 API、导入及数据流程
+- `tests/fixtures/`：随仓库维护的小型合成夹具，不得放入真实聊天记录或凭据
+
+提交新功能或 bug 修复时，必须添加能覆盖新行为或回归场景的测试。测试不能依赖贡献者本机的 `.env`、`.data/` 或真实外部 API。
+
+```bash
+cd backend
+
+# 开发时按范围快速运行
+uv run pytest tests/unit -q
+uv run pytest tests/integration -q
+
+# 提交前运行完整测试；CI 执行同一条命令
+uv run pytest tests -q
+```
+
+Pull Request 会触发 `.github/workflows/contributor-checks.yml`，自动执行后端 lint、类型检查和完整测试，并构建主聊天前端与配置向导。CI 不能替代本地检查；请在 PR 的“测试”一节列出实际执行的命令和结果。纯文档改动可以注明不适用。
 
 
 ## 项目特殊约定（容易踩的坑）
@@ -219,8 +238,9 @@ Closes #123
 发 PR 前请逐项过一遍：
 
 - [ ] 目标分支是 `dev`
-- [ ] `uv run ruff check xuwen` 干净
+- [ ] `uv run ruff check xuwen scripts` 干净
 - [ ] `uv run mypy xuwen` 干净（或只剩跟改动无关的旧告警）
+- [ ] `uv run pytest tests -q` 全部通过
 - [ ] 改了 `backend/web_ui_src/` 也 `npm run build` 并把 `static/` 一起提交
 - [ ] 改了 `frontend/` 跑过 `npx vue-tsc --noEmit`
 - [ ] 没有 `.env` / `.data/` / 真实聊天 JSON 跟着进 PR

@@ -1,0 +1,133 @@
+{
+  "metadata": {
+    "name": "QQChatExporter V5 / test fixture",
+    "version": "5.5.64"
+  },
+  "chatInfo": {
+    "name": "TestFriend",
+    "type": "private",
+    "selfUid": "uid-self-001",
+    "selfUin": "1000000001",
+    "selfName": "Me"
+  },
+  "statistics": {
+    "totalMessages": 8,
+    "timeRange": {
+      "start": "2025-07-28T08:14:51.000Z",
+      "end": "2025-07-28T09:00:00.000Z",
+      "durationDays": 1
+    },
+    "messageTypes": {
+      "text": 5,
+      "system": 1,
+      "type_17": 0,
+      "image": 1,
+      "recalled": 1
+    },
+    "senders": [
+      {"uid": "uid-self-001", "name": "Me", "messageCount": 4, "percentage": 50.0},
+      {"uid": "uid-friend-001", "name": "TestFriend", "messageCount": 4, "percentage": 50.0}
+    ],
+    "resources": {"total": 1, "byType": {"image": 1}, "totalSize": 160212}
+  },
+  "messages": [
+    {
+      "id": "m1",
+      "seq": "430",
+      "timestamp": 1753690491000,
+      "time": "2025-07-28 16:14:51",
+      "sender": {"uid": "uid-friend-001", "uin": "2631406069", "name": "TestFriend", "remark": "TestFriend"},
+      "type": "type_1",
+      "content": {"text": "真要看吗", "html": "", "elements": [{"type": "text", "data": {"text": "真要看吗"}}], "resources": [], "mentions": []},
+      "recalled": false,
+      "system": false
+    },
+    {
+      "id": "m2",
+      "seq": "431",
+      "timestamp": 1753690507000,
+      "time": "2025-07-28 16:15:07",
+      "sender": {"uid": "uid-self-001", "uin": "1000000001", "name": "Me", "nickname": "Me"},
+      "type": "type_1",
+      "content": {"text": "看看看看", "html": "", "elements": [{"type": "text", "data": {"text": "看看看看"}}], "resources": [], "mentions": []},
+      "recalled": false,
+      "system": false
+    },
+    {
+      "id": "m3",
+      "seq": "432",
+      "timestamp": 1753690520000,
+      "time": "2025-07-28 16:15:20",
+      "sender": {"uid": "uid-friend-001", "name": "TestFriend"},
+      "type": "type_1",
+      "content": {"text": "你猜一下谁的照片", "elements": [{"type": "text", "data": {"text": "你猜一下谁的照片"}}], "resources": [], "mentions": []},
+      "recalled": false,
+      "system": false
+    },
+    {
+      "id": "m4",
+      "seq": "433",
+      "timestamp": 1753690525000,
+      "time": "2025-07-28 16:15:25",
+      "sender": {"uid": "uid-friend-001", "name": "TestFriend"},
+      "type": "type_1",
+      "content": {
+        "text": "[图片: photo1.png]",
+        "elements": [
+          {"type": "text", "data": {"text": "[图片: photo1.png]"}},
+          {"type": "image", "data": {"filename": "photo1.png", "size": 160212, "url": "/download?fileid=abc"}}
+        ],
+        "resources": [
+          {"type": "image", "filename": "photo1.png", "size": 160212, "url": "/download?fileid=abc"}
+        ],
+        "mentions": []
+      },
+      "recalled": false,
+      "system": false
+    },
+    {
+      "id": "m5",
+      "seq": "434",
+      "timestamp": 1753690600000,
+      "time": "2025-07-28 16:16:40",
+      "sender": {"uid": "uid-self-001", "name": "Me"},
+      "type": "type_1",
+      "content": {"text": "@TestFriend 是谁？", "elements": [], "resources": [], "mentions": [{"uid": "uid-friend-001"}]},
+      "recalled": false,
+      "system": false
+    },
+    {
+      "id": "m6",
+      "seq": "435",
+      "timestamp": 1753690700000,
+      "time": "2025-07-28 16:18:20",
+      "sender": {"uid": "uid-friend-001", "name": "TestFriend"},
+      "type": "type_1",
+      "content": {"text": "不告诉你", "elements": [], "resources": [], "mentions": []},
+      "recalled": true,
+      "system": false
+    },
+    {
+      "id": "m7",
+      "seq": "436",
+      "timestamp": 1753693200000,
+      "time": "2025-07-28 17:00:00",
+      "sender": {"uid": ""},
+      "type": "system",
+      "content": {"text": "你撤回了一条消息", "elements": [], "resources": [], "mentions": []},
+      "recalled": false,
+      "system": true
+    },
+    {
+      "id": "m8",
+      "seq": "437",
+      "timestamp": 1753697000000,
+      "time": "2025-07-28 18:03:20",
+      "sender": {"uid": "uid-self-001", "name": "Me"},
+      "type": "type_1",
+      "content": {"text": "我手机号 13800138000，邮箱 me@example.com", "elements": [], "resources": [], "mentions": []},
+      "recalled": false,
+      "system": false
+    }
+  ]
+}

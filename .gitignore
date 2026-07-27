@@ -32,7 +32,6 @@ dist/
 .vscode/
 *.swp
 .DS_Store
-/backend/tests
 /website
 backend/.env copy
 /backend/.env-backups
