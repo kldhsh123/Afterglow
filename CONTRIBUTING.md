@@ -172,7 +172,7 @@ uv run pytest tests/integration -q
 uv run pytest tests -q
 ```
 
-Pull Request 会触发 `.github/workflows/contributor-checks.yml`，自动执行后端 lint、类型检查和完整测试，并构建主聊天前端与配置向导。CI 不能替代本地检查；请在 PR 的“测试”一节列出实际执行的命令和结果。纯文档改动可以注明不适用。
+Pull Request 会触发 `.github/workflows/contributor-checks.yml`，自动执行后端 lint 和完整测试，并构建主聊天前端与配置向导。CI 不能替代本地检查；请在 PR 的“测试”一节列出实际执行的命令和结果。纯文档改动可以注明不适用。
 
 
 ## 项目特殊约定（容易踩的坑）
@@ -197,7 +197,7 @@ git add backend/web_ui_src/ backend/xuwen/web_ui/static/
 git commit -m "feat(config-ui): ..."
 ```
 
-没有 CI 强制校验，**靠贡献者自觉**。Code review 时也请检查 PR 是否同时更新了 `static/`。
+CI 会重新构建配置向导，并检查 `backend/xuwen/web_ui/static/` 是否产生未提交差异；源码与构建产物不同步时检查会失败。Code review 时仍请确认两边的改动属于同一功能。
 
 ### 3. 不要把真实聊天文件提交到仓库
 
