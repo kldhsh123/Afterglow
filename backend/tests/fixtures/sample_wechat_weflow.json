@@ -1,0 +1,125 @@
+{
+  "weflow": {
+    "version": "1.0.3",
+    "exportedAt": 1779515541,
+    "generator": "WeFlow",
+    "format": "arkme-json"
+  },
+  "session": {
+    "wxid": "wxid_friend",
+    "nickname": "Friend",
+    "remark": "",
+    "displayName": "Friend",
+    "type": "私聊",
+    "lastTimestamp": 1779441641,
+    "messageCount": 8
+  },
+  "senders": [
+    {
+      "senderID": 1,
+      "wxid": "wxid_friend",
+      "displayName": "Friend",
+      "nickname": "Friend"
+    },
+    {
+      "senderID": 2,
+      "wxid": "wxid_me",
+      "displayName": "Me",
+      "nickname": "Me"
+    }
+  ],
+  "messages": [
+    {
+      "localId": 1,
+      "createTime": 1760289525,
+      "formattedTime": "2025-10-13 01:18:45",
+      "type": "系统消息",
+      "localType": 10000,
+      "content": "你已添加了Friend，以上是打招呼的消息。",
+      "isSend": 0,
+      "senderID": 1,
+      "platformMessageId": "5937896762021067022"
+    },
+    {
+      "localId": 2,
+      "createTime": 1760289548,
+      "formattedTime": "2025-10-13 01:19:08",
+      "type": "文本消息",
+      "localType": 1,
+      "content": "你真是个好人",
+      "isSend": 0,
+      "senderID": 1,
+      "platformMessageId": "1328215055331550326"
+    },
+    {
+      "localId": 3,
+      "createTime": 1760289553,
+      "formattedTime": "2025-10-13 01:19:13",
+      "type": "动画表情",
+      "localType": 47,
+      "content": "[表情包]",
+      "isSend": 0,
+      "senderID": 1,
+      "platformMessageId": "48033046049388297",
+      "emojiMd5": "abc123"
+    },
+    {
+      "localId": 4,
+      "createTime": 1760289580,
+      "formattedTime": "2025-10-13 01:19:40",
+      "type": "文本消息",
+      "localType": 1,
+      "content": "好了",
+      "isSend": 1,
+      "senderID": 2,
+      "platformMessageId": "5496543081854318712"
+    },
+    {
+      "localId": 5,
+      "createTime": 1760289600,
+      "formattedTime": "2025-10-13 01:20:00",
+      "type": "图片消息",
+      "localType": 3,
+      "content": null,
+      "isSend": 0,
+      "senderID": 1,
+      "platformMessageId": "2358560893161328023"
+    },
+    {
+      "localId": 6,
+      "createTime": 1760289700,
+      "formattedTime": "2025-10-13 01:21:40",
+      "type": "引用消息",
+      "localType": 244813135921,
+      "content": "1[引用 Friend：你在县城吗]",
+      "isSend": 1,
+      "senderID": 2,
+      "platformMessageId": "6903820443222478858",
+      "replyToMessageId": "582407163894838653",
+      "quotedContent": "你在县城吗",
+      "quotedSender": "Friend"
+    },
+    {
+      "localId": 7,
+      "createTime": 1760289800,
+      "formattedTime": "2025-10-13 01:23:20",
+      "type": "系统消息",
+      "localType": 10000,
+      "content": "你撤回了一条消息",
+      "isSend": 1,
+      "senderID": 2,
+      "platformMessageId": "4808686759457900069"
+    },
+    {
+      "localId": 8,
+      "createTime": 1760289900,
+      "formattedTime": "2025-10-13 01:25:00",
+      "type": "语音消息",
+      "localType": 34,
+      "content": null,
+      "isSend": 0,
+      "senderID": 1,
+      "platformMessageId": "9999999999999999"
+    }
+  ]
+}
