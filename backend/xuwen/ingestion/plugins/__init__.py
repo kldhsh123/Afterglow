@@ -27,7 +27,11 @@ JSONL_RECORDS_KEY = "_afterglowJsonlRecords"
 
 def jsonl_records(payload: dict[str, Any]) -> list[dict[str, Any]] | None:
     value = payload.get(JSONL_RECORDS_KEY)
-    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+    if (
+        not isinstance(value, list)
+        or not value
+        or not all(isinstance(item, dict) for item in value)
+    ):
         return None
     return value
 

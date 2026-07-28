@@ -8,13 +8,24 @@ from xuwen.core.errors import ParseError
 from xuwen.core.models import NormalizedMessage
 from xuwen.ingestion.parser import detect_plugin, parse_messages
 from xuwen.ingestion.plugins import (
+    JSONL_RECORDS_KEY,
     find_plugin,
+    jsonl_records,
     list_plugins,
     register_plugin,
     select_plugin,
 )
 from xuwen.ingestion.plugins.qqexporter_v5 import QQExporterV5Plugin
 from xuwen.ingestion.plugins.wechat_weflow import WeChatWeFlowPlugin
+
+
+def test_jsonl_records_rejects_empty_or_malformed_internal_payload() -> None:
+    assert jsonl_records({}) is None
+    assert jsonl_records({JSONL_RECORDS_KEY: []}) is None
+    assert jsonl_records({JSONL_RECORDS_KEY: [{"_type": "header"}, None]}) is None
+    assert jsonl_records({JSONL_RECORDS_KEY: [{"_type": "header"}]}) == [
+        {"_type": "header"}
+    ]
 
 
 def test_qq_plugin_registered_by_default():
