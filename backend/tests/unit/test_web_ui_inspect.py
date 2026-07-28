@@ -20,6 +20,19 @@ from xuwen.web_ui.inspect_file import inspect_chat_file
 FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
 
 
+def test_inspect_douyin_chat_export_returns_owner_and_friend() -> None:
+    result = inspect_chat_file(FIXTURES / "sample_douyin_chatlab.json")
+
+    assert result.format == "douyin_chat_export"
+    assert result.format_label == "Douyin Chat Export"
+    assert result.error == ""
+    assert result.total_messages == 9
+    assert [(candidate.uid, candidate.role_hint) for candidate in result.candidates] == [
+        ("uid-self-001", "self"),
+        ("uid-friend-001", "friend"),
+    ]
+
+
 def test_inspect_qq_returns_self_and_friend() -> None:
     result = inspect_chat_file(FIXTURES / "sample_chat.json")
     assert result.format == "qqexporter_v5"

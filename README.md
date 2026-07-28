@@ -50,7 +50,7 @@ Afterglow 是一个本地运行的 AI 朋友系统。它把真实聊天记录清
 
 | 能力 | 说明 |
 |---|---|
-| 多源导入 | 支持 QQChatExporter、WeFlow、Afterglow Chat 的 JSON / JSONL，以及多文件画像合并 |
+| 多源导入 | 支持 QQChatExporter、WeFlow、Douyin Chat Export、Afterglow Chat 的 JSON / JSONL，以及多文件画像合并 |
 | 分层混合检索 | 三类历史文本、历史图片摘要与 Live 记忆五路向量召回，RRF 融合并可选 Query Rewrite / Reranker |
 | 人格与状态 | Persona、场景风格、作息画像、生活时间线、关系记忆与互动决策 |
 | 记忆分层 | 区分真人历史、用户新消息和 AI 回复，默认防止 AI 内容污染长期人格 |
@@ -91,7 +91,7 @@ flowchart LR
   end
 
   subgraph Ingestion["离线导入流水线"]
-    message["导出的聊天记录<br/>JSON / JSONL + media"] --> Plugin["导入 plugin<br/>Afterglow / QQ / WeFlow"]
+    message["导出的聊天记录<br/>JSON / JSONL + media"] --> Plugin["导入 plugin<br/>Afterglow / QQ / WeFlow / Douyin"]
     Plugin --> Normalize["NormalizedMessage<br/>角色 / 类型 / 占位符"]
     Normalize --> Clean["清洗 / emoji 与表情占位 / @ 归一"]
     Clean --> Redact["PII 脱敏"]
@@ -178,6 +178,7 @@ uv run uvicorn xuwen.chat_api.app:create_app --factory --reload
 |---|---|---|
 | [QQChatExporter](https://github.com/shuakami/qq-chat-exporter) | JSON、chunked JSONL | 推荐的 QQ 导入方式 |
 | [WeFlow Releases](https://github.com/hicccc77/weflow-releases/) | arkme-json、ChatLab JSONL | 微信导入；当前发布版非开源，请评估隐私与安全风险 |
+| [Douyin Chat Export](https://github.com/TeamBreakerr/douyin-chat-export) | ChatLab JSON、JSONL | 抖音私信导入；图片仅保留占位符 |
 | Afterglow Chat v1 | JSON、typed / bare JSONL | 稳定、平台无关的专用中间格式 |
 
 其它来源可以转换为 [Afterglow Chat v1](https://github.com/kldhsh123/Afterglow/wiki/Afterglow专用导入格式) 快速接入。长期维护或公开分发时，仍建议实现独立 ingestion plugin 并提交 PR。

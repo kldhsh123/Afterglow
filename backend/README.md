@@ -66,6 +66,7 @@ cp .env.example .env
 
 - QQChatExporter：`chatInfo.selfUid` 是自己；消息的 `sender.uid` 是发送者。
 - WeFlow：`wxid` / `platformId` 是微信身份。
+- Douyin Chat Export：`meta.ownerId` 是自己；`members[].platformId` 是候选身份。
 - Afterglow Chat：使用 `participants[].uid` 与 `role`。
 
 不要把不同人物的 UID 合并到同一份 `FRIEND_UID`。

@@ -18,12 +18,14 @@ from xuwen.ingestion.plugins import (
     select_plugin,
 )
 from xuwen.ingestion.plugins.afterglow_v1 import AfterglowV1Plugin
+from xuwen.ingestion.plugins.douyin_chat_export import DouyinChatExportPlugin
 from xuwen.ingestion.plugins.qqexporter_v5 import QQExporterV5Plugin
 from xuwen.ingestion.plugins.wechat_weflow import WeChatWeFlowPlugin
 
 register_plugin(AfterglowV1Plugin())
 register_plugin(QQExporterV5Plugin())
 register_plugin(WeChatWeFlowPlugin())
+register_plugin(DouyinChatExportPlugin())
 
 
 def load_qq_json(path: str | Path) -> dict[str, Any]:
