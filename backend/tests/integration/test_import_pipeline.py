@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import httpx
 import pytest
 import respx
@@ -35,6 +37,61 @@ def settings(tmp_path) -> Settings:
         single_context_after=1,
         enable_pii_redaction=True,
     )
+
+
+def _fake_embedding_response(req: httpx.Request, settings: Settings) -> httpx.Response:
+    import json as _json
+
+    body = _json.loads(req.read())
+    inputs = body["input"]
+    return httpx.Response(
+        200,
+        json={
+            "object": "list",
+            "data": [
+                {
+                    "object": "embedding",
+                    "index": i,
+                    "embedding": [float(i + 1) * 0.01] * settings.embedding_dim,
+                }
+                for i in range(len(inputs))
+            ],
+            "model": settings.embedding_model,
+            "usage": {"prompt_tokens": 0, "total_tokens": 0},
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_import_douyin_chatlab_end_to_end(settings: Settings) -> None:
+    sample_path = Path(__file__).resolve().parent.parent / "fixtures" / "sample_douyin_chatlab.json"
+
+    async with httpx.AsyncClient() as raw:
+        embedder = EmbeddingClient(settings, client=raw)
+        store = MemoryStore(settings)
+        await store.connect()
+        store.ensure_tables()
+        with respx.mock(base_url="https://embedding.test/v1") as router:
+            router.post("/embeddings").mock(
+                side_effect=lambda request: _fake_embedding_response(request, settings)
+            )
+            report = await import_history(
+                sample_path,
+                settings,
+                store=store,
+                embedder=embedder,
+                update_circadian=False,
+                update_proactive=False,
+            )
+
+    assert report.total_raw_messages == 9
+    assert report.parsed_messages == 9
+    assert report.friend_chunks == 2
+    assert report.response_pairs == 2
+    assert report.window_chunks > 0
+    assert report.upserted_friend == report.friend_chunks
+    assert report.upserted_window == report.window_chunks
+    assert report.upserted_response_pairs == report.response_pairs
 
 
 @pytest.mark.asyncio

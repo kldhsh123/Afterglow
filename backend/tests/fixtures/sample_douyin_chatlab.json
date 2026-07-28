@@ -1,0 +1,102 @@
+{
+  "chatlab": {
+    "version": "0.0.2",
+    "exportedAt": 1785220812,
+    "generator": "douyin-chat-export"
+  },
+  "meta": {
+    "name": "与测试朋友的对话",
+    "platform": "douyin",
+    "type": "private",
+    "ownerId": "uid-self-001"
+  },
+  "members": [
+    {
+      "platformId": "uid-self-001",
+      "accountName": "Me"
+    },
+    {
+      "platformId": "uid-friend-001",
+      "accountName": "TestFriend"
+    }
+  ],
+  "messages": [
+    {
+      "sender": "uid-self-001",
+      "accountName": "Me",
+      "timestamp": 1754363160,
+      "type": 0,
+      "content": "昨天那个视频你看了吗？",
+      "platformMessageId": "dy-001"
+    },
+    {
+      "sender": "uid-friend-001",
+      "accountName": "TestFriend",
+      "timestamp": 1754363161,
+      "type": 0,
+      "content": "看了，真的很好笑",
+      "platformMessageId": "dy-002",
+      "replyTo": {
+        "replyTo": "dy-001",
+        "replyToAuthor": "Me",
+        "replyToContent": "昨天那个视频你看了吗？"
+      }
+    },
+    {
+      "sender": "uid-friend-001",
+      "accountName": "TestFriend",
+      "timestamp": 1754363162,
+      "type": 1,
+      "content": "https://p26-sign.douyinpic.com/example.jpg",
+      "platformMessageId": "dy-003"
+    },
+    {
+      "sender": "uid-friend-001",
+      "accountName": "TestFriend",
+      "timestamp": 1754363163,
+      "type": 5,
+      "content": "[开心]",
+      "platformMessageId": "dy-004"
+    },
+    {
+      "sender": "uid-self-001",
+      "accountName": "Me",
+      "timestamp": 1754363164,
+      "type": 24,
+      "content": "[分享视频] 测试视频 | @测试作者 | https://www.douyin.com/video/123456",
+      "platformMessageId": "dy-005"
+    },
+    {
+      "sender": "uid-friend-001",
+      "accountName": "TestFriend",
+      "timestamp": 1754363165,
+      "type": 0,
+      "content": "[语音 3秒]",
+      "platformMessageId": "dy-006"
+    },
+    {
+      "sender": "uid-friend-001",
+      "accountName": "TestFriend",
+      "timestamp": 1754363166,
+      "type": 0,
+      "content": "[分享内容]",
+      "platformMessageId": "dy-007"
+    },
+    {
+      "sender": "uid-friend-001",
+      "accountName": "TestFriend",
+      "timestamp": 1754363167,
+      "type": 99,
+      "content": "未知类型里的可读正文",
+      "platformMessageId": "dy-008"
+    },
+    {
+      "sender": "uid-friend-001",
+      "accountName": "TestFriend",
+      "timestamp": 1754363168,
+      "type": 0,
+      "content": "我们已互相关注，可以开始聊天了",
+      "platformMessageId": "dy-009"
+    }
+  ]
+}
