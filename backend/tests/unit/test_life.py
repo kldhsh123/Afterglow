@@ -180,6 +180,49 @@ async def test_life_state_updates_after_configured_interval(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_life_decision_uses_analysis_habits_as_non_factual_prior(tmp_path):
+    analysis_dir = tmp_path / "analysis"
+    analysis_dir.mkdir(parents=True)
+    analysis_dir.joinpath("life_context.md").write_text(
+        "【历史生活规律参考】\n- 活动偏好：夜间常和朋友打游戏",
+        encoding="utf-8",
+    )
+    settings = _settings(
+        tmp_path,
+        analysis_data_dir=analysis_dir,
+        analysis_life_context_enabled=True,
+    )
+    manager = LifeStateManager(settings)
+    llm = FakeLifeLLM(
+        json.dumps(
+            {
+                "current_activity": "在处理自己的事",
+                "recent_meal": "还没特别吃什么",
+                "mood": "普通",
+                "availability": "available",
+                "topic_seed": "问问今天安排",
+                "next_update_at": "2026-05-21 16:00",
+                "reply_delay_seconds": 0,
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    await manager.decide_for_turn(
+        llm=llm,  # type: ignore[arg-type]
+        model="life-small",
+        current_user_text="在干嘛",
+        recent=[],
+        now=datetime(2026, 5, 21, 15, 0),
+    )
+
+    prompt = llm.messages[0][1]["content"]
+    assert "夜间常和朋友打游戏" in prompt
+    assert "仅作候选先验，不代表今天已经发生" in prompt
+    assert "不要因为历史上常熬夜、打游戏" in prompt
+
+
+@pytest.mark.asyncio
 async def test_life_state_updates_when_sleeping_is_interrupted(tmp_path):
     settings = _settings(tmp_path)
     manager = LifeStateManager(settings)

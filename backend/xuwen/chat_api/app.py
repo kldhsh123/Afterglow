@@ -18,6 +18,7 @@ from xuwen import __version__
 from xuwen.chat_api.llm_client import LLMClient
 from xuwen.chat_api.middleware import install_exception_handlers, install_middleware
 from xuwen.chat_api.responses_store import ResponsesStore
+from xuwen.chat_api.routes import analysis as analysis_route
 from xuwen.chat_api.routes import chat as chat_route
 from xuwen.chat_api.routes import companion as companion_route
 from xuwen.chat_api.routes import debug as debug_route
@@ -248,6 +249,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     install_exception_handlers(app)
 
     app.include_router(health_route.router)
+    app.include_router(analysis_route.router)
     app.include_router(memory_route.router)
     app.include_router(chat_route.router)
     app.include_router(responses_route.router)

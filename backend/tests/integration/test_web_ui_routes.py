@@ -17,10 +17,10 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 
 from xuwen.chat_api.app import create_app
 from xuwen.config import Settings
-
 
 FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
 REPO_BACKEND = Path(__file__).resolve().parents[2]
@@ -169,6 +169,24 @@ def test_values_returns_secret_preview_only(cfg_settings) -> None:
         assert "value" not in v
         assert v["preview"].endswith("cret")
         assert "*" in v["preview"]
+
+
+def test_values_detects_runtime_secret_without_exposing_it(cfg_settings) -> None:
+    """独立 UI 应识别非 .env 来源的有效密钥，但不能返回密钥正文。"""
+    cfg_settings.openai_api_key = SecretStr("sk-runtime-placeholder")
+    cfg_settings.chat_model = "model-placeholder"
+    app = create_app(cfg_settings)
+    token = _extract_token(app)
+
+    with TestClient(app) as client:
+        headers = {"Authorization": f"Bearer {token}"}
+        values = client.get("/config/values", headers=headers).json()["values"]
+        secret = values["OPENAI_API_KEY"]
+
+        assert secret["set"] is True
+        assert "value" not in secret
+        assert secret["preview"].endswith("lder")
+        assert client.get("/config/status", headers=headers).json()["chat_ok"] is True
 
 
 # ---------- 写值 ----------

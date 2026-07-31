@@ -130,6 +130,16 @@ class LifeStateManager:
             self.settings.persona_data_dir / CIRCADIAN_PROFILE_FILENAME
         )
 
+    def _load_analysis_life_context(self) -> str:
+        """读取去证据的长期生活习惯参考；开关关闭或文件缺失时忽略。"""
+        if not self.settings.analysis_life_context_enabled:
+            return ""
+        path = self.settings.analysis_data_dir / "life_context.md"
+        try:
+            return path.read_text(encoding="utf-8").strip()[:5000]
+        except OSError:
+            return ""
+
     def snapshot(self, now: datetime | None = None) -> LifeSnapshot:
         now = now or datetime.now()
         state = self._load_or_create(now)
@@ -207,6 +217,7 @@ class LifeStateManager:
         before = self.snapshot(now)
         state = self._load_or_create(now)
         circadian = self._load_circadian_profile()
+        analysis_life_context = self._load_analysis_life_context()
         if not _should_update_state(
             settings=self.settings,
             state=state,
@@ -228,6 +239,7 @@ class LifeStateManager:
             memory_context=memory_context,
             trigger=trigger,
             circadian=circadian,
+            analysis_life_context=analysis_life_context,
         )
         messages = [
             {
@@ -618,6 +630,7 @@ def _build_decision_prompt(
     memory_context: str,
     trigger: str,
     circadian: CircadianProfile | None = None,
+    analysis_life_context: str = "",
 ) -> str:
     recent_text = "\n".join(
         f"{_speaker(settings, m.role)}: {m.content}" for m in recent[-8:]
@@ -630,6 +643,7 @@ def _build_decision_prompt(
     plan_text = json.dumps(plan, ensure_ascii=False) if isinstance(plan, list) else "（暂无）"
     plan_decided = bool(state.get("plan_decided_by_model"))
     circadian_text = _format_circadian_for_prompt(circadian, now)
+    life_context_text = analysis_life_context[:5000]
     relationship_text = relationship_context[:1200]
     memory_text = memory_context[:1600]
     next_update_at = before.next_update_at or "（未设置）"
@@ -661,6 +675,9 @@ def _build_decision_prompt(
 TA 的真实作息画像（来自历史聊天时间分布，请优先采纳，覆盖默认 8-23 假设）：
 {circadian_text}
 
+从聊天内容归纳的长期生活规律（仅作候选先验，不代表今天已经发生）：
+{life_context_text or "（暂无）"}
+
 最近时间线事件：
 {timeline_text or "（暂无）"}
 
@@ -677,7 +694,8 @@ TA 的真实作息画像（来自历史聊天时间分布，请优先采纳，�
 {current_user_text or "（用户发了非文本内容）"}
 
 要求：
-1. 结合当前时间、今日计划骨架、上一状态、最近时间线、聊天内容和长期偏好，让角色自己决定此刻在做什么。
+1. 结合当前时间、作息画像、长期生活规律、今日计划骨架、上一状态、最近时间线和聊天内容，
+   让角色自己决定此刻在做什么。硬时间分布与当前对话优先于文字归纳的长期倾向。
 2. 今日计划骨架只是兜底参考，不是固定剧本；如果聊天内容或时间流逝说明状态该变了，
    可以自然更新到新的普通日常小事。状态要克制、连续、可信；不要直接复读用户的话。
 3. 不要编造现实见面、定位、工作单位、付款、医疗等硬事实。
@@ -699,8 +717,8 @@ TA 的真实作息画像（来自历史聊天时间分布，请优先采纳，�
    - 不要早于当前时间 10 分钟，也不要晚于当前时间 10 小时。
 9. 如果“今日计划是否已经由模型确认”为否，你可以输出 daily_plan 覆盖今日计划。
    daily_plan 是数组，每项必须包含 id/from/to/activity/availability/topic。
-10. 相关历史语气参考只表示长期语气/偏好，不是今天事实；不要据此生成“今天一直想你”
-   “猜你偷偷打游戏”“你不理我”等当前事件。
+10. 相关历史语气和生活规律只表示长期偏好，不是今天事实；不要因为历史上常熬夜、打游戏、
+   点外卖或回复较慢，就直接断言今天此刻也在这样做。它们只能用于选择更合理的候选状态。
 11. 输出严格限制：
    - **第一个字符必须是 `{{`，最后一个字符必须是 `}}`**
    - 禁止任何形式的 markdown：不要 ```、不要 ```json、不要 *、不要 -、不要 # 等标记

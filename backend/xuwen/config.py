@@ -238,6 +238,7 @@ class Settings(BaseSettings):
     # 中小表也能走索引；更小的表（如 live_messages ~几十行）继续暴力扫描。
     lance_index_min_rows: int = 1000
     persona_data_dir: Path = Path(".data/persona")
+    analysis_data_dir: Path = Path(".data/analysis")
 
     # ----- 本地 API 守卫 -----
     # 默认强制后端 API 鉴权。只有 /healthz 保持公开，方便容器/反代做存活检查。
@@ -290,6 +291,30 @@ class Settings(BaseSettings):
     #   - 否则用默认 4
     # >0 时强制使用该值，覆盖 fallback。
     adaptive_chunk_max_concurrency: int = 0
+
+    # ----- 关系分析（显式离线任务；留空复用主聊天模型）-----
+    analysis_api_url: str = ""
+    analysis_api_key: SecretStr = Field(default=SecretStr(""))
+    analysis_model: str = ""
+    # 块级提取可用轻量模型；最终关系阶段、人格报告、生活画像和实验画像由该模型归并。
+    analysis_final_api_url: str = ""
+    analysis_final_api_key: SecretStr = Field(default=SecretStr(""))
+    analysis_final_model: str = ""
+    analysis_temperature: float = 0.3
+    analysis_max_tokens: int = 6000
+    analysis_final_max_tokens: int = 6000
+    analysis_timeout_seconds: float = 120.0
+    analysis_block_char_budget: int = 10_000
+    analysis_max_concurrency: int = 3
+    analysis_request_interval_seconds: float = 0.0
+    # 是否把关系分析中的作息、饮食、活动和忙闲习惯提供给生活时间线模型。
+    analysis_life_context_enabled: bool = False
+    # 是否把去证据的普通人格画像提供给主聊天模型；默认关闭。
+    analysis_personality_prompt_enabled: bool = False
+    # 生成侧总开关。关闭时 prompt 不含实验指令，且不创建 experimental 目录。
+    analysis_experimental_enabled: bool = False
+    # 是否把经过压缩和去证据处理的实验性结论提供给主聊天模型；默认关闭。
+    analysis_experimental_prompt_enabled: bool = False
 
     # ----- 检索参数 -----
     response_pair_top_k: int = 24
@@ -586,6 +611,7 @@ class Settings(BaseSettings):
         "query_rewrite_temperature",
         "rerank_temperature",
         "adaptive_chunk_temperature",
+        "analysis_temperature",
     )
     @classmethod
     def _check_small_model_temperature(cls, v: float) -> float:
@@ -610,6 +636,10 @@ class Settings(BaseSettings):
         "adaptive_chunk_overlap_turns",
         "adaptive_chunk_soft_gap_minutes",
         "adaptive_chunk_max_concurrency",
+        "analysis_max_tokens",
+        "analysis_final_max_tokens",
+        "analysis_block_char_budget",
+        "analysis_max_concurrency",
         "query_rewrite_max_tokens",
         "query_rewrite_max_variants",
         "rerank_max_tokens",
@@ -637,11 +667,31 @@ class Settings(BaseSettings):
         "response_policy_timeout_seconds",
         "schedule_timeout_seconds",
         "label_timeout_seconds",
+        "analysis_timeout_seconds",
     )
     @classmethod
     def _check_model_timeout(cls, v: float) -> float:
         if not math.isfinite(v) or v <= 0:
             raise ValueError("模型 timeout 必须为有限正数")
+        return v
+
+    @field_validator("analysis_request_interval_seconds")
+    @classmethod
+    def _check_analysis_interval(cls, v: float) -> float:
+        if not math.isfinite(v) or v < 0:
+            raise ValueError("analysis_request_interval_seconds 必须为有限非负数")
+        return v
+
+    @field_validator(
+        "analysis_max_tokens",
+        "analysis_final_max_tokens",
+        "analysis_block_char_budget",
+        "analysis_max_concurrency",
+    )
+    @classmethod
+    def _check_analysis_positive_ints(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("关系分析的 token、字符预算与并发参数必须为正整数")
         return v
 
     @field_validator("web_search_max_results")
@@ -762,6 +812,11 @@ class Settings(BaseSettings):
             raise ValueError("window_overlap 必须严格小于 window_size")
         if self.adaptive_chunk_max_chars < self.adaptive_chunk_target_chars:
             raise ValueError("adaptive_chunk_max_chars 必须 >= adaptive_chunk_target_chars")
+        if self.analysis_experimental_prompt_enabled and not self.analysis_experimental_enabled:
+            raise ValueError(
+                "ANALYSIS_EXPERIMENTAL_PROMPT_ENABLED=true 时必须同时开启 "
+                "ANALYSIS_EXPERIMENTAL_ENABLED"
+            )
         return self
 
     @model_validator(mode="after")
@@ -942,6 +997,40 @@ class Settings(BaseSettings):
         ):
             return self.label_max_concurrency
         return 4
+
+    @property
+    def resolved_analysis_api_url(self) -> str:
+        """关系分析模型 endpoint；留空则复用主 LLM。"""
+        return self.analysis_api_url or self.openai_base_url
+
+    @property
+    def resolved_analysis_api_key(self) -> SecretStr:
+        """关系分析模型 key；留空则复用主 LLM key。"""
+        if self.analysis_api_key.get_secret_value():
+            return self.analysis_api_key
+        return self.openai_api_key
+
+    @property
+    def resolved_analysis_model(self) -> str:
+        """关系分析模型名；留空则复用主聊天模型。"""
+        return self.analysis_model or self.chat_model
+
+    @property
+    def resolved_analysis_final_model(self) -> str:
+        """最终归并模型；留空时复用主聊天模型。"""
+        return self.analysis_final_model or self.chat_model
+
+    @property
+    def resolved_analysis_final_api_url(self) -> str:
+        """最终归并 endpoint；留空时复用主聊天 endpoint。"""
+        return self.analysis_final_api_url or self.openai_base_url
+
+    @property
+    def resolved_analysis_final_api_key(self) -> SecretStr:
+        """最终归并 key；留空时复用主聊天 key。"""
+        if self.analysis_final_api_key.get_secret_value():
+            return self.analysis_final_api_key
+        return self.openai_api_key
 
     @property
     def all_self_names(self) -> list[str]:

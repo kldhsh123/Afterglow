@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from xuwen.chat_api.sticker_store import StickerStore, render_sticker_block_for_prompt
 from xuwen.companion.life import LifeSnapshot
 from xuwen.config import Settings
@@ -91,6 +93,12 @@ def build_persona_card_with_companion_context(
     blocks.append(life.render_prompt_block())
     if relationship_context:
         blocks.append(relationship_context)
+    personality_context = load_personality_prompt_context(settings)
+    if personality_context:
+        blocks.append(personality_context)
+    experimental_context = load_experimental_prompt_context(settings)
+    if experimental_context:
+        blocks.append(experimental_context)
     aliases_block = _render_aliases_block(settings)
     if aliases_block:
         blocks.append(aliases_block)
@@ -108,6 +116,33 @@ def build_persona_card_with_companion_context(
         blocks.append(sticker_block)
 
     return (persona_card + "\n\n" + "\n\n".join(blocks)).strip()
+
+
+def load_personality_prompt_context(settings: Settings) -> str:
+    """按独立开关读取去证据的普通人格画像。"""
+    if not settings.analysis_personality_prompt_enabled:
+        return ""
+    path = Path(settings.analysis_data_dir) / "personality_prompt_context.md"
+    try:
+        content = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    return content[:12000]
+
+
+def load_experimental_prompt_context(settings: Settings) -> str:
+    """仅在双开关开启时读取去证据的实验人格画像。"""
+    if not (
+        settings.analysis_experimental_enabled
+        and settings.analysis_experimental_prompt_enabled
+    ):
+        return ""
+    path = Path(settings.analysis_data_dir) / "experimental" / "prompt_context.md"
+    try:
+        content = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    return content[:12000]
 
 
 def render_life_memory_context(
