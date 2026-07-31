@@ -33,23 +33,38 @@ def build_analysis_blocks(
         current: list[str] = []
         current_chars = 0
         current_start = session.start_time_ms
+        current_end = session.start_time_ms
         current_count = 0
         for message, line in zip(session.messages, rendered, strict=True):
             line_chars = len(line) + 1
             if current and current_chars + line_chars > budget:
                 units.append(
-                    (session.session_id, current_start, message.timestamp_ms, "\n".join(current), current_count)
+                    (
+                        session.session_id,
+                        current_start,
+                        current_end,
+                        "\n".join(current),
+                        current_count,
+                    )
                 )
                 current = []
                 current_chars = 0
                 current_start = message.timestamp_ms
+                current_end = message.timestamp_ms
                 current_count = 0
             current.append(line)
             current_chars += line_chars
             current_count += 1
+            current_end = message.timestamp_ms
         if current:
             units.append(
-                (session.session_id, current_start, session.end_time_ms, "\n".join(current), current_count)
+                (
+                    session.session_id,
+                    current_start,
+                    current_end,
+                    "\n".join(current),
+                    current_count,
+                )
             )
 
     blocks: list[AnalysisBlock] = []

@@ -139,6 +139,39 @@ def test_analysis_blocks_are_deterministic_and_keep_message_timestamps() -> None
     assert "TA: 还好，你呢" in first[0].text
 
 
+def test_analysis_blocks_use_last_included_message_as_split_end_time() -> None:
+    timestamps = [1_700_000_000_000, 1_700_000_060_000, 1_700_000_120_000]
+    messages = [
+        _message(
+            f"m{index}",
+            timestamp,
+            self_message=index % 2 == 1,
+            text=f"活动{index}" + "A" * 600,
+        )
+        for index, timestamp in enumerate(timestamps, 1)
+    ]
+    session = Session(
+        session_id="sess-split",
+        messages=messages,
+        start_time_ms=timestamps[0],
+        end_time_ms=timestamps[-1],
+    )
+
+    blocks = build_analysis_blocks(
+        [session],
+        self_name="我",
+        friend_name="TA",
+        char_budget=1_000,
+    )
+
+    assert len(blocks) == 3
+    assert [(block.start_time_ms, block.end_time_ms) for block in blocks] == [
+        (timestamps[0], timestamps[0]),
+        (timestamps[1], timestamps[1]),
+        (timestamps[2], timestamps[2]),
+    ]
+
+
 def test_storage_keeps_experimental_block_data_in_separate_directory(tmp_path: Path) -> None:
     storage = AnalysisStorage(tmp_path / "analysis")
     storage.prepare(experimental=True)
