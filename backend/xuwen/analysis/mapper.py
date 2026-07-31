@@ -11,8 +11,8 @@ from pydantic import BaseModel, ValidationError
 from xuwen.analysis.models import (
     AnalysisBlock,
     BlockAnalysis,
-    Evidence,
     EventCandidate,
+    Evidence,
     ExperimentalReport,
     ExperimentalSignal,
     LifeHabit,
