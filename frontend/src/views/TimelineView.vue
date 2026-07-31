@@ -10,6 +10,7 @@ import {
   Circle,
   Coffee,
   DoorOpen,
+  ExternalLink,
   Flag,
   Heart,
   HeartHandshake,
@@ -26,6 +27,7 @@ const report = ref<TimelineReport | null>(null)
 const loading = ref(true)
 const error = ref('')
 const expanded = ref(new Set<string>())
+const analysisGuideUrl = 'https://github.com/kldhsh123/Afterglow/wiki/高级与实验功能#聊天记录分析'
 
 const iconByType = {
   milestone: Flag,
@@ -146,10 +148,26 @@ onMounted(load)
         <CalendarDays :size="30" class="mb-3 text-ink-soft dark:text-night-text-soft" />
         <p class="font-medium">时间线尚不可用</p>
         <p class="text-sm mt-2 max-w-md text-ink-soft dark:text-night-text-soft">{{ error }}</p>
+        <a
+          :href="analysisGuideUrl"
+          target="_blank"
+          rel="noopener"
+          class="mt-4 inline-flex items-center gap-1.5 text-sm text-accent dark:text-night-accent hover:underline"
+        >
+          查看生成教程 <ExternalLink :size="14" />
+        </a>
       </div>
       <div v-else-if="!report?.events.length" class="min-h-72 flex flex-col items-center justify-center text-center">
         <MessageCircle :size="30" class="mb-3 text-ink-soft dark:text-night-text-soft" />
         <p>当前报告中没有足够明确的关系节点。</p>
+        <a
+          :href="analysisGuideUrl"
+          target="_blank"
+          rel="noopener"
+          class="mt-4 inline-flex items-center gap-1.5 text-sm text-accent dark:text-night-accent hover:underline"
+        >
+          查看生成教程 <ExternalLink :size="14" />
+        </a>
       </div>
 
       <div v-else class="pt-10 space-y-14">

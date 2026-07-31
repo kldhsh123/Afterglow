@@ -98,19 +98,6 @@ export interface ExperimentalReport {
   signals: ExperimentalSignal[]
 }
 
-export interface AnalysisTask {
-  task_id: string
-  files: string[]
-  status: 'pending' | 'running' | 'done' | 'failed' | 'cancelled'
-  progress: number
-  stage: string
-  detail: string
-  error: string
-  started_at: number
-  finished_at: number | null
-  report: Record<string, unknown> | null
-}
-
 export type Role = 'system' | 'user' | 'assistant'
 
 // OpenAI 多模态 content part
