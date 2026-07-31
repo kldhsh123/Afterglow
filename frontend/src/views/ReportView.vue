@@ -6,6 +6,7 @@ import {
   ChevronLeft,
   Eye,
   EyeOff,
+  ExternalLink,
   LockKeyhole,
   RefreshCw,
   ShieldAlert,
@@ -30,6 +31,7 @@ const error = ref('')
 const experimentalError = ref('')
 const showDisclaimer = ref(false)
 const consentChecked = ref(false)
+const analysisGuideUrl = 'https://github.com/kldhsh123/Afterglow/wiki/高级与实验功能#聊天记录分析'
 
 const categoryLabels: Record<ExperimentalCategory, string> = {
   personality_hypothesis: '可能的核心人格',
@@ -159,6 +161,14 @@ onMounted(load)
         <BookOpenText :size="30" class="mb-3 text-ink-soft dark:text-night-text-soft" />
         <p class="font-medium">报告尚不可用</p>
         <p class="text-sm mt-2 max-w-md text-ink-soft dark:text-night-text-soft">{{ error }}</p>
+        <a
+          :href="analysisGuideUrl"
+          target="_blank"
+          rel="noopener"
+          class="mt-4 inline-flex items-center gap-1.5 text-sm text-accent dark:text-night-accent hover:underline"
+        >
+          查看生成教程 <ExternalLink :size="14" />
+        </a>
       </div>
 
       <template v-else-if="report">
@@ -203,7 +213,17 @@ onMounted(load)
           <div v-else-if="experimentalLoading" class="mt-6 py-12 flex items-center justify-center text-sm text-ink-soft dark:text-night-text-soft">
             <RefreshCw :size="17" class="animate-spin mr-2" /> 正在读取独立分析文件
           </div>
-          <p v-else-if="experimentalError" class="mt-6 text-sm text-warning">{{ experimentalError }}</p>
+          <div v-else-if="experimentalError" class="mt-6 text-sm text-warning">
+            <p>{{ experimentalError }}</p>
+            <a
+              :href="analysisGuideUrl"
+              target="_blank"
+              rel="noopener"
+              class="mt-2 inline-flex items-center gap-1.5 text-accent dark:text-night-accent hover:underline"
+            >
+              查看生成教程 <ExternalLink :size="14" />
+            </a>
+          </div>
           <div v-else-if="experimental" class="mt-6 space-y-4">
             <p class="text-xs leading-5 text-warning">{{ experimental.disclaimer }}</p>
             <p v-if="experimental.summary" class="text-sm leading-7">{{ experimental.summary }}</p>

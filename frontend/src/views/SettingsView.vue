@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 设置面板
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useSettingsStore } from '@/stores/settings'
 import { useMemoryStore } from '@/stores/memory'
@@ -11,16 +11,14 @@ import {
   resumeWriteback,
   triggerUpdateCheck,
 } from '@/api/memory'
-import { cancelAnalysis, fetchAnalysisTask, startAnalysis } from '@/api/analysis'
-import type { AnalysisTask, AppInfo, UpdateInfo } from '@/types/api'
+import type { AppInfo, UpdateInfo } from '@/types/api'
 import {
   BookOpenText,
   ChevronLeft,
   ChevronRight,
-  Play,
+  ExternalLink,
   RefreshCw,
   Route,
-  Square,
   Sticker as StickerIcon,
 } from 'lucide-vue-next'
 import DiagnosticsPanel from '@/components/common/DiagnosticsPanel.vue'
@@ -34,15 +32,7 @@ const checkingUpdate = ref(false)
 const updateCheckHint = ref<string | null>(null)
 const backendError = ref<string | null>(null)
 const busy = ref(false)
-const analysisTask = ref<AnalysisTask | null>(null)
-const analysisStarting = ref(false)
-const analysisError = ref<string | null>(null)
-const analysisTaskKey = 'xuwen.analysis.task_id'
-let analysisPollTimer: ReturnType<typeof setInterval> | null = null
-
-const analysisRunning = computed(
-  () => analysisTask.value?.status === 'pending' || analysisTask.value?.status === 'running',
-)
+const analysisGuideUrl = 'https://github.com/kldhsh123/Afterglow/wiki/高级与实验功能#聊天记录分析'
 
 onMounted(async () => {
   try {
@@ -56,10 +46,7 @@ onMounted(async () => {
   } catch {
     /* 忽略错误 */
   }
-  await resumeAnalysisTask()
 })
-
-onUnmounted(stopAnalysisPolling)
 
 async function checkForUpdate() {
   if (checkingUpdate.value) return
@@ -104,71 +91,6 @@ async function togglePause() {
     backendError.value = `操作失败：${(e as Error).message}`
   } finally {
     busy.value = false
-  }
-}
-
-async function startRelationshipAnalysis() {
-  if (analysisStarting.value || analysisRunning.value) return
-  analysisStarting.value = true
-  analysisError.value = null
-  try {
-    analysisTask.value = await startAnalysis()
-    localStorage.setItem(analysisTaskKey, analysisTask.value.task_id)
-    startAnalysisPolling()
-  } catch (error) {
-    analysisError.value = (error as Error).message
-  } finally {
-    analysisStarting.value = false
-  }
-}
-
-async function cancelRelationshipAnalysis() {
-  if (!analysisTask.value || !analysisRunning.value) return
-  try {
-    await cancelAnalysis(analysisTask.value.task_id)
-    await refreshAnalysisTask()
-  } catch (error) {
-    analysisError.value = (error as Error).message
-  }
-}
-
-async function resumeAnalysisTask() {
-  const taskId = localStorage.getItem(analysisTaskKey)
-  if (!taskId) return
-  try {
-    analysisTask.value = await fetchAnalysisTask(taskId)
-    if (analysisRunning.value) startAnalysisPolling()
-    else localStorage.removeItem(analysisTaskKey)
-  } catch {
-    localStorage.removeItem(analysisTaskKey)
-  }
-}
-
-async function refreshAnalysisTask() {
-  if (!analysisTask.value) return
-  try {
-    analysisTask.value = await fetchAnalysisTask(analysisTask.value.task_id)
-    if (!analysisRunning.value) {
-      stopAnalysisPolling()
-      localStorage.removeItem(analysisTaskKey)
-    }
-  } catch (error) {
-    stopAnalysisPolling()
-    analysisError.value = (error as Error).message
-  }
-}
-
-function startAnalysisPolling() {
-  stopAnalysisPolling()
-  analysisPollTimer = setInterval(() => {
-    void refreshAnalysisTask()
-  }, 1000)
-}
-
-function stopAnalysisPolling() {
-  if (analysisPollTimer !== null) {
-    clearInterval(analysisPollTimer)
-    analysisPollTimer = null
   }
 }
 
@@ -402,59 +324,27 @@ function back() {
           {{ memory.stats.writeback_paused ? '恢复回写' : '暂停回写（不再把新对话写入记忆）' }}
         </button>
       </section>
-      <!-- 关系分析 -->
+      <!-- 关系分析结果 -->
       <section
         class="rounded-lg bg-paper-soft dark:bg-night-bg-soft shadow-letter
                border border-ink/5 dark:border-night-text/10 divide-y divide-ink/10
                dark:divide-night-text/10"
       >
-        <div class="p-4">
-          <div class="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 class="font-medium">关系分析</h2>
-              <p class="mt-1 text-xs text-ink-soft dark:text-night-text-soft">
-                使用已上传的聊天记录生成时间线和报告
-              </p>
-              <p class="mt-2 max-w-md text-xs leading-5 text-warning">
-                所选记录中的清洗后文本可能全部发送给你配置的 Analysis API；请先确认你有权处理双方的私人记录。
-              </p>
-            </div>
-            <button
-              v-if="!analysisRunning"
-              :disabled="analysisStarting"
-              class="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-ink text-paper text-sm
-                     dark:bg-night-accent dark:text-night-bg disabled:opacity-50"
-              @click="startRelationshipAnalysis"
-            >
-              <RefreshCw v-if="analysisStarting" :size="15" class="animate-spin" />
-              <Play v-else :size="15" />
-              开始分析
-            </button>
-            <button
-              v-else
-              class="p-2 rounded-lg border border-ink/15 dark:border-night-text/15 text-ink-soft
-                     dark:text-night-text-soft hover:text-warning"
-              title="取消分析"
-              aria-label="取消分析"
-              @click="cancelRelationshipAnalysis"
-            >
-              <Square :size="15" />
-            </button>
+        <div class="p-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 class="font-medium">关系分析结果</h2>
+            <p class="mt-1 text-xs text-ink-soft dark:text-night-text-soft">
+              时间线和报告由高级功能生成
+            </p>
           </div>
-          <div v-if="analysisTask" class="mt-4">
-            <div class="flex items-center justify-between gap-3 font-sans text-xs text-ink-soft dark:text-night-text-soft">
-              <span class="truncate">{{ analysisTask.stage }}</span>
-              <span class="tabular-nums shrink-0">{{ Math.round(analysisTask.progress * 100) }}%</span>
-            </div>
-            <div class="mt-2 h-1 overflow-hidden rounded-sm bg-ink/10 dark:bg-night-text/10">
-              <div
-                class="h-full bg-accent dark:bg-night-accent transition-[width] duration-300"
-                :style="{ width: `${Math.round(analysisTask.progress * 100)}%` }"
-              />
-            </div>
-            <p v-if="analysisTask.error" class="mt-2 text-xs text-warning">{{ analysisTask.error }}</p>
-          </div>
-          <p v-if="analysisError" class="mt-3 text-xs text-warning">{{ analysisError }}</p>
+          <a
+            :href="analysisGuideUrl"
+            target="_blank"
+            rel="noopener"
+            class="inline-flex items-center gap-1.5 text-xs text-accent dark:text-night-accent hover:underline"
+          >
+            查看生成教程 <ExternalLink :size="13" />
+          </a>
         </div>
         <button
           class="w-full flex items-center justify-between p-4 text-left"
