@@ -28,6 +28,10 @@ interface PersistedSettings {
   debugForceReplyDelay: boolean
   /** 调试用：本地覆盖的延迟秒数，启用 debugForceReplyDelay 时生效 */
   debugReplyDelaySeconds: number
+  /** 是否在报告页显示实验性分析；只影响本浏览器。 */
+  experimentalAnalysisVisible: boolean
+  /** 是否已阅读实验性分析免责说明。 */
+  experimentalDisclaimerAccepted: boolean
 }
 
 const DEFAULTS: PersistedSettings = {
@@ -44,6 +48,8 @@ const DEFAULTS: PersistedSettings = {
   onboardingDone: false,
   debugForceReplyDelay: false,
   debugReplyDelaySeconds: 0,
+  experimentalAnalysisVisible: false,
+  experimentalDisclaimerAccepted: false,
 }
 
 function loadFromStorage(): PersistedSettings {
@@ -79,6 +85,8 @@ export const useSettingsStore = defineStore('settings', () => {
   const onboardingDone = ref(initial.onboardingDone)
   const debugForceReplyDelay = ref(initial.debugForceReplyDelay)
   const debugReplyDelaySeconds = ref(initial.debugReplyDelaySeconds)
+  const experimentalAnalysisVisible = ref(initial.experimentalAnalysisVisible)
+  const experimentalDisclaimerAccepted = ref(initial.experimentalDisclaimerAccepted)
 
   // 派生：当前实际是不是暗色
   const isDark = computed(() => {
@@ -136,6 +144,8 @@ export const useSettingsStore = defineStore('settings', () => {
       onboardingDone: onboardingDone.value,
       debugForceReplyDelay: debugForceReplyDelay.value,
       debugReplyDelaySeconds: debugReplyDelaySeconds.value,
+      experimentalAnalysisVisible: experimentalAnalysisVisible.value,
+      experimentalDisclaimerAccepted: experimentalDisclaimerAccepted.value,
     }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
   }
@@ -156,6 +166,8 @@ export const useSettingsStore = defineStore('settings', () => {
       onboardingDone,
       debugForceReplyDelay,
       debugReplyDelaySeconds,
+      experimentalAnalysisVisible,
+      experimentalDisclaimerAccepted,
     ],
     persist,
     { deep: false },
@@ -208,6 +220,8 @@ export const useSettingsStore = defineStore('settings', () => {
     onboardingDone.value = DEFAULTS.onboardingDone
     debugForceReplyDelay.value = DEFAULTS.debugForceReplyDelay
     debugReplyDelaySeconds.value = DEFAULTS.debugReplyDelaySeconds
+    experimentalAnalysisVisible.value = DEFAULTS.experimentalAnalysisVisible
+    experimentalDisclaimerAccepted.value = DEFAULTS.experimentalDisclaimerAccepted
   }
 
   return {
@@ -224,6 +238,8 @@ export const useSettingsStore = defineStore('settings', () => {
     onboardingDone,
     debugForceReplyDelay,
     debugReplyDelaySeconds,
+    experimentalAnalysisVisible,
+    experimentalDisclaimerAccepted,
     isDark,
     documentTitle,
     applyFromBackend,

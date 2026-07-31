@@ -369,26 +369,6 @@ event: response.created → event: response.in_progress
 到点且通过门控时，如果 `auto_send=true`，`state` 会是 `sent` 或 `silenced`，`proactive`
 字段会包含与 `/v1/companion/proactive` 相同结构的生成结果。
 
-本地实验 smoke test：
-
-```bash
-cd backend
-uv run python scripts/test_proactive_poll.py
-uv run python scripts/test_proactive_poll.py --force-due
-uv run python scripts/test_proactive_poll.py --instant
-uv run python scripts/test_proactive_poll.py --generate-only
-uv run python scripts/test_proactive_poll.py --simulate-user "我先来找你了"
-uv run python scripts/test_proactive_poll.py --caller-id "my-im-caller-1" --force-due
-```
-
-脚本内置默认 Bearer token，适合本地验证。若后端不在 `127.0.0.1:8000`，加
-`--base-url http://host:port`。默认流程会先拿 `next_poll_at_ms`；如果时间离现在太远，
-脚本会退出并提示到点后重跑，或临时把 `.env` 中 `PROACTIVE_CHECK_INTERVAL_SECONDS`
-调小再测。`--force-due` 会调用 `/debug/proactive/force-due` 把 pending candidate 改成
-立刻到期，用于本地完整流程 smoke test；需要 `DEBUG_ENDPOINTS_ENABLED=true`。`--instant`
-只测即时门控，`--generate-only` 只测主动开场生成。`--simulate-user` 会在第一次 poll 后
-调用普通聊天接口，验证后端自己取消 pending candidate，而不是要求调用方判断。
-
 ### `POST /v1/companion/proactive/decide`（实验性，不推荐使用）
 
 基于历史主动开聊画像做“现在要不要主动找用户”的可解释门控。这个接口适合前端轮询、
@@ -705,6 +685,66 @@ curl -F "file=@notes.pdf" \
 
 **错误：** `404`（sha 对不上文件）
 
+## 关系分析接口
+
+关系分析从保留逐条时间戳的原始聊天文件重新解析，不从 LanceDB 反推。所有端点都使用主 API 鉴权。
+
+### `POST /analysis/start`
+
+启动后台分析任务。`files` 只接受 `CONFIG_UI_UPLOADS_DIR` 内的文件名或绝对路径；留空时自动使用该目录下全部 `.json` / `.jsonl` 文件。CLI 需要分析其他位置的文件时使用 `xuwen analyze <paths...>`。
+
+```json
+{
+  "files": ["chat-export.json"],
+  "timeline": true,
+  "personality": true,
+  "resume": true,
+  "since": "2023-01"
+}
+```
+
+响应包含 `task_id`、`status`、`progress`、`stage` 和最终 `report`。
+
+网络、鉴权或模型接口等非输出错误会立即取消尚未完成的请求并进入 `failed`，不会执行 Reduce，也不会发布时间线、性格或实验报告。已经成功写入的块缓存会保留；使用默认 `resume=true` 重新运行时只补尚未完成的块。
+
+块级模型返回政策拒绝或连续输出无效 JSON 时，系统不会调用最终大模型回退，也不会终止整次分析。该块会以空结果写入缓存并从终稿候选中跳过；块文本、每次解析错误和模型原始输出会写入 `.data/analysis/failures/<block_id>.json`，任务结果与 `manifest.json` 会记录跳过数量。CLI 可用 `xuwen analyze <文件> --list-blocks` 列出块，或用 `xuwen analyze <文件> --inspect-block <block_id>` 在不调用模型的情况下查看指定块。
+
+### 任务状态
+
+| 方法与路径 | 作用 |
+|---|---|
+| `GET /analysis/{task_id}` | 查询任务状态。 |
+| `GET /analysis/{task_id}/stream` | 订阅 SSE 进度，任务结束后关闭。 |
+| `POST /analysis/{task_id}/cancel` | 取消仍在运行的任务。 |
+
+### 只读结果
+
+| 方法与路径 | 作用 |
+|---|---|
+| `GET /analysis/timeline` | 读取 `.data/analysis/timeline.json`。 |
+| `GET /analysis/personality` | 读取结构化性格报告。 |
+| `GET /analysis/experimental` | 独立读取实验结果；`ANALYSIS_EXPERIMENTAL_ENABLED=false` 时返回 `404`。 |
+
+实验结果不会混入前两个响应。块级小模型只提取结构化候选；最终大模型负责重组普通人格报告、关系阶段、实验人格画像和生活画像。普通人格报告会生成去证据的 `personality_prompt_context.md`，供主聊天模型了解目标角色的人格与关系互动倾向。生活规律先写入结构化 `life_profile.json`，再渲染为 `life_context.md` 供生活时间线使用。只有开启 `ANALYSIS_PERSONALITY_PROMPT_ENABLED` 后，普通人格画像才会进入主聊天 Prompt；只有开启 `ANALYSIS_LIFE_CONTEXT_ENABLED` 后，生活画像才会进入生活时间线模型的状态决策 Prompt。
+
+生活候选使用独立的块级 Map，不要求单个几天范围的块已经证明“长期规律”；它只提取带时间证据的 `sleep/meal/activity/availability` 候选，最终大模型再跨块判断稳定性。最终模型通过 `source_ids` 引用候选，代码按编号回填原始证据，避免模型改写证据文字后被误判为无来源。生活提取有独立缓存版本，因此升级提取规则后可以复用已有关系与实验缓存，只补跑生活候选。
+
+生活时间线会把 `life_context.md` 作为长期语义先验，与按消息时间戳计算的 `circadian_profile.json`、当前真实时间、今日计划和当天已经发生的状态变化共同使用。它只能调整候选活动和日程的概率，不能把历史规律直接写成今天此刻的事实。当前对话和当天状态具有更高优先级。
+
+所有观察都带有 `subject`：`friend` 表示目标角色，`self` 表示用户，`both` 表示双方，`relationship` 表示关系本身，`unknown` 表示主体不明。普通人格只接受目标角色观察，关系章节可接受 `friend/both/relationship`；生活画像只接受 `friend`。生活规律由模型直接输出 `category`、`time_patterns`、`contexts`、`target_fields` 和 `sensitive_relationship_context`，代码不再扫描中文关键词推断类别或敏感性。用户习惯、共同活动、主体不明和敏感关系内容不会进入生活时间线。
+
+开启 `ANALYSIS_EXPERIMENTAL_ENABLED` 后，每个分析块会额外执行一次只收集实验人格候选的独立 Map，避免和普通时间线/人格输出争用 token；最终大模型再跨块生成 `experimental/personality_profile.json` 和带证据的 Markdown 报告。只有同时开启 `ANALYSIS_EXPERIMENTAL_PROMPT_ENABLED`，系统才会生成去证据的 `experimental/prompt_context.md`。它是包含真实性格、人际态度、依恋、可能隐瞒的情境、操控意图和精神健康假设的人格画像，不是回应策略清单；每项仍需保留把握度、条件、反例和替代解释。
+
+关系分析不在配置向导中提供。使用主 API 的 `/analysis/*` 任务端点，或通过
+`xuwen analyze <paths...>` 分析任意位置的本地文件。完整操作说明见
+[高级与实验功能：聊天记录分析](高级与实验功能.md#聊天记录分析)。
+
+### 最终发送给主聊天模型的内容
+
+每轮主聊天请求由一条 system 消息、近期多轮消息和本轮用户消息组成。system 消息包含 persona 卡片与语气统计、当前生活状态、关系状态、按本轮问题检索到的真人回复和对话片段、输出规则，以及按开关启用的普通人格画像和实验人格画像；涉及联网或网页读取时还会加入对应结果。结构化 `personality_report.json`、`life_profile.json`、时间线、实验完整报告、证据原文和 session ID 不会整份直接发送给主聊天模型。
+
+其中 `personality_prompt_context.md` 在普通上下文开关开启时加入主聊天模型，`life_context.md` 在生活上下文开关开启时加入生活时间线模型，`experimental/prompt_context.md` 在实验双开关开启时加入主聊天模型；当前对话和检索到的真人原文具有更高事实优先级。分析阶段本身仍会把所选聊天块发送给 Analysis API，这是生成报告所必需的独立调用。
+
 ## 调试接口
 
 仅在 `DEBUG_ENDPOINTS_ENABLED=true` 时挂载。所有 `/debug/*` 端点都过鉴权中间件。
@@ -740,6 +780,7 @@ curl -F "file=@notes.pdf" \
 | `writeback_enabled` / `writeback_batch_turns` / `writeback_vectorize` | bool/int | 回写策略 |
 | `live_top_k` / `ai_generated_source_weight` / `ai_generated_long_term_enabled` | mixed | live 检索与来源权重 |
 | `response_policy` | object | `model_enabled` / `model` / `endpoint_overridden` / `key_overridden` / `temperature` / `max_tokens` —— 是否启用小模型复核及是否单独配置 endpoint |
+| `analysis` | object | 分析模型、实验生成开关和实验摘要 Prompt 开关。 |
 | `silence_response_sentinel` / `silence_finish_reason` | string | 沉默响应配置 |
 | `responses_store_capacity` | int | /v1/responses 服务端 LRU 缓存容量 |
 | `vision_enabled` / `chat_model_supports_vision` | bool | 视觉链路开关 |

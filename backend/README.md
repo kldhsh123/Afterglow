@@ -35,7 +35,7 @@ uv run uvicorn xuwen.chat_api.app:create_app --factory --reload
 ```
 
 缺少关键配置时，终端会打印一次性 token。打开 `http://127.0.0.1:8000/config/` 完成配置、导入和
-persona 生成，然后重启后端。
+persona 生成，然后重启后端。关系分析、历史图片导入等高级功能使用 CLI 或主 API 手动运行。
 
 只启动轻量配置入口：
 
@@ -80,6 +80,9 @@ uv run python -m xuwen.ingestion.cli import chat.json chunks/*.jsonl
 # 合并全部文件生成 persona、风格和作息画像
 uv run python scripts/analyze_persona.py chat.json chunks/*.jsonl
 
+# 可选：从原始聊天文件生成关系时间线和性格报告
+uv run python -m xuwen.ingestion.cli analyze chat.json chunks/*.jsonl
+
 # 可选：导入历史图片
 uv run python -m xuwen.ingestion.cli import-images export-dir
 
@@ -89,6 +92,10 @@ uv run python -m xuwen.ingestion.cli stats
 uv run python -m xuwen.ingestion.cli index
 uv run python -m xuwen.ingestion.cli optimize
 ```
+
+分析会缓存已成功的块。网络、鉴权等请求错误会停止任务；模型拒绝或连续返回无效 JSON 的单个块会
+写入 `failures/` 并跳过。重新运行时默认复用已有缓存。开启实验分析后，每个块会增加一次独立的
+实验信号提取请求。
 
 ## 启动 API
 
@@ -110,6 +117,7 @@ uv run uvicorn xuwen.chat_api.app:create_app --factory --reload
 ```text
 xuwen/
 ├── ingestion/   # plugin、清洗、切分、向量化与导入
+├── analysis/    # 离线关系时间线、性格报告与隔离实验性观察
 ├── memory/      # LanceDB schema、检索与回写
 ├── persona/     # persona、风格、作息与标签
 ├── companion/   # 生活状态、关系记忆与互动决策
