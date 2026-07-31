@@ -236,7 +236,7 @@ def render_experimental_prompt_context(report: ExperimentalReport) -> str:
         (
             signal
             for signal in report.signals
-            if signal.subject == "friend" and signal.confidence >= 0.3
+            if signal.subject == "friend" and signal.confidence > 0.3
         ),
         key=lambda signal: signal.confidence,
         reverse=True,
@@ -269,7 +269,7 @@ def render_experimental_prompt_context(report: ExperimentalReport) -> str:
             ]
         )
     if not candidates:
-        lines.append("- 当前没有达到画像阈值的实验性人格假设。")
+        lines.append("- 当前没有达到注入阈值的实验性人格假设。")
     return "\n".join(lines)[:12000]
 
 
