@@ -452,7 +452,7 @@ async def test_mapper_optimizes_personality_context_without_evidence_quotes() ->
     assert "这段人格证据不能发送给优化器" not in context
 
 
-async def test_mapper_replaces_generic_context_with_category_specific_fallback() -> None:
+async def test_mapper_rejects_legacy_generic_response_strategy_context() -> None:
     mapper = AnalysisMapper(Settings(), llm=_GenericContextLlm())  # type: ignore[arg-type]
     report = ExperimentalReport(
         signals=[
@@ -467,7 +467,7 @@ async def test_mapper_replaces_generic_context_with_category_specific_fallback()
 
     context = await mapper.optimize_experimental_context(report)
 
-    assert context == "保持温和、耐心倾听并尊重边界。"
+    assert context == ""
 
 
 async def test_mapper_reduces_block_candidates_into_global_experimental_report() -> None:

@@ -487,7 +487,7 @@ class AnalysisMapper:
                 "alternative_explanations": signal.alternative_explanations[:2],
             }
             for index, signal in enumerate(report.signals)
-            if signal.subject == "friend" and signal.confidence >= 0.3
+            if signal.subject == "friend" and signal.confidence > 0.3
         ][:20]
         if not signals:
             return ""
