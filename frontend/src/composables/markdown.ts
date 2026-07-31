@@ -52,3 +52,13 @@ export function renderMarkdown(input: string): string {
     FORBID_TAGS: ['iframe', 'script', 'style'],
   })
 }
+
+/** 渲染普通文档 Markdown，不解析聊天专用 sticker 占位。 */
+export function renderDocumentMarkdown(input: string): string {
+  if (!input) return ''
+  const rawHtml = marked.parse(input, { async: false }) as string
+  return DOMPurify.sanitize(rawHtml, {
+    USE_PROFILES: { html: true },
+    FORBID_TAGS: ['iframe', 'script', 'style'],
+  })
+}

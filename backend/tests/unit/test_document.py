@@ -48,12 +48,12 @@ def test_extract_csv_to_markdown_table():
     buf = io.StringIO()
     writer = _csv.writer(buf)
     writer.writerow(["name", "age"])
-    writer.writerow(["小明", "8"])
-    writer.writerow(["小红", "9"])
+    writer.writerow(["示例甲", "8"])
+    writer.writerow(["示例乙", "9"])
     data = buf.getvalue().encode("utf-8")
     doc = extract(data, "students.csv")
     assert "| name | age |" in doc.text
-    assert "| 小明 | 8 |" in doc.text
+    assert "| 示例甲 | 8 |" in doc.text
 
 
 def test_extract_csv_truncates_large():
@@ -121,14 +121,14 @@ def test_extract_xlsx_basic():
     wb = Workbook()
     ws = wb.active
     ws.append(["姓名", "分数"])
-    ws.append(["小明", 88])
-    ws.append(["小红", 92])
+    ws.append(["示例甲", 88])
+    ws.append(["示例乙", 92])
     out = io.BytesIO()
     wb.save(out)
     out.seek(0)
     result = extract(out.getvalue(), "scores.xlsx")
     assert "姓名" in result.text
-    assert "小明" in result.text
+    assert "示例甲" in result.text
     assert "92" in result.text
 
 

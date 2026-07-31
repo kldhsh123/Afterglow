@@ -134,6 +134,32 @@ def _build_parser() -> argparse.ArgumentParser:
         "optimize",
         help="对所有向量表跑 table.optimize()：把新写入数据并入索引、清理旧版本",
     )
+    p_analyze = sub.add_parser("analyze", help="从原始聊天文件生成关系时间线与性格报告")
+    p_analyze.add_argument("paths", nargs="+", type=Path, help="聊天 JSON / JSONL 文件")
+    p_analyze.add_argument("--env-file", type=Path, default=None, help="可选：.env 文件路径")
+    p_analyze.add_argument("--out-dir", type=Path, default=None, help="输出目录")
+    inspect_mode = p_analyze.add_mutually_exclusive_group()
+    inspect_mode.add_argument(
+        "--list-blocks",
+        action="store_true",
+        help="只列出确定性分析块，不调用模型",
+    )
+    inspect_mode.add_argument(
+        "--inspect-block",
+        default=None,
+        metavar="BLOCK_ID",
+        help="打印指定分析块的元数据和完整文本，不调用模型",
+    )
+    mode = p_analyze.add_mutually_exclusive_group()
+    mode.add_argument("--timeline-only", action="store_true", help="只生成时间线")
+    mode.add_argument("--personality-only", action="store_true", help="只生成性格报告")
+    p_analyze.add_argument(
+        "--resume",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="复用已完成的确定性分析块（默认开启）",
+    )
+    p_analyze.add_argument("--since", default=None, metavar="YYYY-MM", help="只分析该月份以后")
     return parser
 
 
@@ -594,8 +620,97 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_run_index(args))
     if args.cmd == "optimize":
         return asyncio.run(_run_optimize(args))
+    if args.cmd == "analyze":
+        return asyncio.run(_run_analyze(args))
     parser.print_help()
     return 1
+
+
+async def _run_analyze(args: argparse.Namespace) -> int:
+    from xuwen.analysis.pipeline import (
+        AnalysisPipelineError,
+        analyze_relationship,
+        load_analysis_blocks,
+    )
+
+    settings = _load_settings(args.env_file)
+    if args.list_blocks or args.inspect_block:
+        _, _, blocks = await load_analysis_blocks(
+            args.paths,
+            settings,
+            since=args.since,
+        )
+        if args.list_blocks:
+            table = Table(title=f"关系分析块（共 {len(blocks)} 个）", show_lines=False)
+            table.add_column("序号", justify="right")
+            table.add_column("块 ID")
+            table.add_column("起始时间")
+            table.add_column("消息", justify="right")
+            table.add_column("字符", justify="right")
+            table.add_column("会话", justify="right")
+            for index, block in enumerate(blocks, 1):
+                first_line = block.text.splitlines()[0] if block.text else ""
+                table.add_row(
+                    str(index),
+                    block.block_id,
+                    first_line[1:17] if first_line.startswith("[") else "",
+                    str(block.message_count),
+                    str(len(block.text)),
+                    str(len(block.session_ids)),
+                )
+            console.print(table)
+            return 0
+
+        block = next(
+            (item for item in blocks if item.block_id == args.inspect_block),
+            None,
+        )
+        if block is None:
+            console.print(
+                f"[bold red]未找到分析块：[/]{args.inspect_block}。"
+                "请确认输入文件、身份配置、--since 和 ANALYSIS_BLOCK_CHAR_BUDGET 与失败时一致。"
+            )
+            return 1
+        console.print_json(
+            data={
+                "block_id": block.block_id,
+                "start_time_ms": block.start_time_ms,
+                "end_time_ms": block.end_time_ms,
+                "message_count": block.message_count,
+                "char_count": len(block.text),
+                "session_ids": block.session_ids,
+            }
+        )
+        console.print(block.text, markup=False)
+        return 0
+
+    console.print("[bold]正在分析关系记录...[/]")
+
+    def progress(done: int, total: int, stage: str) -> None:
+        if total:
+            console.print(f"  {stage}: {done}/{total}")
+
+    try:
+        report = await analyze_relationship(
+            args.paths,
+            settings,
+            out_dir=args.out_dir,
+            timeline=not args.personality_only,
+            personality=not args.timeline_only,
+            resume=args.resume,
+            since=args.since,
+            progress_cb=progress,
+        )
+    except AnalysisPipelineError as exc:
+        console.print(f"[bold red]关系分析失败：[/]{exc}")
+        return 1
+    if report.skipped:
+        console.print(
+            f"[bold yellow]已跳过 {report.skipped} 个模型拒绝或坏 JSON 的分析块。[/]"
+            "详情见输出目录的 failures/ 和 manifest.json。"
+        )
+    console.print_json(data=report.to_dict())
+    return 0
 
 
 async def _run_index(args: argparse.Namespace) -> int:

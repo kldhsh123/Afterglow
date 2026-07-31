@@ -13,7 +13,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, SecretStr, ValidationError
 
 from xuwen.config import ChatApiProtocol, Settings
 from xuwen.web_ui.connectivity import (
@@ -68,6 +68,23 @@ def _example_path() -> Path:
     return Path(".env.example").resolve()
 
 
+def _effective_value(settings: Settings, key: str) -> str | None:
+    """读取当前进程实际生效的配置值，不局限于 .env 文件来源。"""
+    value = getattr(settings, key.lower(), None)
+    if value is None:
+        return None
+    if isinstance(value, SecretStr):
+        return value.get_secret_value()
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (list, tuple, set)):
+        return ",".join(str(item) for item in value)
+    enum_value = getattr(value, "value", None)
+    if isinstance(enum_value, str):
+        return enum_value
+    return str(value)
+
+
 # ---------- 元信息 ----------
 
 
@@ -80,16 +97,21 @@ def ping() -> dict[str, Any]:
 @router.get("/status")
 def status(settings: Settings = Depends(_settings_dep)) -> dict[str, Any]:
     """整体配置状态：是否已完成基本配置、向导是否需要走。"""
-    env = load_env(_env_path(settings))
     identity_ok = bool(
-        env.get("SELF_NAME")
-        and env.get("SELF_UID")
-        and env.get("FRIEND_NAME")
-        and env.get("FRIEND_UID")
+        _effective_value(settings, "SELF_NAME")
+        and _effective_value(settings, "SELF_UID")
+        and _effective_value(settings, "FRIEND_NAME")
+        and _effective_value(settings, "FRIEND_UID")
     )
-    chat_ok = bool(env.get("OPENAI_API_KEY") and env.get("CHAT_MODEL"))
-    embedding_ok = bool(env.get("EMBEDDING_API_KEY") and env.get("EMBEDDING_MODEL"))
-    auth_ok = bool(env.get("XUWEN_API_KEY"))
+    chat_ok = bool(
+        _effective_value(settings, "OPENAI_API_KEY")
+        and _effective_value(settings, "CHAT_MODEL")
+    )
+    embedding_ok = bool(
+        _effective_value(settings, "EMBEDDING_API_KEY")
+        and _effective_value(settings, "EMBEDDING_MODEL")
+    )
+    auth_ok = bool(_effective_value(settings, "XUWEN_API_KEY"))
     return {
         "identity_ok": identity_ok,
         "chat_ok": chat_ok,
@@ -141,21 +163,23 @@ def _mask_secret(v: str) -> str:
 
 @router.get("/values")
 def get_values(settings: Settings = Depends(_settings_dep)) -> dict[str, Any]:
-    """读取当前 .env 值。secret 字段仅返回 set + 末 4 位预览。"""
-    env = load_env(_env_path(settings))
+    """读取当前有效配置。secret 字段仅返回 set + 末 4 位预览。"""
     schema = build_schema(_example_path())
     secret_keys = {f.key for f in schema.fields if f.secret}
 
     out: dict[str, Any] = {}
     for f in schema.fields:
-        v = env.get(f.key)
-        if v is None:
+        value = _effective_value(settings, f.key)
+        if value is None:
             out[f.key] = {"set": False, "value": None}
             continue
         if f.key in secret_keys:
-            out[f.key] = {"set": bool(v), "preview": _mask_secret(v)}
+            out[f.key] = {
+                "set": bool(value),
+                "preview": _mask_secret(value),
+            }
         else:
-            out[f.key] = {"set": True, "value": v}
+            out[f.key] = {"set": True, "value": value}
     return {"values": out}
 
 

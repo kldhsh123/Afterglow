@@ -53,6 +53,7 @@ Afterglow 是一个本地运行的 AI 朋友系统。它把真实聊天记录清
 | 多源导入 | 支持 QQChatExporter、WeFlow、Douyin Chat Export、Afterglow Chat 的 JSON / JSONL，以及多文件画像合并 |
 | 分层混合检索 | 三类历史文本、历史图片摘要与 Live 记忆五路向量召回，RRF 融合并可选 Query Rewrite / Reranker |
 | 人格与状态 | Persona、场景风格、作息画像、生活时间线、关系记忆与互动决策 |
+| 关系分析 | 从原始聊天记录离线生成关系时间线与性格报告；实验性观察默认隔离且关闭 |
 | 记忆分层 | 区分真人历史、用户新消息和 AI 回复，默认防止 AI 内容污染长期人格 |
 | 开放接入 | 同时提供 OpenAI Chat Completions 与 Responses API，可接入第三方客户端 |
 | 本地优先 | LanceDB、本地 persona 和资源缓存，支持 PII 脱敏、Bearer 鉴权与全离线模型服务 |
@@ -187,6 +188,7 @@ uv run uvicorn xuwen.chat_api.app:create_app --factory --reload
 
 - **开始使用**：[快速开始](https://github.com/kldhsh123/Afterglow/wiki/快速开始) · [配置参考](https://github.com/kldhsh123/Afterglow/wiki/配置参考) · [后端环境变量](https://github.com/kldhsh123/Afterglow/wiki/后端环境变量) · [Docker](https://github.com/kldhsh123/Afterglow/wiki/Docker部署与运维) · [故障排查](https://github.com/kldhsh123/Afterglow/wiki/故障排查)
 - **数据导入**：[导入聊天记录](https://github.com/kldhsh123/Afterglow/wiki/导入聊天记录) · [Afterglow Chat v1](https://github.com/kldhsh123/Afterglow/wiki/Afterglow专用导入格式) · [人格模板](https://github.com/kldhsh123/Afterglow/wiki/自定义人格模板)
+- **高级与实验功能**：[聊天记录分析、历史图片导入与主动消息](https://github.com/kldhsh123/Afterglow/wiki/高级与实验功能)
 - **原理与参考**：[整体架构](https://github.com/kldhsh123/Afterglow/wiki/整体架构) · [后端 API](https://github.com/kldhsh123/Afterglow/wiki/后端API文档) · [FAQ](https://github.com/kldhsh123/Afterglow/wiki/常见问题) · [安全与隐私](https://github.com/kldhsh123/Afterglow/wiki/负责任使用与数据隐私)
 - **开发贡献**：[开发文档](https://github.com/kldhsh123/Afterglow/wiki/开发文档) · [贡献指南](CONTRIBUTING.md) · [文档维护](https://github.com/kldhsh123/Afterglow/wiki/文档维护)
 

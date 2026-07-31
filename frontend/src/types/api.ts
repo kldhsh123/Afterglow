@@ -1,6 +1,103 @@
 // 与后端 schemas 对应的类型定义。
 // 保持与 backend/xuwen/chat_api/schemas.py 一致；后端字段变动时记得同步。
 
+export type AnalysisEventType =
+  | 'milestone'
+  | 'conflict'
+  | 'reconciliation'
+  | 'intimacy'
+  | 'shared_activity'
+  | 'emotional_shift'
+  | 'separation'
+  | 'daily'
+  | 'other'
+
+export interface AnalysisEvidence {
+  quote: string
+  session_id: string
+  date: string
+}
+
+export interface TimelineEvent {
+  event_id: string
+  date: string
+  title: string
+  type: AnalysisEventType
+  summary: string
+  importance: number
+  evidence: AnalysisEvidence[]
+  session_ids: string[]
+}
+
+export interface TimelinePhase {
+  title: string
+  start_date: string
+  end_date: string
+  summary: string
+  event_ids: string[]
+}
+
+export interface TimelineReport {
+  generated_at: string
+  source_message_count: number
+  source_block_count: number
+  events: TimelineEvent[]
+  phases: TimelinePhase[]
+}
+
+export interface AnalysisObservation {
+  subject: 'friend' | 'self' | 'both' | 'relationship' | 'unknown'
+  dimension: string
+  claim: string
+  evidence: AnalysisEvidence[]
+  confidence: number
+  counterexamples: string[]
+  alternative_explanations: string[]
+}
+
+export interface PersonalitySection {
+  key: string
+  title: string
+  observations: AnalysisObservation[]
+}
+
+export interface PersonalityReport {
+  generated_at: string
+  disclaimer: string
+  summary: string
+  sections: PersonalitySection[]
+}
+
+export type ExperimentalCategory =
+  | 'personality_hypothesis'
+  | 'interpersonal_style'
+  | 'attachment'
+  | 'deception_pattern'
+  | 'manipulation_intent'
+  | 'mental_health_hypothesis'
+  | 'manipulation_pattern'
+  | 'internal_contradiction'
+  | 'wellbeing_signal'
+
+export interface ExperimentalSignal {
+  subject: 'friend' | 'self' | 'both' | 'relationship' | 'unknown'
+  category: ExperimentalCategory
+  claim: string
+  inference_basis: string
+  conditions: string[]
+  evidence: AnalysisEvidence[]
+  confidence: number
+  counterexamples: string[]
+  alternative_explanations: string[]
+}
+
+export interface ExperimentalReport {
+  generated_at: string
+  disclaimer: string
+  summary: string
+  signals: ExperimentalSignal[]
+}
+
 export type Role = 'system' | 'user' | 'assistant'
 
 // OpenAI 多模态 content part

@@ -12,7 +12,15 @@ import {
   triggerUpdateCheck,
 } from '@/api/memory'
 import type { AppInfo, UpdateInfo } from '@/types/api'
-import { ChevronLeft, RefreshCw, Sticker as StickerIcon } from 'lucide-vue-next'
+import {
+  BookOpenText,
+  ChevronLeft,
+  ChevronRight,
+  ExternalLink,
+  RefreshCw,
+  Route,
+  Sticker as StickerIcon,
+} from 'lucide-vue-next'
 import DiagnosticsPanel from '@/components/common/DiagnosticsPanel.vue'
 
 const settings = useSettingsStore()
@@ -24,6 +32,7 @@ const checkingUpdate = ref(false)
 const updateCheckHint = ref<string | null>(null)
 const backendError = ref<string | null>(null)
 const busy = ref(false)
+const analysisGuideUrl = 'https://github.com/kldhsh123/Afterglow/wiki/高级与实验功能#聊天记录分析'
 
 onMounted(async () => {
   try {
@@ -315,6 +324,59 @@ function back() {
           {{ memory.stats.writeback_paused ? '恢复回写' : '暂停回写（不再把新对话写入记忆）' }}
         </button>
       </section>
+      <!-- 关系分析结果 -->
+      <section
+        class="rounded-lg bg-paper-soft dark:bg-night-bg-soft shadow-letter
+               border border-ink/5 dark:border-night-text/10 divide-y divide-ink/10
+               dark:divide-night-text/10"
+      >
+        <div class="p-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 class="font-medium">关系分析结果</h2>
+            <p class="mt-1 text-xs text-ink-soft dark:text-night-text-soft">
+              时间线和报告由高级功能生成
+            </p>
+          </div>
+          <a
+            :href="analysisGuideUrl"
+            target="_blank"
+            rel="noopener"
+            class="inline-flex items-center gap-1.5 text-xs text-accent dark:text-night-accent hover:underline"
+          >
+            查看生成教程 <ExternalLink :size="13" />
+          </a>
+        </div>
+        <button
+          class="w-full flex items-center justify-between p-4 text-left"
+          @click="router.push('/timeline')"
+        >
+          <span class="flex items-center gap-3">
+            <Route :size="18" />
+            <span>
+              <span class="block font-medium">关系时间线</span>
+              <span class="block mt-0.5 text-xs text-ink-soft dark:text-night-text-soft">
+                按阶段查看重要节点与原文证据
+              </span>
+            </span>
+          </span>
+          <ChevronRight :size="17" class="text-ink-soft dark:text-night-text-soft" />
+        </button>
+        <button
+          class="w-full flex items-center justify-between p-4 text-left"
+          @click="router.push('/report')"
+        >
+          <span class="flex items-center gap-3">
+            <BookOpenText :size="18" />
+            <span>
+              <span class="block font-medium">关系与性格报告</span>
+              <span class="block mt-0.5 text-xs text-ink-soft dark:text-night-text-soft">
+                查看沟通模式、相处方式和证据
+              </span>
+            </span>
+          </span>
+          <ChevronRight :size="17" class="text-ink-soft dark:text-night-text-soft" />
+        </button>
+      </section>
       <!-- 表情包入口 -->
       <section
         class="rounded-2xl p-4 bg-paper-soft dark:bg-night-bg-soft shadow-letter
@@ -328,7 +390,7 @@ function back() {
             <StickerIcon :size="18" />
             <span class="font-medium">表情包管理</span>
           </span>
-          <span class="text-xs text-ink-soft dark:text-night-text-soft">→</span>
+          <ChevronRight :size="17" class="text-ink-soft dark:text-night-text-soft" />
         </button>
       </section>
 

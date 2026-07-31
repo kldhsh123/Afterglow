@@ -5,16 +5,18 @@ import { computed, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import {
   ArrowLeft, ArrowRight, CheckCircle2, AlertCircle, Loader2,
   KeyRound, Copy, RefreshCw, ExternalLink, Upload, FileText, X,
-  Wand2, UserCircle2,
+  Wand2, UserCircle2, Settings2,
 } from 'lucide-vue-next'
 import {
   api, getToken, setToken,
   type Preset, type TestResult, type ImportTaskState, type UploadedFile,
-  type IdentityCandidate,
+  type IdentityCandidate, type SetupStatus,
 } from './api'
 
 const step = ref(0)
 const totalSteps = 8
+const setupStatus = ref<SetupStatus | null>(null)
+const configuredFields = ref(new Set<string>())
 
 // ---- 访问令牌 ----
 const tokenInput = ref(getToken())
@@ -193,6 +195,42 @@ const relationships = [
 
 const progress = computed(() => Math.round(((step.value) / (totalSteps)) * 100))
 
+function hasConfigured(key: string): boolean {
+  return configuredFields.value.has(key)
+}
+
+function hasValueOrConfigured(key: keyof typeof form): boolean {
+  const value = form[key]
+  return (typeof value === 'string' && value.trim().length > 0) || hasConfigured(key)
+}
+
+const stepItems = computed(() => [
+  { id: 1, label: '身份', complete: setupStatus.value?.identity_ok ?? false, optional: false },
+  { id: 2, label: '关系', complete: hasConfigured('RELATIONSHIP_TYPE'), optional: false },
+  { id: 3, label: '聊天 AI', complete: setupStatus.value?.chat_ok ?? false, optional: false },
+  { id: 4, label: '向量与打标', complete: setupStatus.value?.embedding_ok ?? false, optional: false },
+  { id: 5, label: '可选能力', complete: true, optional: true },
+  { id: 6, label: '检索增强', complete: true, optional: true },
+  { id: 7, label: '导入记录', complete: importTask.value?.status === 'done', optional: true },
+  { id: 8, label: '访问密码', complete: setupStatus.value?.auth_ok ?? false, optional: false },
+])
+
+function firstIncompleteStep(status: SetupStatus): number {
+  if (!status.identity_ok) return 1
+  if (!status.chat_ok) return 3
+  if (!status.embedding_ok) return 4
+  if (!status.auth_ok) return 8
+  return -1
+}
+
+async function goToStep(target: number) {
+  if (step.value > 0 && step.value !== target) {
+    await saveConfig({ silent: true })
+  }
+  finished.value = false
+  step.value = target
+}
+
 // ---- 访问令牌校验 ----
 async function checkToken() {
   if (!tokenInput.value.trim()) {
@@ -210,13 +248,18 @@ async function checkToken() {
   }
   try {
     await api.ping()
-    const [presetsData] = await Promise.all([api.presets(), loadExistingValues()])
+    const [presetsData, status] = await Promise.all([
+      api.presets(),
+      api.status(),
+      loadExistingValues(),
+    ])
+    setupStatus.value = status
     chatPresets.value = presetsData.chat
     embPresets.value = presetsData.embedding
     labelPresets.value = presetsData.label
     rerankerPresets.value = presetsData.reranker
     crossRerankerPresets.value = presetsData.cross_reranker
-    step.value = 1
+    step.value = firstIncompleteStep(status)
     // 访问令牌校验成功后才尝试恢复未完成的导入任务，
     // 否则用旧令牌调用 /import/* 会返回 401，且用户没机会更新令牌。
     await tryResumeUnfinishedImport()
@@ -236,7 +279,7 @@ async function tryResumeUnfinishedImport() {
     importTask.value = t
     if (['done', 'failed', 'cancelled'].includes(t.status)) {
       persistImportTask(null)
-      if (!form.XUWEN_API_KEY) step.value = 8
+      if (!hasValueOrConfigured('XUWEN_API_KEY')) step.value = 8
     } else {
       step.value = 7
       subscribeTask(storedId)
@@ -272,6 +315,7 @@ async function loadExistingValues() {
   try {
     const data = await api.values()
     for (const [k, v] of Object.entries(data.values)) {
+      if (v.set) configuredFields.value.add(k)
       if (!v.set || v.value === undefined || v.value === null) continue
       if (!(k in form)) continue
       if (k === 'EMBEDDING_DIM' || k === 'LABEL_MAX_CONCURRENCY' || k === 'ADAPTIVE_CHUNK_MAX_CONCURRENCY') {
@@ -290,7 +334,7 @@ async function next() {
   // 静默保存当前状态到 .env：用户随时关网页都不会丢已填字段。
   // saveConfig 内部会跳过空字符串字段，避免覆盖之前已填好的字段。
   // 第 0 步（访问令牌校验）不写 .env，跳过
-  if (step.value > 0) await saveConfig({ silent: true })
+  if (step.value > 0 && !await saveConfig({ silent: true })) return
   step.value += 1
 }
 function prev() { if (step.value > 0) step.value -= 1 }
@@ -768,6 +812,13 @@ async function saveConfig(opts: { silent?: boolean } = {}): Promise<boolean> {
       throw new Error(errs)
     }
     if (result.backup) backupPath.value = result.backup
+    const nextConfigured = new Set(configuredFields.value)
+    for (const [key, value] of Object.entries(values)) {
+      if (value.trim()) nextConfigured.add(key)
+      else nextConfigured.delete(key)
+    }
+    configuredFields.value = nextConfigured
+    setupStatus.value = await api.status()
     return true
   } catch (e) {
     if (!opts.silent) saveError.value = (e as Error).message
@@ -790,21 +841,35 @@ const canNext = computed(() => {
     case 2: return form.RELATIONSHIP_TYPE !== 'custom' || !!form.RELATIONSHIP_DESCRIPTION
     case 3: {
       // 必填字段必须填齐；连通性测试通过 OR 用户显式跳过（仅跳过可用性，不绕过必填）
-      const filled = !!(form.OPENAI_BASE_URL && form.OPENAI_API_KEY && form.CHAT_MODEL)
+      const filled = !!(
+        form.OPENAI_BASE_URL
+        && hasValueOrConfigured('OPENAI_API_KEY')
+        && form.CHAT_MODEL
+      )
       if (!filled) return false
-      return !!chatTest.value?.ok || skipChatCheck.value
+      return setupStatus.value?.chat_ok === true || !!chatTest.value?.ok || skipChatCheck.value
     }
     case 4: {
       // 向量服务：必填三件套；连通通过 OR 跳过
-      const embFilled = !!(form.EMBEDDING_API_URL && form.EMBEDDING_API_KEY && form.EMBEDDING_MODEL)
+      const embFilled = !!(
+        form.EMBEDDING_API_URL
+        && hasValueOrConfigured('EMBEDDING_API_KEY')
+        && form.EMBEDDING_MODEL
+      )
       if (!embFilled) return false
-      const embOk = !!embTest.value?.ok || skipEmbeddingCheck.value
+      const embOk = setupStatus.value?.embedding_ok === true
+        || !!embTest.value?.ok
+        || skipEmbeddingCheck.value
       if (!embOk) return false
       // 打标服务：仅在启用时校验；同样要求必填三件套 + 连通/跳过
       if (form.LABELING_ENABLED) {
-        const labelFilled = !!(form.LABEL_API_URL && form.LABEL_API_KEY && form.LABEL_MODEL)
+        const labelFilled = !!(
+          form.LABEL_API_URL
+          && hasValueOrConfigured('LABEL_API_KEY')
+          && form.LABEL_MODEL
+        )
         if (!labelFilled) return false
-        if (!labelTest.value?.ok && !skipLabelCheck.value) return false
+        if (!hasConfigured('LABEL_API_KEY') && !labelTest.value?.ok && !skipLabelCheck.value) return false
       }
       return true
     }
@@ -956,13 +1021,19 @@ onMounted(async () => {
         <p class="text-xs text-ink-soft dark:text-night-text-soft pt-4">
           现在您可以安全的关闭此页面。
         </p>
+        <button type="button"
+          class="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm
+                 border border-ink/10 dark:border-night-text/10 hover:bg-paper dark:hover:bg-night-bg"
+          @click="goToStep(-1)">
+          <Settings2 :size="14" /> 返回配置总览
+        </button>
       </div>
 
       <template v-else>
         <header class="mb-8 text-center">
           <h1 class="text-2xl font-medium tracking-wide">Afterglow 配置向导</h1>
           <p class="mt-1 text-sm text-ink-soft dark:text-night-text-soft">
-            一步步完成后即可开始与朋友对话。
+            {{ step === -1 ? '查看现有配置，直接进入需要调整的分区。' : '配置会自动保存，也可以随时切换分区。' }}
           </p>
         </header>
 
@@ -980,11 +1051,58 @@ onMounted(async () => {
           </div>
         </div>
 
+        <nav v-if="step !== 0" class="mb-6 space-y-2">
+          <button type="button"
+            class="inline-flex items-center gap-1.5 text-xs text-ink-soft dark:text-night-text-soft
+                   hover:text-ink dark:hover:text-night-text"
+            @click="goToStep(-1)">
+            <Settings2 :size="13" /> 配置总览
+          </button>
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <button v-for="item in stepItems" :key="item.id" type="button"
+              class="min-h-12 px-3 py-2 text-left rounded-lg border text-xs transition-colors"
+              :class="step === item.id
+                ? 'border-accent bg-accent/10 text-accent dark:border-night-accent dark:text-night-accent dark:bg-night-accent/10'
+                : 'border-ink/10 dark:border-night-text/10 hover:border-ink/30 dark:hover:border-night-text/30'"
+              @click="goToStep(item.id)">
+              <span class="block font-medium">{{ item.id }}. {{ item.label }}</span>
+              <span class="mt-0.5 block text-[11px] text-ink-soft dark:text-night-text-soft">
+                {{ item.optional ? '可选' : item.complete ? '已配置' : '待配置' }}
+              </span>
+            </button>
+          </div>
+        </nav>
+
         <section class="rounded-2xl bg-paper-soft dark:bg-night-bg-soft shadow-letter
                         border border-ink/5 dark:border-night-text/10 p-6 sm:p-8">
 
+          <!-- 配置总览 -->
+          <div v-if="step === -1" class="space-y-5">
+            <div class="flex items-center gap-2 text-accent dark:text-night-accent">
+              <Settings2 :size="18" />
+              <h2 class="text-lg font-medium">配置总览</h2>
+            </div>
+            <p class="text-sm leading-relaxed text-ink-soft dark:text-night-text-soft">
+              已有配置会保留。进入任意分区只修改需要调整的字段，密钥留空表示继续使用现有值。
+            </p>
+            <div class="divide-y divide-ink/5 dark:divide-night-text/10 border-y border-ink/5 dark:border-night-text/10">
+              <button v-for="item in stepItems" :key="item.id" type="button"
+                class="w-full flex items-center gap-3 py-3 text-left hover:text-accent dark:hover:text-night-accent"
+                @click="goToStep(item.id)">
+                <span class="w-6 font-mono text-xs text-ink-soft dark:text-night-text-soft">{{ item.id }}</span>
+                <span class="flex-1 text-sm font-medium">{{ item.label }}</span>
+                <span class="text-xs" :class="item.complete || item.optional
+                  ? 'text-accent dark:text-night-accent'
+                  : 'text-warning'">
+                  {{ item.optional ? '可选' : item.complete ? '已配置' : '待配置' }}
+                </span>
+                <ArrowRight :size="14" />
+              </button>
+            </div>
+          </div>
+
           <!-- 第 0 步：访问令牌 -->
-          <div v-if="step === 0" class="space-y-5">
+          <div v-else-if="step === 0" class="space-y-5">
             <div class="flex items-center gap-2 text-accent dark:text-night-accent">
               <KeyRound :size="18" />
               <h2 class="text-lg font-medium">输入访问 token</h2>
@@ -1237,6 +1355,7 @@ onMounted(async () => {
                   </a>
                 </div>
                 <input v-model="form.OPENAI_API_KEY" type="password"
+                  :placeholder="hasConfigured('OPENAI_API_KEY') ? '已配置，留空保持不变' : ''"
                   class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                          border border-ink/10 dark:border-night-text/10 outline-none
                          focus:ring-2 focus:ring-accent-soft font-mono text-sm" />
@@ -1323,6 +1442,7 @@ onMounted(async () => {
                   </a>
                 </div>
                 <input v-model="form.EMBEDDING_API_KEY" type="password"
+                  :placeholder="hasConfigured('EMBEDDING_API_KEY') ? '已配置，留空保持不变' : ''"
                   class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                          border border-ink/10 dark:border-night-text/10 outline-none
                          focus:ring-2 focus:ring-accent-soft font-mono text-sm" />
@@ -1415,6 +1535,7 @@ onMounted(async () => {
                     </a>
                   </div>
                   <input v-model="form.LABEL_API_KEY" type="password"
+                    :placeholder="hasConfigured('LABEL_API_KEY') ? '已配置，留空保持不变' : ''"
                     class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                            border border-ink/10 dark:border-night-text/10 outline-none
                            focus:ring-2 focus:ring-accent-soft font-mono text-sm" />
@@ -2051,6 +2172,7 @@ onMounted(async () => {
                 {{ importStarting ? '启动中…' : '重新开始导入（自动跳过已入库部分）' }}
               </button>
             </div>
+
           </div>
 
           <!-- 第 8 步：设置访问密码 -->
@@ -2069,7 +2191,7 @@ onMounted(async () => {
               <span class="text-sm">XUWEN_API_KEY</span>
               <div class="mt-1 flex gap-2">
                 <input v-model="form.XUWEN_API_KEY" type="text"
-                  placeholder="点右侧刷新按钮生成随机密码"
+                  :placeholder="hasConfigured('XUWEN_API_KEY') ? '已配置，留空保持不变' : '点右侧刷新按钮生成随机密码'"
                   class="flex-1 px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                          border border-ink/10 dark:border-night-text/10 outline-none
                          focus:ring-2 focus:ring-accent-soft font-mono text-sm" />
@@ -2119,7 +2241,7 @@ onMounted(async () => {
             class="inline-flex items-center gap-1.5 px-5 py-2 rounded-full text-sm
                    bg-accent text-paper-soft hover:bg-accent/90
                    disabled:opacity-40 disabled:cursor-not-allowed"
-            :disabled="!form.XUWEN_API_KEY || saving"
+            :disabled="!hasValueOrConfigured('XUWEN_API_KEY') || saving"
             @click="finishWizard">
             <Loader2 v-if="saving" :size="14" class="animate-spin" />
             <span>{{ saving ? '保存中…' : '保存并完成' }}</span>

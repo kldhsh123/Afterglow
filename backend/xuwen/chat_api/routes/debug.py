@@ -134,6 +134,20 @@ def config_snapshot(state: AppState = Depends(get_state)) -> dict[str, Any]:
         "live_top_k": s.live_top_k,
         "ai_generated_source_weight": s.ai_generated_source_weight,
         "ai_generated_long_term_enabled": s.ai_generated_long_term_enabled,
+        "analysis": {
+            "life_context_enabled": s.analysis_life_context_enabled,
+            "personality_prompt_enabled": s.analysis_personality_prompt_enabled,
+            "experimental_enabled": s.analysis_experimental_enabled,
+            "experimental_prompt_enabled": s.analysis_experimental_prompt_enabled,
+            "model": s.resolved_analysis_model,
+            "final_model": s.resolved_analysis_final_model,
+            "final_endpoint_overridden": bool(s.analysis_final_api_url.strip()),
+            "final_key_overridden": _is_secret_set(
+                s.analysis_final_api_key.get_secret_value()
+            ),
+            "endpoint_overridden": bool(s.analysis_api_url.strip()),
+            "key_overridden": _is_secret_set(s.analysis_api_key.get_secret_value()),
+        },
         "response_policy": {
             "model_enabled": s.response_policy_model_enabled,
             "model": s.resolved_response_policy_model,
@@ -185,12 +199,14 @@ def config_snapshot(state: AppState = Depends(get_state)) -> dict[str, Any]:
             "openai": _is_secret_set(s.openai_api_key.get_secret_value()),
             "embedding": _is_secret_set(s.embedding_api_key.get_secret_value()),
             "vision": _is_secret_set(s.vision_api_key.get_secret_value()),
+            "analysis": _is_secret_set(s.resolved_analysis_api_key.get_secret_value()),
             "web_search": _is_secret_set(s.web_search_api_key.get_secret_value()),
             "local_guard": s.xuwen_api_key is not None,
         },
         "paths": {
             "lance_db": str(s.lance_db_path),
             "persona": str(s.persona_data_dir),
+            "analysis": str(s.analysis_data_dir),
             "images": str(s.image_data_dir),
         },
         "env": {

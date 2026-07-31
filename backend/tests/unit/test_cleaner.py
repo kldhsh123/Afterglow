@@ -421,7 +421,7 @@ def test_cleaner_normalizes_all_aliases_as_mentions():
     settings = Settings(
         self_uid="u-self",
         self_name="Me",
-        self_aliases=["小明", "Mike"],
+        self_aliases=["测试别名", "Mike"],
         friend_uid="u-friend",
         friend_name="TA",
         friend_aliases=["阿巴", "ABBaa"],
@@ -436,12 +436,12 @@ def test_cleaner_normalizes_all_aliases_as_mentions():
         sender_role="friend",
         kind=MessageKind.TEXT,
         raw_type="type_1",
-        text="@Me 在吗 @小明 @Mike 都是你；@ABBaa 是我自己，@阿巴 也是我",
+        text="@Me 在吗 @测试别名 @Mike 都是你；@ABBaa 是我自己，@阿巴 也是我",
     )
     cleaned = cleaner.clean(msg).text
     # 用户的所有别名都视为视角对方 → @你
     assert "@Me" not in cleaned
-    assert "@小明" not in cleaned
+    assert "@测试别名" not in cleaned
     assert "@Mike" not in cleaned
     assert cleaned.count("@你") == 3
     # 朋友自己的别名 → @我
@@ -451,11 +451,11 @@ def test_cleaner_normalizes_all_aliases_as_mentions():
 
 
 def test_cleaner_alias_longer_name_wins_over_short():
-    """优先匹配较长的别名，避免 '明' 把 '小明' 吃成 ' 小'。"""
+    """优先匹配较长的别名，避免短名称提前吃掉长别名。"""
     settings = Settings(
         self_uid="u-self",
-        self_name="明",
-        self_aliases=["小明"],
+        self_name="别名",
+        self_aliases=["测试别名"],
         friend_uid="u-friend",
         friend_name="TA",
     )
@@ -469,9 +469,9 @@ def test_cleaner_alias_longer_name_wins_over_short():
         sender_role="friend",
         kind=MessageKind.TEXT,
         raw_type="type_1",
-        text="@小明 你好",
+        text="@测试别名 你好",
     )
     cleaned = cleaner.clean(msg).text
-    # 不应留下 "小" 字残留
+    # 不应留下长别名的前缀残留
     assert cleaned.startswith("@你")
-    assert "小" not in cleaned
+    assert "测试" not in cleaned

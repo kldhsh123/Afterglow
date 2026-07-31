@@ -60,6 +60,7 @@ def _isolate_dotenv(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
                 "WINDOW_",
                 "CHUNKING_",
                 "ADAPTIVE_CHUNK_",
+                "ANALYSIS_",
                 "QUERY_REWRITE_",
                 "RERANK_",
                 "RECENCY_",
