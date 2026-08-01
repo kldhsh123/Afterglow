@@ -19,7 +19,7 @@ from xuwen.chat_api.chat_pipeline import (
     is_ai_silence_signal,
     schedule_life_events,
 )
-from xuwen.companion.life import LifeSnapshot
+from xuwen.companion.life import LIFE_EVENT_TEXT_MAX_CHARS, LifeSnapshot
 from xuwen.companion.response_policy import ResponseDecision
 from xuwen.config import Settings
 
@@ -201,6 +201,16 @@ def test_extract_life_events_deduplicates_and_limits():
 
     assert result.text == "正文"
     assert result.events == ("去吃饭",)
+
+
+def test_extract_life_events_respects_total_downstream_budget():
+    blocks = "".join(
+        f"<life-event>{str(index) * 1200}</life-event>" for index in range(10)
+    )
+
+    result = extract_life_events(blocks, max_events=10)
+
+    assert len("\n".join(result.events)) <= LIFE_EVENT_TEXT_MAX_CHARS
 
 
 @pytest.mark.asyncio

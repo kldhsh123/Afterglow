@@ -14,7 +14,11 @@ from dataclasses import dataclass
 from xuwen.chat_api.llm_client import LLMClient
 from xuwen.chat_api.schemas import PolicyHint
 from xuwen.chat_api.sticker_store import StickerStore
-from xuwen.companion.life import LifeSnapshot, LifeStateManager
+from xuwen.companion.life import (
+    LIFE_EVENT_TEXT_MAX_CHARS,
+    LifeSnapshot,
+    LifeStateManager,
+)
 from xuwen.companion.response_policy import ResponseDecision
 from xuwen.config import Settings
 from xuwen.core.metrics import MetricsRecorder
@@ -112,12 +116,19 @@ def extract_life_events(
         return LifeEventExtraction(text=assistant_text, events=())
     events: list[str] = []
     seen: set[str] = set()
+    total_chars = 0
     for _kind, raw in _LIFE_MARKER_RE.findall(assistant_text):
         event = " ".join(raw.split()).strip()
         if not event or event in seen:
             continue
+        separator_chars = 1 if events else 0
+        remaining = LIFE_EVENT_TEXT_MAX_CHARS - total_chars - separator_chars
+        if remaining <= 0:
+            break
+        event = event[: min(1200, remaining)]
         seen.add(event)
-        events.append(event[:1200])
+        events.append(event)
+        total_chars += separator_chars + len(event)
         if len(events) >= max_events:
             break
     return LifeEventExtraction(

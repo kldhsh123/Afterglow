@@ -46,11 +46,14 @@ class RelationshipMemoryManager:
         self.embedder = embedder
         self.path = settings.persona_data_dir / "relationship_memory.md"
 
-    def load_markdown(self) -> str:
+    def _read_markdown_raw(self) -> str:
         try:
-            text = self.path.read_text(encoding="utf-8")
+            return self.path.read_text(encoding="utf-8").strip()
         except FileNotFoundError:
             return ""
+
+    def load_markdown(self) -> str:
+        text = self._read_markdown_raw()
         return "\n".join(
             line for line in text.splitlines() if "(note," not in line
         ).strip()
@@ -184,7 +187,7 @@ class RelationshipMemoryManager:
     def _append_markdown(self, entries: list[RelationshipMemoryEntry]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         today = datetime.now().strftime("%Y-%m-%d")
-        existing = self.load_markdown()
+        existing = self._read_markdown_raw()
         lines: list[str] = []
         if not existing:
             lines.extend(
