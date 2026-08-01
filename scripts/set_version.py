@@ -123,23 +123,50 @@ def check_versions() -> bool:
     return True
 
 
+def _version_target_files() -> tuple[Path, ...]:
+    return VERSION_FILE, DOCKER_ENV_FILE, PYPROJECT_FILE, UV_LOCK_FILE
+
+
+def _restore_version_files(originals: dict[Path, bytes]) -> None:
+    failures: list[str] = []
+    for path, content in originals.items():
+        try:
+            path.write_bytes(content)
+        except OSError as exc:
+            failures.append(f"{path}: {exc}")
+    if failures:
+        raise OSError("; ".join(failures))
+
+
 def set_version(version: str) -> None:
-    subprocess.run(
-        [
-            "uv",
-            "version",
-            version,
-            "--project",
-            str(BACKEND_DIR),
-            "--no-sync",
-        ],
-        cwd=ROOT,
-        check=True,
-    )
-    VERSION_FILE.write_text(version + "\n", encoding="utf-8")
-    _replace_env_version(version)
-    if not check_versions():
-        raise RuntimeError("version synchronization did not produce a consistent state")
+    originals = {path: path.read_bytes() for path in _version_target_files()}
+    try:
+        subprocess.run(
+            [
+                "uv",
+                "version",
+                version,
+                "--project",
+                str(BACKEND_DIR),
+                "--no-sync",
+            ],
+            cwd=ROOT,
+            check=True,
+        )
+        VERSION_FILE.write_text(version + "\n", encoding="utf-8")
+        _replace_env_version(version)
+        if not check_versions():
+            raise RuntimeError(
+                "version synchronization did not produce a consistent state"
+            )
+    except BaseException as exc:
+        try:
+            _restore_version_files(originals)
+        except OSError as restore_exc:
+            raise RuntimeError(
+                f"version update failed and rollback was incomplete: {restore_exc}"
+            ) from exc
+        raise
 
 
 def _parse_args() -> argparse.Namespace:

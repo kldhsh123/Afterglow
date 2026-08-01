@@ -50,7 +50,8 @@ class AppState:
     turn_coordinator: TurnCoordinator
     update_checker: UpdateChecker
     # 串行化 Life 决策和事件归一化，避免并发写同一份 life state 文件。
-    # asyncio.Lock 必须在 event loop 启动后创建，所以 lifespan 里再赋值；field(default=None) 占位。
+    # default_factory 在 AppState 构造时创建锁；当前 Python 的 asyncio.Lock
+    # 不要求构造时已有运行中的 event loop。
     life_apply_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     # 追踪 fire-and-forget 的 life event task。
     # 必须是强引用 set —— asyncio.create_task 的返回值如果只被 weakref 持有，event loop

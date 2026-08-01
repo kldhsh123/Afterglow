@@ -467,6 +467,37 @@ async def test_refine_rejects_relationship_memory_without_source_evidence():
 
 
 @pytest.mark.asyncio
+async def test_refine_rejects_relationship_memory_with_trivial_evidence():
+    base = _base_decision()
+    llm = FakeRefineLLM(
+        response=json.dumps(
+            {
+                "relationship_memory": {
+                    "kind": "fact",
+                    "importance": 3,
+                    "summary": "用户住在某个城市",
+                    "evidence": "我",
+                }
+            }
+        )
+    )
+
+    result = await refine_decision_with_llm(
+        base=base,
+        llm=llm,  # type: ignore[arg-type]
+        model="any",
+        settings=_settings(),
+        current_user_text="我最近挺好的",
+        recent=[],
+        life=_life(),
+        relationship_context="",
+        has_images=False,
+    )
+
+    assert result.relationship_memory is None
+
+
+@pytest.mark.asyncio
 async def test_refine_generic_check_in_does_not_create_relationship_memory():
     base = _base_decision()
     llm = FakeRefineLLM(response=json.dumps({"relationship_memory": None}))

@@ -412,6 +412,22 @@ async def test_apply_event_uses_life_model_and_updates_state(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_apply_event_prompt_keeps_events_after_first_1200_chars(tmp_path):
+    manager = LifeStateManager(_settings(tmp_path))
+    llm = FakeLifeLLM('{"apply": false}')
+    later_event = "SECOND_EVENT_MUST_REMAIN"
+
+    await manager.apply_event(
+        llm=llm,  # type: ignore[arg-type]
+        model="life-small",
+        event_text=f"{'a' * 1200}\n{later_event}",
+        now=datetime(2026, 5, 22, 12, 30),
+    )
+
+    assert later_event in llm.messages[0][1]["content"]
+
+
+@pytest.mark.asyncio
 async def test_apply_event_rejection_keeps_state_unchanged(tmp_path):
     settings = _settings(tmp_path)
     manager = LifeStateManager(settings)

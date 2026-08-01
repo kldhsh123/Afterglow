@@ -93,6 +93,7 @@ _QUESTION_LIFE_PATTERNS = (
     "在干嘛", "在干什么", "吃了吗", "睡了吗", "醒了吗", "忙吗",
 )
 _NONSENSE_RE = re.compile(r"^[a-zA-Z0-9]{5,}$")
+_RELATIONSHIP_MEMORY_EVIDENCE_MIN_CHARS = 4
 
 
 @dataclass(slots=True, frozen=True)
@@ -701,7 +702,10 @@ def _coerce_relationship_memory(
         return None
     if not summary.startswith("用户") or len(summary) < 6 or len(summary) > 120:
         return None
-    if not evidence or evidence not in source:
+    if (
+        len(evidence) < _RELATIONSHIP_MEMORY_EVIDENCE_MIN_CHARS
+        or evidence not in source
+    ):
         return None
     return RelationshipMemoryEntry(
         text=summary,

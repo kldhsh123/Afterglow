@@ -63,6 +63,7 @@ _WOKEN_NEXT_UPDATE_LIMIT = timedelta(minutes=25)
 _AVAILABILITY_VALUES = {"available", "busy", "sleeping", "away"}
 _ANALYSIS_LIFE_MIN_CONFIDENCE = 0.5
 _ANALYSIS_LIFE_MAX_HABITS = 6
+LIFE_EVENT_TEXT_MAX_CHARS = 6400
 
 
 @dataclass(slots=True, frozen=True)
@@ -824,7 +825,7 @@ def _build_event_prompt(
 - 可聊话题：{before.topic_seed}
 
 主模型声明的生活事件：
-{event_text[:1200]}
+{event_text[:LIFE_EVENT_TEXT_MAX_CHARS]}
 
 最终采用的回复正文：
 {assistant_text[:1000] or "（无正文）"}
