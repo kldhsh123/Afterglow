@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import httpx
 import pytest
 import respx
@@ -155,6 +157,43 @@ async def test_model_chain_summary_includes_schedule_debug():
         "has_open_tag": True,
         "has_close_tag": True,
     }
+
+
+@pytest.mark.asyncio
+async def test_cancelled_complete_chat_is_kept_in_model_chain():
+    settings = _settings()
+    metrics = MetricsRecorder()
+    request_started = asyncio.Event()
+    never_respond = asyncio.Event()
+
+    async def handle_request(_request: httpx.Request) -> httpx.Response:
+        request_started.set()
+        await never_respond.wait()
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    transport = httpx.MockTransport(handle_request)
+    async with httpx.AsyncClient(transport=transport) as raw:
+        client = LLMClient(settings, client=raw)
+        task = asyncio.create_task(
+            client.complete_chat(
+                [{"role": "user", "content": "更新当前状态"}],
+                model="life-model",
+                trace_id="trace-life-timeout",
+                stage="life.decide",
+                metrics=metrics,
+            )
+        )
+        await asyncio.wait_for(request_started.wait(), timeout=1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    record = metrics.model_chain(trace_id="trace-life-timeout")[0]
+    assert record.stage == "life.decide"
+    assert record.model == "life-model"
+    assert record.status == "cancelled"
+    assert record.error == "CancelledError"
+    assert record.request["message_count"] == 1
 
 
 @pytest.mark.asyncio

@@ -223,6 +223,77 @@ async def test_life_decision_uses_analysis_habits_as_non_factual_prior(tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_life_decision_compacts_structured_analysis_habits(tmp_path):
+    analysis_dir = tmp_path / "analysis"
+    analysis_dir.mkdir(parents=True)
+    habits = [
+        {
+            "subject": "friend",
+            "category": "sleep",
+            "claim": f"目标角色的稳定作息候选 {index}",
+            "time_patterns": [f"{index:02d}:00"],
+            "target_fields": ["daily_plan", "availability"],
+            "confidence": 0.9 - index * 0.05,
+            "sensitive_relationship_context": False,
+        }
+        for index in range(8)
+    ]
+    habits.extend(
+        [
+            {
+                "subject": "self",
+                "category": "activity",
+                "claim": "用户自己的习惯",
+                "target_fields": ["daily_plan"],
+                "confidence": 0.95,
+                "sensitive_relationship_context": False,
+            },
+            {
+                "subject": "friend",
+                "category": "activity",
+                "claim": "低置信度单次事件",
+                "target_fields": ["daily_plan"],
+                "confidence": 0.3,
+                "sensitive_relationship_context": False,
+            },
+            {
+                "subject": "friend",
+                "category": "activity",
+                "claim": "敏感关系内容",
+                "target_fields": ["daily_plan"],
+                "confidence": 0.95,
+                "sensitive_relationship_context": True,
+            },
+        ]
+    )
+    analysis_dir.joinpath("life_profile.json").write_text(
+        json.dumps({"habits": habits}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    settings = _settings(
+        tmp_path,
+        analysis_data_dir=analysis_dir,
+        analysis_life_context_enabled=True,
+    )
+    manager = LifeStateManager(settings)
+    llm = FakeLifeLLM("{}")
+
+    await manager.decide_for_turn(
+        llm=llm,  # type: ignore[arg-type]
+        model="life-small",
+        current_user_text="在干嘛",
+        recent=[],
+        now=datetime(2026, 5, 21, 15, 0),
+    )
+
+    prompt = llm.messages[0][1]["content"]
+    assert prompt.count("目标角色的稳定作息候选") == 6
+    assert "用户自己的习惯" not in prompt
+    assert "低置信度单次事件" not in prompt
+    assert "敏感关系内容" not in prompt
+
+
+@pytest.mark.asyncio
 async def test_life_state_updates_when_sleeping_is_interrupted(tmp_path):
     settings = _settings(tmp_path)
     manager = LifeStateManager(settings)
@@ -306,39 +377,55 @@ async def test_life_decision_prompt_treats_memory_as_tone_not_today_fact(tmp_pat
     assert "不要据此生成" in prompt
 
 
-def test_apply_marker_patch_updates_state(tmp_path):
-    """主模型输出 life-update 标记块的 JSON 字符串应直接 patch life。"""
+@pytest.mark.asyncio
+async def test_apply_event_uses_life_model_and_updates_state(tmp_path):
     settings = _settings(tmp_path)
     manager = LifeStateManager(settings)
+    llm = FakeLifeLLM(
+        json.dumps(
+            {
+                "apply": True,
+                "current_activity": "在吃午饭",
+                "recent_meal": "刚吃了面",
+                "availability": "busy",
+                "next_update_at": "2026-05-22 13:00",
+                "reason": "event_normalized",
+            },
+            ensure_ascii=False,
+        )
+    )
 
-    snapshot = manager.apply_marker_patch(
-        '{"current_activity": "去吃饭了", "recent_meal": "刚吃了拉面",'
-        ' "availability": "busy"}',
+    snapshot = await manager.apply_event(
+        llm=llm,  # type: ignore[arg-type]
+        model="life-small",
+        event_text="准备去吃午饭",
+        assistant_text="我先去吃饭",
         now=datetime(2026, 5, 22, 12, 30),
     )
 
-    assert snapshot is not None
-    assert snapshot.current_activity == "去吃饭了"
-    assert snapshot.recent_meal == "刚吃了拉面"
+    assert llm.calls == 1
+    assert snapshot.current_activity == "在吃午饭"
+    assert snapshot.recent_meal == "刚吃了面"
     assert snapshot.availability == "busy"
+    state = json.loads(manager.path.read_text(encoding="utf-8"))
+    assert state["timeline"][-1]["trigger"] == "model_event"
 
 
-def test_apply_marker_patch_returns_none_on_invalid_input(tmp_path):
+@pytest.mark.asyncio
+async def test_apply_event_rejection_keeps_state_unchanged(tmp_path):
     settings = _settings(tmp_path)
     manager = LifeStateManager(settings)
+    now = datetime(2026, 5, 22, 12, 30)
+    before = manager.snapshot(now)
+    state_before = manager.path.read_text(encoding="utf-8")
+    llm = FakeLifeLLM('{"apply": false}')
 
-    assert manager.apply_marker_patch("不是 JSON") is None
-    assert manager.apply_marker_patch("") is None
-    assert manager.apply_marker_patch("{}") is None
-
-
-def test_apply_marker_patch_normalizes_invalid_availability(tmp_path):
-    """无效的 availability 值应该被 _normalize_availability 兜底为 available。"""
-    settings = _settings(tmp_path)
-    manager = LifeStateManager(settings)
-    snapshot = manager.apply_marker_patch(
-        '{"current_activity": "测试", "availability": "wandering"}',
-        now=datetime(2026, 5, 22, 10, 0),
+    snapshot = await manager.apply_event(
+        llm=llm,  # type: ignore[arg-type]
+        model="life-small",
+        event_text="不明确的内容",
+        now=now,
     )
-    assert snapshot is not None
-    assert snapshot.availability == "available"
+
+    assert snapshot == before
+    assert manager.path.read_text(encoding="utf-8") == state_before

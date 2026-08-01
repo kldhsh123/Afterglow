@@ -107,8 +107,8 @@ OpenAI 兼容聊天接口，也是第三方程序最应该接入的主接口。
 >   与上面"段间延迟"是两层不同的延迟，互不冲突；客户端先等 `reply_delay_seconds` 再开始逐段播放。
 
 > **关于 life 状态自更新（`LIFE_MARKER_UPDATE_ENABLED=true`，默认开）：**
-> 主模型在回复末尾可输出隐藏标记块 `<life-update>{"current_activity": "...", "recent_meal": "...", "mood": "...", "availability": "..."}</life-update>`，
-> 后端解析后**直接** patch AI 的生活时间线（不调小模型，零额外 API 调用），并从对外回复里**剥离**这个块用户看不到。
+> 主模型在回复末尾可输出隐藏标记块 `<life-event>准备去吃饭，暂时忙一会儿</life-event>`，
+> 后端会先从用户可见回复中剥离，再异步交给 Life 模型归一化并写入时间线。旧 `<life-update>` 仅作输入兼容，不再直接修改状态。
 > 流式过程中标记块也不会被切到中间发出去（output_filter 会缓冲到块结束再统一过滤）。
 > 关闭此开关时只剥离不应用，避免前端看到内部协议。
 
