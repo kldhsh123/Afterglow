@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from xuwen.companion.life import LifeSnapshot
+from xuwen.companion.relationship import RelationshipMemoryEntry
 from xuwen.companion.response_policy import (
     ResponseDecision,
     decide_response_policy,
@@ -397,6 +398,120 @@ async def test_refine_merges_extras_and_upgrades_risk():
     assert any("严肃" in item for item in result.do_not)
     # 同理 instructions
     assert any("接住氛围" in item for item in result.instructions)
+
+
+@pytest.mark.asyncio
+async def test_refine_extracts_evidence_backed_relationship_memory():
+    base = _base_decision()
+    llm = FakeRefineLLM(
+        response=json.dumps(
+            {
+                "relationship_memory": {
+                    "kind": "plan",
+                    "importance": 2,
+                    "summary": "用户之后每周五晚上都要上课",
+                    "evidence": "每周五晚上都要上课",
+                }
+            }
+        )
+    )
+
+    result = await refine_decision_with_llm(
+        base=base,
+        llm=llm,  # type: ignore[arg-type]
+        model="any",
+        settings=_settings(),
+        current_user_text="我之后每周五晚上都要上课",
+        recent=[],
+        life=_life(),
+        relationship_context="",
+        has_images=False,
+    )
+
+    assert result.relationship_memory == RelationshipMemoryEntry(
+        text="用户之后每周五晚上都要上课",
+        kind="plan",
+        importance=2,
+    )
+
+
+@pytest.mark.asyncio
+async def test_refine_rejects_relationship_memory_without_source_evidence():
+    base = _base_decision()
+    llm = FakeRefineLLM(
+        response=json.dumps(
+            {
+                "relationship_memory": {
+                    "kind": "fact",
+                    "importance": 3,
+                    "summary": "用户住在某个城市",
+                    "evidence": "我住在某个城市",
+                }
+            }
+        )
+    )
+
+    result = await refine_decision_with_llm(
+        base=base,
+        llm=llm,  # type: ignore[arg-type]
+        model="any",
+        settings=_settings(),
+        current_user_text="最近怎么样",
+        recent=[],
+        life=_life(),
+        relationship_context="",
+        has_images=False,
+    )
+
+    assert result.relationship_memory is None
+
+
+@pytest.mark.asyncio
+async def test_refine_generic_check_in_does_not_create_relationship_memory():
+    base = _base_decision()
+    llm = FakeRefineLLM(response=json.dumps({"relationship_memory": None}))
+
+    result = await refine_decision_with_llm(
+        base=base,
+        llm=llm,  # type: ignore[arg-type]
+        model="any",
+        settings=_settings(),
+        current_user_text="最近怎么样",
+        recent=[],
+        life=_life(),
+        relationship_context="",
+        has_images=False,
+    )
+
+    assert result.relationship_memory is None
+
+
+@pytest.mark.asyncio
+async def test_refine_drops_schema_placeholders_from_extra_rules():
+    base = _base_decision()
+    llm = FakeRefineLLM(
+        response=json.dumps(
+            {
+                "extra_instructions": ["..."],
+                "extra_do_not": ["..."],
+            }
+        )
+    )
+
+    result = await refine_decision_with_llm(
+        base=base,
+        llm=llm,  # type: ignore[arg-type]
+        model="any",
+        settings=_settings(),
+        current_user_text="在干嘛",
+        recent=[],
+        life=_life(),
+        relationship_context="",
+        has_images=False,
+    )
+
+    assert "..." not in result.instructions
+    assert "..." not in result.do_not
 
 
 @pytest.mark.asyncio

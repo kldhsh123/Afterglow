@@ -50,6 +50,10 @@ def test_embedding_throttle_defaults(monkeypatch: pytest.MonkeyPatch):
     assert settings.embedding_max_requests_per_minute == 0
 
 
+def test_life_timeout_default_allows_slow_small_models():
+    assert Settings(_env_file=None).life_timeout_seconds == 30.0
+
+
 def test_embedding_throttle_rejects_invalid_values():
     with pytest.raises(ValueError):
         Settings(embedding_max_concurrency=0)

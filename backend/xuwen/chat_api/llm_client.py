@@ -254,6 +254,20 @@ class LLMClient:
         )
         try:
             resp = await self._client.post(self._url, headers=self._headers, json=payload)
+        except asyncio.CancelledError:
+            _record_model_call(
+                metrics,
+                trace_id=trace_id,
+                stage=stage,
+                attempt=attempt_number,
+                payload=payload,
+                url=self._url,
+                latency_ms=(time.perf_counter() - start) * 1000,
+                status="cancelled",
+                request=request_summary,
+                error="CancelledError",
+            )
+            raise
         except httpx.HTTPError as e:
             _record_model_call(
                 metrics,

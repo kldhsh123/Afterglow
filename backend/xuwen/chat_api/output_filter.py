@@ -21,18 +21,18 @@ _QQ_NATIVE_FACE_RE = re.compile(r"\[/[^\]\n]{1,16}\]\s*[:：]?\s*")
 _REPLY_MEDIA_RE = re.compile(
     r"\[回复[^\n\]]*(?:图片|语音|视频|文件|表情|动画表情)[^\n\]]*\]\s*[:：]?\s*"
 )
-# 主模型在回复中输出的 <life-update>{...}</life-update> 标记块——路由层会
-# 解析并 patch life，但对外回复必须剥离干净不让用户看到内部协议。
+# 主模型输出的 <life-event>，以及兼容旧输出的 <life-update>，都必须剥离。
 # 三种形态都要剥离（防 max_tokens 截断 / 模型半截即停 / 主模型只输出孤立 close）：
-#   1) 成对块：<life-update>...</life-update>
-#   2) 未闭合的开标签到字符串末尾（被截断）：<life-update>...
-#   3) 孤立的关闭标签：</life-update>
-_LIFE_UPDATE_RE = re.compile(
-    r"\s*(?:<life-update>.*?(?:</life-update>|$)|</life-update>)\s*",
+#   1) 成对块；2) 未闭合的开标签到末尾；3) 孤立的关闭标签。
+_LIFE_PROTOCOL_RE = re.compile(
+    r"\s*(?:<life-(?:event|update)>.*?(?:</life-(?:event|update)>|$)"
+    r"|</life-(?:event|update)>)\s*",
     re.DOTALL | re.IGNORECASE,
 )
-_LIFE_UPDATE_OPEN_TAG = "<life-update>"
-_LIFE_UPDATE_CLOSE_TAG = "</life-update>"
+_LIFE_PROTOCOL_TAGS = (
+    ("<life-event>", "</life-event>"),
+    ("<life-update>", "</life-update>"),
+)
 # Feature #9 同三种形态保护（max_tokens 截断时尤其常见，因为协议块通常追加在回复末尾）。
 _SCHEDULE_HINT_RE = re.compile(
     r"\s*(?:<schedule-hint>.*?(?:</schedule-hint>|$)|</schedule-hint>)\s*",
@@ -78,7 +78,7 @@ def sanitize_assistant_text(
         return text
 
     out = _REPLY_MEDIA_RE.sub("", text)
-    out = _LIFE_UPDATE_RE.sub("", out)
+    out = _LIFE_PROTOCOL_RE.sub("", out)
     out = _SCHEDULE_HINT_RE.sub("", out)
     out = _MEDIA_PLACEHOLDER_RE.sub("", out)
     out = _QQ_FACE_RE.sub("", out)
@@ -104,7 +104,7 @@ class AssistantOutputFilter:
     到来后再统一过滤。最终 flush 时会处理剩余内容。
 
     同时维护一份累积的 raw 文本（`raw_text()`），供流结束后路由层做
-    life-update 标记块解析等不影响实时输出的后处理。
+    life-event 标记块解析等不影响实时输出的后处理。
 
     构造时传入 `valid_sticker_names` 后，所有 `[sticker:xxx]` 都会被校验：
     xxx 不在集合内的会被剥离，避免前端渲染不存在的表情包。
@@ -134,7 +134,7 @@ class AssistantOutputFilter:
             return ""
 
         cut = len(self._buffer) - _STREAM_TAIL_CHARS
-        # 用 lower-case 副本做位置查找，与 _LIFE_UPDATE_RE / _SCHEDULE_HINT_RE 的
+        # 用 lower-case 副本做位置查找，与协议正则的
         # IGNORECASE 行为对齐——否则 <SCHEDULE-HINT> 这种大小写变体能绕过流式守卫
         # 把半截标签透传给前端（Finding 2）。两个标签都是纯 ASCII，lower 不会移位。
         buffer_lower = self._buffer.lower()
@@ -146,7 +146,7 @@ class AssistantOutputFilter:
                 cut = last_bracket
         if last_bracket >= 0 and cut - last_bracket < _STREAM_TAIL_CHARS:
             cut = last_bracket
-        # 同样保护 <...> 形式的内部协议标签（<life-update>、<schedule-hint>）。
+        # 同样保护 <...> 形式的内部协议标签。
         # 与上面的 `[` 守卫对称：当 < 在 cut 前但匹配的 > 未在 cut 前出现时，
         # 把 cut 回退到 < 处，防止前端看到半截开标签（如 "<life-upda"）。
         last_lt = self._buffer.rfind("<", 0, cut)
@@ -154,14 +154,14 @@ class AssistantOutputFilter:
             close_gt = self._buffer.find(">", last_lt)
             if close_gt == -1 or close_gt >= cut:
                 cut = last_lt
-        # 不要在 <life-update>...</life-update> 块中间切开，否则用户会看到半截内部协议
-        last_tag_open = buffer_lower.rfind(_LIFE_UPDATE_OPEN_TAG, 0, cut)
-        if last_tag_open >= 0:
-            tag_close_idx = buffer_lower.find(_LIFE_UPDATE_CLOSE_TAG, last_tag_open)
-            if tag_close_idx == -1 or (
-                tag_close_idx + len(_LIFE_UPDATE_CLOSE_TAG) > cut
-            ):
-                cut = last_tag_open
+        # 不要在 life 协议块中间切开，否则用户会看到半截内部内容。
+        for open_tag, close_tag in _LIFE_PROTOCOL_TAGS:
+            last_tag_open = buffer_lower.rfind(open_tag, 0, cut)
+            if last_tag_open < 0:
+                continue
+            tag_close_idx = buffer_lower.find(close_tag, last_tag_open)
+            if tag_close_idx == -1 or tag_close_idx + len(close_tag) > cut:
+                cut = min(cut, last_tag_open)
         # 同样保护 <schedule-hint>...</schedule-hint>（同样走 lower-case 比对）
         last_hint_open = buffer_lower.rfind(_SCHEDULE_HINT_OPEN_TAG, 0, cut)
         if last_hint_open >= 0:

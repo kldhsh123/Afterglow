@@ -54,7 +54,10 @@ def test_stream_filter_does_not_emit_partial_sticker_token():
 
 
 def test_sanitize_assistant_text_strips_life_update_block():
-    """主模型输出 <life-update>{...}</life-update> 标记块必须从对外回复中剥离。"""
+    """新 life-event 与旧 life-update 都必须从对外回复中剥离。"""
+    assert sanitize_assistant_text(
+        "我先去吃饭<life-event>准备吃饭，暂时忙一会儿</life-event>"
+    ) == "我先去吃饭"
     assert sanitize_assistant_text(
         "好的我去吃饭了 <life-update>{\"current_activity\": \"吃饭\"}</life-update>"
     ) == "好的我去吃饭了"
@@ -84,6 +87,19 @@ def test_stream_filter_does_not_emit_life_update_until_closed():
     assert "<life-update>" in raw
     assert "</life-update>" in raw
     assert "拉面" in raw
+
+
+def test_stream_filter_does_not_emit_life_event_until_closed():
+    f = AssistantOutputFilter()
+    out = [
+        f.feed("我先去忙啦<life-event>"),
+        f.feed("准备处理手头的事情"),
+        f.feed("</life-event>"),
+        f.flush(),
+    ]
+
+    assert "".join(out).strip() == "我先去忙啦"
+    assert "准备处理手头的事情" in f.raw_text()
 
 
 def test_sanitize_strips_unknown_sticker_tokens():

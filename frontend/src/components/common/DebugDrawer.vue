@@ -295,7 +295,7 @@ const ModelChainList = defineComponent({
               props.items.slice(0, 20).map((item) => {
                 return h('div', { class: 'debug-hit space-y-1' }, [
                     h('div', { class: 'flex items-center justify-between gap-2 text-xs' }, [
-                      h('span', { class: item.status === 'error' ? 'text-warning font-medium' : 'font-medium' }, `${item.stage} · ${item.model}`),
+                      h('span', { class: item.status !== 'ok' ? 'text-warning font-medium' : 'font-medium' }, `${item.stage} · ${item.model}`),
                       h('span', { class: 'text-ink-soft dark:text-night-text-soft' }, `${item.latency_ms}ms · attempt ${item.attempt}`),
                     ]),
                     h('div', { class: 'grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1 text-xs' }, [

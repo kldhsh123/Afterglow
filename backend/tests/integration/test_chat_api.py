@@ -170,26 +170,48 @@ def test_chat_completions_non_stream_filters_history_placeholders(settings: Sett
 
 
 def test_chat_completions_updates_relationship_memory(settings: Settings):
+    settings = settings.model_copy(update={"response_policy_model_enabled": True})
     app = create_app(settings)
+
+    def llm_response(req: httpx.Request) -> httpx.Response:
+        body = json.loads(req.read())
+        messages = body.get("messages") or []
+        system_text = str(messages[0].get("content") or "") if messages else ""
+        if "生活时间线控制器" in system_text:
+            content = "{}"
+        elif "互动决策辅助" in system_text:
+            content = json.dumps(
+                {
+                    "relationship_memory": {
+                        "kind": "preference",
+                        "importance": 2,
+                        "summary": "用户喜欢吃甜食",
+                        "evidence": "喜欢吃甜的",
+                    }
+                },
+                ensure_ascii=False,
+            )
+        else:
+            content = "记住啦"
+        return httpx.Response(
+            200,
+            json={
+                "id": "x",
+                "object": "chat.completion",
+                "model": body.get("model", "gpt-4o-mini"),
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": content},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        )
+
     with respx.mock(assert_all_called=False) as router:
         router.post("https://embedding.test/v1/embeddings").mock(side_effect=_embedding_response)
-        router.post("https://llm.test/v1/chat/completions").mock(
-            return_value=httpx.Response(
-                200,
-                json={
-                    "id": "x",
-                    "object": "chat.completion",
-                    "model": "gpt-4o-mini",
-                    "choices": [
-                        {
-                            "index": 0,
-                            "message": {"role": "assistant", "content": "记住啦"},
-                            "finish_reason": "stop",
-                        }
-                    ],
-                },
-            )
-        )
+        router.post("https://llm.test/v1/chat/completions").mock(side_effect=llm_response)
         with TestClient(app) as client:
             r = client.post(
                 "/v1/chat/completions",
@@ -203,7 +225,7 @@ def test_chat_completions_updates_relationship_memory(settings: Settings):
             stats = client.get("/memory/stats")
     assert r.status_code == 200, r.text
     memory_file = settings.persona_data_dir / "relationship_memory.md"
-    assert "我喜欢吃甜的" in memory_file.read_text(encoding="utf-8")
+    assert "用户喜欢吃甜食" in memory_file.read_text(encoding="utf-8")
     assert stats.json()["relationship_memories"] == 1
 
 

@@ -61,6 +61,8 @@ _WOKEN_ACTIVITY_PATTERNS = (
 )
 _WOKEN_NEXT_UPDATE_LIMIT = timedelta(minutes=25)
 _AVAILABILITY_VALUES = {"available", "busy", "sleeping", "away"}
+_ANALYSIS_LIFE_MIN_CONFIDENCE = 0.5
+_ANALYSIS_LIFE_MAX_HABITS = 6
 
 
 @dataclass(slots=True, frozen=True)
@@ -131,12 +133,22 @@ class LifeStateManager:
         )
 
     def _load_analysis_life_context(self) -> str:
-        """读取去证据的长期生活习惯参考；开关关闭或文件缺失时忽略。"""
+        """读取精简的长期生活习惯参考；开关关闭或文件缺失时忽略。"""
         if not self.settings.analysis_life_context_enabled:
             return ""
-        path = self.settings.analysis_data_dir / "life_context.md"
+        profile_path = self.settings.analysis_data_dir / "life_profile.json"
         try:
-            return path.read_text(encoding="utf-8").strip()[:5000]
+            profile = json.loads(profile_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            profile = None
+        rendered = _render_analysis_life_profile(profile)
+        if rendered:
+            return rendered
+
+        # 兼容只生成了旧版 Markdown 的已有数据，但严格限制长度。
+        context_path = self.settings.analysis_data_dir / "life_context.md"
+        try:
+            return context_path.read_text(encoding="utf-8").strip()[:1200]
         except OSError:
             return ""
 
@@ -285,6 +297,81 @@ class LifeStateManager:
             return before
         return self._apply_decision(state, patch, now=now, trigger=trigger)
 
+    async def apply_event(
+        self,
+        *,
+        llm: LLMClient,
+        model: str,
+        event_text: str,
+        assistant_text: str = "",
+        current_user_text: str = "",
+        trace_id: str = "",
+        metrics: MetricsRecorder | None = None,
+        now: datetime | None = None,
+    ) -> LifeSnapshot:
+        """让 Life 模型把主模型声明的自然语言事件归一化后写入时间线。"""
+        now = now or datetime.now()
+        before = self.snapshot(now)
+        if not event_text.strip():
+            return before
+        state = self._load_or_create(now)
+        prompt = _build_event_prompt(
+            settings=self.settings,
+            now=now,
+            before=before,
+            state=state,
+            event_text=event_text,
+            assistant_text=assistant_text,
+            current_user_text=current_user_text,
+        )
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "你是角色生活时间线的事件归一化器，不回复用户。"
+                    "根据已声明的生活事件更新状态；不能从历史偏好补造今天的事实。"
+                    "只输出可被 json.loads() 解析的 JSON 对象，不要 markdown 或解释。"
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ]
+        try:
+            params = GenerationParams(
+                temperature=self.settings.life_temperature,
+                max_tokens=min(self.settings.life_max_tokens, 900),
+            )
+            if metrics is None and not trace_id:
+                raw = await llm.complete_chat(messages, params, model=model)
+            else:
+                raw = await llm.complete_chat(
+                    messages,
+                    params,
+                    model=model,
+                    trace_id=trace_id,
+                    stage="life.event",
+                    metrics=metrics,
+                )
+            patch = _parse_decision(raw)
+        except Exception:
+            logger.warning("life event 模型处理失败，保留原状态", exc_info=True)
+            return before
+        if not patch:
+            logger.info("life event 未产生可应用状态，保留原状态")
+            return before
+        for key, value in (
+            ("current_activity", before.current_activity),
+            ("current_event_id", before.current_event_id),
+            ("recent_meal", before.recent_meal),
+            ("mood", before.mood),
+            ("availability", before.availability),
+            ("topic_seed", before.topic_seed),
+            ("next_update_at", before.next_update_at),
+            ("reply_delay_seconds", before.reply_delay_seconds),
+            ("reply_delay_reason", before.reply_delay_reason),
+        ):
+            patch.setdefault(key, value)
+        return self._apply_decision(state, patch, now=now, trigger="model_event")
+
     def _write_fallback_current(
         self,
         state: dict[str, Any],
@@ -349,53 +436,6 @@ class LifeStateManager:
             encoding="utf-8",
         )
         return data
-
-    def apply_marker_patch(
-        self,
-        patch_text: str,
-        *,
-        now: datetime | None = None,
-        trigger: str = "marker",
-    ) -> LifeSnapshot | None:
-        """主模型在回复里输出的 life-update 标记块写入 life。
-
-        patch_text 是 <life-update>...</life-update> 中间的 JSON 字符串。
-        解析失败、无可用字段时返回 None（不影响主回复链路）。
-        """
-        if not patch_text or not patch_text.strip():
-            return None
-        try:
-            data = _extract_json_object(patch_text)
-        except Exception:
-            logger.warning("life marker JSON 解析失败", exc_info=True)
-            return None
-        if not isinstance(data, dict):
-            return None
-        patch: dict[str, object] = {}
-        for src, dst in (
-            ("current_activity", "current_activity"),
-            ("current_event_id", "current_event_id"),
-            ("recent_meal", "recent_meal"),
-            ("mood", "mood"),
-            ("availability", "availability"),
-            ("topic_seed", "topic_seed"),
-            ("next_update_at", "next_update_at"),
-            ("reply_delay_reason", "reply_delay_reason"),
-            ("reason", "reason"),
-        ):
-            value = data.get(src)
-            if isinstance(value, str):
-                cleaned = " ".join(value.split()).strip()
-                if cleaned:
-                    patch[dst] = cleaned[:_MAX_FIELD_CHARS]
-        delay = data.get("reply_delay_seconds")
-        if isinstance(delay, int | float | str):
-            patch["reply_delay_seconds"] = delay
-        if not patch:
-            return None
-        now = now or datetime.now()
-        state = self._load_or_create(now)
-        return self._apply_decision(state, patch, now=now, trigger=trigger)
 
     def _apply_decision(
         self,
@@ -643,7 +683,7 @@ def _build_decision_prompt(
     plan_text = json.dumps(plan, ensure_ascii=False) if isinstance(plan, list) else "（暂无）"
     plan_decided = bool(state.get("plan_decided_by_model"))
     circadian_text = _format_circadian_for_prompt(circadian, now)
-    life_context_text = analysis_life_context[:5000]
+    life_context_text = analysis_life_context[:1600]
     relationship_text = relationship_context[:1200]
     memory_text = memory_context[:1600]
     next_update_at = before.next_update_at or "（未设置）"
@@ -749,7 +789,73 @@ JSON 格式（这就是你应该原样输出的结构，把字符串值填成你
       "topic": "适合自然提起的话题"
     }}
   ],
-  "reason": "一句短语，说明为什么这样更新，内部用"
+    "reason": "一句短语，说明为什么这样更新，内部用"
+}}"""
+
+
+def _build_event_prompt(
+    *,
+    settings: Settings,
+    now: datetime,
+    before: LifeSnapshot,
+    state: dict[str, Any],
+    event_text: str,
+    assistant_text: str,
+    current_user_text: str,
+) -> str:
+    timeline = state.get("timeline")
+    recent_timeline = (
+        json.dumps(timeline[-4:], ensure_ascii=False)
+        if isinstance(timeline, list) and timeline
+        else "（暂无）"
+    )
+    return f"""请把已声明的生活事件归一化为 {settings.friend_name or "TA"} 的当前状态。
+
+当前真实时间：{now.strftime("%Y-%m-%d %H:%M")}
+
+上一状态：
+- 在做：{before.current_activity}
+- 最近吃/喝：{before.recent_meal}
+- 心情：{before.mood}
+- 可用状态：{before.availability}
+- 当前日程节点：{before.current_event_id or "未绑定"}
+- 下一次自然更新时间：{before.next_update_at}
+- 回复延迟：{before.reply_delay_seconds} 秒
+- 可聊话题：{before.topic_seed}
+
+主模型声明的生活事件：
+{event_text[:1200]}
+
+最终采用的回复正文：
+{assistant_text[:1000] or "（无正文）"}
+
+用户本轮输入：
+{current_user_text[:600] or "（非文本输入）"}
+
+最近时间线：
+{recent_timeline}
+
+规则：
+1. 事件是本轮状态变化的主要依据。旧版事件可能是 JSON 文本，也只作为事件描述理解。
+2. 只更新事件直接支持的内容；未提及字段保持上一状态，不得补造活动、饮食、地点或计划。
+3. 如果事件为空泛、与正文冲突、不是生活状态变化或无法可靠理解，输出 {{"apply": false}}。
+4. next_update_at 必须在当前时间 10 分钟到 10 小时后，格式为 YYYY-MM-DD HH:MM。
+5. availability 只能是 available、busy、sleeping、away；sleeping 时回复延迟至少 5 秒，最大 {settings.life_max_reply_delay_seconds} 秒。
+6. 第一个字符必须是 `{{`，最后一个字符必须是 `}}`；不要 markdown、解释或额外文字。
+
+输出结构：
+{{
+  "apply": true,
+  "current_activity": "此刻在做什么",
+  "current_event_id": "日程节点 id，不确定则沿用上一值",
+  "recent_meal": "最近吃喝，事件未提及则沿用上一值",
+  "mood": "当前心情，事件未提及则沿用上一值",
+  "availability": "available|busy|sleeping|away",
+  "topic_seed": "适合自然展开的话题",
+  "next_update_at": "YYYY-MM-DD HH:MM",
+  "reply_delay_seconds": 0,
+  "reply_delay_reason": "无延迟则空字符串",
+  "reason": "event_normalized"
 }}"""
 
 
@@ -772,6 +878,65 @@ def _format_circadian_for_prompt(profile: CircadianProfile | None, now: datetime
         f"（{'明显夜猫子' if profile.night_owl_score >= 0.4 else '偏晚睡型' if profile.night_owl_score >= 0.2 else '常规作息'}）\n"
         f"- 今天是{label}，历史上活跃的小时：{active_text}\n"
         f"- 备注：{profile.summary}"
+    )
+
+
+def _render_analysis_life_profile(raw: object) -> str:
+    if not isinstance(raw, dict):
+        return ""
+    habits = raw.get("habits")
+    if not isinstance(habits, list):
+        return ""
+
+    candidates: list[tuple[float, str]] = []
+    category_labels = {
+        "sleep": "作息",
+        "meal": "饮食",
+        "activity": "活动",
+        "availability": "忙闲",
+    }
+    for habit in habits:
+        if not isinstance(habit, dict):
+            continue
+        confidence = habit.get("confidence")
+        if (
+            habit.get("subject") != "friend"
+            or habit.get("sensitive_relationship_context") is True
+            or not isinstance(confidence, int | float)
+            or isinstance(confidence, bool)
+            or confidence < _ANALYSIS_LIFE_MIN_CONFIDENCE
+        ):
+            continue
+        target_fields = habit.get("target_fields")
+        claim = " ".join(str(habit.get("claim") or "").split()).strip()
+        if not claim or not isinstance(target_fields, list) or not target_fields:
+            continue
+        time_patterns = habit.get("time_patterns")
+        times = (
+            "、".join(str(item) for item in time_patterns[:2] if str(item).strip())
+            if isinstance(time_patterns, list)
+            else ""
+        )
+        fields = "、".join(str(item) for item in target_fields[:4] if str(item).strip())
+        category = category_labels.get(str(habit.get("category") or ""), "日常")
+        time_part = f"；常见时段：{times}" if times else ""
+        candidates.append(
+            (
+                float(confidence),
+                f"- [{category}，{round(float(confidence) * 100)}%] {claim}"
+                f"{time_part}；可影响：{fields}",
+            )
+        )
+
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    selected = candidates[:_ANALYSIS_LIFE_MAX_HABITS]
+    if not selected:
+        return ""
+    return "\n".join(
+        [
+            "以下是目标角色的高置信度长期生活候选，不是今天事实；当前时间、当天状态和本轮对话优先。",
+            *(line for _, line in selected),
+        ]
     )
 
 
@@ -1030,6 +1195,8 @@ def _text_field(value: object, fallback: str) -> str:
 def _parse_decision(raw: str) -> dict[str, object] | None:
     data = _extract_json_object(raw)
     if not isinstance(data, dict):
+        return None
+    if data.get("apply") is False:
         return None
     mapping = {
         "current_activity": "current_activity",

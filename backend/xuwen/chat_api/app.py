@@ -211,16 +211,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             await update_checker.stop()
             await writeback.stop(drain=True)
-            # 等剩余的 life marker fire-and-forget task 完成，避免进程退出时丢失最后几次 marker
+            # 等剩余的 life event task 完成，避免进程退出时丢失最后几次状态变化。
             pending = [t for t in state.pending_life_tasks if not t.done()]
             if pending:
                 try:
                     await asyncio.wait_for(
                         asyncio.gather(*pending, return_exceptions=True),
-                        timeout=5.0,
+                        timeout=resolved_settings.life_timeout_seconds + 2.0,
                     )
                 except TimeoutError:
-                    # 5s 内还没跑完的就放弃，避免阻塞 shutdown 太久
+                    # Life 模型自己的超时窗口后仍未完成则取消，避免阻塞 shutdown。
                     for t in pending:
                         if not t.done():
                             t.cancel()

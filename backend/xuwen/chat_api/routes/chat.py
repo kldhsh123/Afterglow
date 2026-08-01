@@ -20,11 +20,12 @@ from xuwen.chat_api.chat_pipeline import (
     build_sticker_retry_hint,
     effective_reply_delay_seconds,
     effective_silence_sentinel,
-    extract_life_marker_async,
+    extract_life_events,
     extract_schedule_hints,
     fallback_for_rejected_sticker,
     is_ai_silence_signal,
     looks_like_sticker_only_intent,
+    schedule_life_events,
 )
 from xuwen.chat_api.companion_prompt import (
     build_persona_card_with_companion_context,
@@ -588,14 +589,9 @@ async def chat_completions(
             stage="chat.complete",
             metrics=state.metrics,
         )
-        # 先解析 + 应用 life-update 标记块（顺手剥离），再走通用 sanitize
-        stripped = extract_life_marker_async(
-            raw_assistant_text,
-            state.life,
-            enabled=state.settings.life_marker_update_enabled,
-            apply_lock=state.life_apply_lock,
-            pending_tasks=state.pending_life_tasks,
-        )
+        life_extraction = extract_life_events(raw_assistant_text)
+        stripped = life_extraction.text
+        accepted_life_events = life_extraction.events
         valid_names = available_sticker_names(state.settings)
         assistant_text = sanitize_assistant_text(
             stripped,
@@ -637,13 +633,8 @@ async def chat_completions(
                         stage="chat.complete.sticker_retry",
                         metrics=state.metrics,
                     )
-                    retry_stripped = extract_life_marker_async(
-                        retry_raw,
-                        state.life,
-                        enabled=state.settings.life_marker_update_enabled,
-                        apply_lock=state.life_apply_lock,
-                        pending_tasks=state.pending_life_tasks,
-                    )
+                    retry_extraction = extract_life_events(retry_raw)
+                    retry_stripped = retry_extraction.text
                     retry_text = sanitize_assistant_text(
                         retry_stripped,
                         valid_sticker_names=valid_names,
@@ -652,6 +643,7 @@ async def chat_completions(
                         retry_stripped
                     ):
                         assistant_text = retry_text
+                        accepted_life_events = retry_extraction.events
                         retried = True
                         state.metrics.record(
                             "chat.sticker.retry_ok",
@@ -661,6 +653,7 @@ async def chat_completions(
                 except Exception:
                     logger.warning("sticker retry 失败，回退到短句兜底", exc_info=True)
             if not retried:
+                accepted_life_events = ()
                 assistant_text = (
                     fallback_for_rejected_sticker(response_decision.reply_mode)
                     or assistant_text
@@ -687,6 +680,21 @@ async def chat_completions(
     if await _turn_was_cancelled(state, turn_snapshot):
         return _cancelled_response(model_name=model_name, trace_id=trace_id)
 
+    if not ai_silenced:
+        schedule_life_events(
+            accepted_life_events,
+            state.life,
+            enabled=state.settings.life_marker_update_enabled,
+            llm=state.life_llm,
+            model=state.settings.resolved_life_model,
+            apply_lock=state.life_apply_lock,
+            pending_tasks=state.pending_life_tasks,
+            assistant_text=assistant_text,
+            current_user_text=current_user_text,
+            trace_id=trace_id,
+            metrics=state.metrics,
+        )
+
     if req.conversation_id:
         await state.writeback.enqueue_turn(
             WritebackTurn(
@@ -701,8 +709,7 @@ async def chat_completions(
         await _remember_relationship_turn(
             state,
             conversation_id=req.conversation_id,
-            user_text=current_user_text,
-            assistant_text="" if ai_silenced else assistant_text,
+            decision=response_decision,
             trace_id=trace_id,
         )
     await state.proactive_context_cache.append_turn(
@@ -1026,14 +1033,20 @@ async def _stream_response(
     if await _turn_was_cancelled(state, turn_snapshot):
         return
 
-    # 流结束后用累积的完整 raw 文本跑 life-update 标记块解析（apply 即可，
-    # 不影响已发出 chunk —— 标记块已在 sanitize 流程里被剥离）。
-    extract_life_marker_async(
-        raw_full,
+    # 流结束后只把完整、最终采用的事件交给 Life 模型；不阻塞已发出的回复。
+    life_extraction = extract_life_events(raw_full)
+    schedule_life_events(
+        life_extraction.events if not ai_silenced else (),
         state.life,
         enabled=state.settings.life_marker_update_enabled,
+        llm=state.life_llm,
+        model=state.settings.resolved_life_model,
         apply_lock=state.life_apply_lock,
         pending_tasks=state.pending_life_tasks,
+        assistant_text=full_text,
+        current_user_text=user_text,
+        trace_id=trace_id,
+        metrics=state.metrics,
     )
 
     assistant_text = "" if ai_silenced else full_text
@@ -1049,8 +1062,7 @@ async def _stream_response(
         await _remember_relationship_turn(
             state,
             conversation_id=conversation_id,
-            user_text=user_text,
-            assistant_text=assistant_text,
+            decision=decision,
             trace_id=trace_id,
         )
     await state.proactive_context_cache.append_turn(
@@ -1134,15 +1146,13 @@ async def _remember_relationship_turn(
     state: AppState,
     *,
     conversation_id: str,
-    user_text: str,
-    assistant_text: str,
+    decision: ResponseDecision,
     trace_id: str,
 ) -> None:
     try:
         await state.relationship_memory.remember_turn(
             conversation_id=conversation_id,
-            user_text=user_text,
-            assistant_text=assistant_text,
+            entry=decision.relationship_memory,
         )
     except Exception:
         logger.warning("关系记忆写入失败，已忽略：trace=%s", trace_id, exc_info=True)

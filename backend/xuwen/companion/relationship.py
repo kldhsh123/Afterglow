@@ -7,31 +7,31 @@
 from __future__ import annotations
 
 import hashlib
-import re
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from xuwen.config import Settings
 from xuwen.core.metrics import MetricsRecorder
 from xuwen.ingestion.embedder import EmbeddingClient
 from xuwen.memory.store import MemoryStore
 
-_IMPORTANT_PATTERNS = (
-    "记住", "以后", "下次", "提醒", "别忘", "喜欢", "不喜欢", "讨厌",
-    "害怕", "想要", "不要", "别再", "我叫", "我是", "我家", "生日",
-    "最近", "明天", "后天", "考试", "面试", "工作", "睡眠", "失眠",
-    "熬夜", "睡不着", "还没睡", "睡不下",
-)
-_GENERIC_SHORTS = {"在吗", "你在干嘛", "你在干什么", "在干嘛", "嗯", "好", "哈哈"}
+RelationshipMemoryKind = Literal[
+    "preference",
+    "boundary",
+    "plan",
+    "rhythm",
+    "fact",
+    "relationship",
+]
 
 
 @dataclass(slots=True, frozen=True)
 class RelationshipMemoryEntry:
     text: str
-    kind: str = "note"
-    importance: int = 1
+    kind: RelationshipMemoryKind
+    importance: int
 
 
 class RelationshipMemoryManager:
@@ -48,9 +48,12 @@ class RelationshipMemoryManager:
 
     def load_markdown(self) -> str:
         try:
-            return self.path.read_text(encoding="utf-8").strip()
+            text = self.path.read_text(encoding="utf-8")
         except FileNotFoundError:
             return ""
+        return "\n".join(
+            line for line in text.splitlines() if "(note," not in line
+        ).strip()
 
     async def relevant_memories(
         self,
@@ -90,6 +93,8 @@ class RelationshipMemoryManager:
             return []
         out: list[str] = []
         for row in rows:
+            if str(row.get("kind") or "") == "note":
+                continue
             text = str(row.get("text") or "").strip()
             if text:
                 out.append(text)
@@ -143,12 +148,11 @@ class RelationshipMemoryManager:
         self,
         *,
         conversation_id: str | None,
-        user_text: str,
-        assistant_text: str,
+        entry: RelationshipMemoryEntry | None,
     ) -> list[RelationshipMemoryEntry]:
-        entries = _extract_memory_entries(user_text, assistant_text)
-        if not entries:
+        if entry is None:
             return []
+        entries = [entry]
 
         existing = self.load_markdown()
         new_entries = [e for e in entries if e.text not in existing]
@@ -207,51 +211,6 @@ class RelationshipMemoryManager:
             return await self.embedder.embed_texts(texts)
         except Exception:
             return [[0.0] * self.settings.embedding_dim for _ in texts]
-
-
-def _extract_memory_entries(
-    user_text: str,
-    assistant_text: str,
-) -> list[RelationshipMemoryEntry]:
-    text = _compact(user_text)
-    if not _should_remember(text):
-        return []
-
-    kind = _classify(text)
-    importance = 2 if kind in {"preference", "boundary", "plan", "rhythm"} else 1
-    entry_text = f"用户说：{text}"
-    if assistant_text.strip() and kind == "plan":
-        entry_text += "。后续可以自然追问这件事。"
-    return [RelationshipMemoryEntry(text=entry_text, kind=kind, importance=importance)]
-
-
-def _should_remember(text: str) -> bool:
-    if not text:
-        return False
-    if text in _GENERIC_SHORTS:
-        return False
-    if len(text) > 160:
-        return False
-    return any(p in text for p in _IMPORTANT_PATTERNS)
-
-
-def _classify(text: str) -> str:
-    if any(p in text for p in ("喜欢", "不喜欢", "讨厌", "想要")):
-        return "preference"
-    if any(p in text for p in ("不要", "别再", "害怕")):
-        return "boundary"
-    if any(p in text for p in ("明天", "后天", "下次", "提醒", "考试", "面试")):
-        return "plan"
-    if any(p in text for p in ("睡眠", "失眠", "熬夜", "睡不着", "还没睡", "睡不下")):
-        return "rhythm"
-    if any(p in text for p in ("我叫", "我是", "生日", "我家")):
-        return "fact"
-    return "note"
-
-
-def _compact(text: str) -> str:
-    return re.sub(r"\s+", " ", text).strip()
-
 
 def _entry_id(text: str) -> str:
     digest = hashlib.sha1(text.encode(), usedforsecurity=False).hexdigest()[:16]

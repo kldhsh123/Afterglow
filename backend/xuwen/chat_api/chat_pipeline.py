@@ -9,20 +9,21 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from dataclasses import dataclass
 
+from xuwen.chat_api.llm_client import LLMClient
 from xuwen.chat_api.schemas import PolicyHint
 from xuwen.chat_api.sticker_store import StickerStore
 from xuwen.companion.life import LifeSnapshot, LifeStateManager
 from xuwen.companion.response_policy import ResponseDecision
 from xuwen.config import Settings
+from xuwen.core.metrics import MetricsRecorder
 
 logger = logging.getLogger(__name__)
 
-# 主模型在回复中可输出 <life-update>{...}</life-update> 标记块，
-# 后端解析后直接 patch life，并从对外回复里剥离这个块。
-# 用 DOTALL 让 . 匹配换行；非贪婪取最短内容。
+# 主模型输出自然语言 <life-event>；旧 <life-update> 仅保留输入兼容。
 _LIFE_MARKER_RE = re.compile(
-    r"<life-update>\s*(.*?)\s*</life-update>",
+    r"<life-(event|update)>\s*(.*?)\s*</life-\1>",
     re.DOTALL | re.IGNORECASE,
 )
 
@@ -95,85 +96,81 @@ def effective_reply_delay_seconds(
     return max(0, min(raw, settings.life_max_reply_delay_seconds))
 
 
-def extract_and_apply_life_marker(
+@dataclass(frozen=True, slots=True)
+class LifeEventExtraction:
+    text: str
+    events: tuple[str, ...]
+
+
+def extract_life_events(
     assistant_text: str,
-    life: LifeStateManager,
     *,
-    enabled: bool,
-) -> str:
-    """从 assistant_text 中提取 life-update 标记块，应用到 life state，返回剥离后的文本。
-
-    - enabled=True：解析 + 应用 + 剥离
-    - enabled=False：仅剥离（兜底，避免前端看到内部协议）
-
-    任何异常都吞掉，不影响主回复链路。
-
-    历史保留的同步版本：仍在测试代码和不需要异步的场景用。
-    主链路推荐用 extract_life_marker_async 把 apply 部分 fire-and-forget。
-    """
+    max_events: int = 5,
+) -> LifeEventExtraction:
+    """剥离内部 life 协议并返回去重后的事件内容，不产生副作用。"""
     if not assistant_text:
-        return assistant_text
-    matches = _LIFE_MARKER_RE.findall(assistant_text)
-    if not matches:
-        return assistant_text
-    if enabled:
-        for raw in matches:
-            try:
-                life.apply_marker_patch(raw, trigger="marker")
-            except Exception:
-                logger.warning("life marker 应用失败，已忽略", exc_info=True)
-    # 剥离标记块（即使禁用也要剥，防止前端看到内部协议）
-    return _LIFE_MARKER_RE.sub("", assistant_text).strip()
+        return LifeEventExtraction(text=assistant_text, events=())
+    events: list[str] = []
+    seen: set[str] = set()
+    for _kind, raw in _LIFE_MARKER_RE.findall(assistant_text):
+        event = " ".join(raw.split()).strip()
+        if not event or event in seen:
+            continue
+        seen.add(event)
+        events.append(event[:1200])
+        if len(events) >= max_events:
+            break
+    return LifeEventExtraction(
+        text=_LIFE_MARKER_RE.sub("", assistant_text).strip(),
+        events=tuple(events),
+    )
 
 
-def extract_life_marker_async(
-    assistant_text: str,
+def schedule_life_events(
+    events: tuple[str, ...],
     life: LifeStateManager,
     *,
     enabled: bool,
+    llm: LLMClient,
+    model: str,
     apply_lock: asyncio.Lock,
     pending_tasks: set[asyncio.Task[None]] | None = None,
-) -> str:
-    """异步版：同步剥离标记块给用户，apply 走 fire-and-forget 不阻塞主链路。
+    assistant_text: str = "",
+    current_user_text: str = "",
+    trace_id: str = "",
+    metrics: MetricsRecorder | None = None,
+) -> None:
+    """把最终采用回复中的生活事件交给 Life 模型异步归一化。"""
+    if not enabled or not events:
+        return
 
-    - 剥离 (_LIFE_MARKER_RE.sub) 仍同步，几 µs 级
-    - apply_marker_patch 内部是同步 disk write，用 asyncio.to_thread 扔线程池
-    - 多个并发 task 通过 apply_lock 序列化，避免 life state 文件竞态
-    - pending_tasks 用于 lifespan 关闭时 await，避免孤儿 task
+    async def _apply_async() -> None:
+        try:
+            async with apply_lock:
+                await asyncio.wait_for(
+                    life.apply_event(
+                        llm=llm,
+                        model=model,
+                        event_text="\n".join(events),
+                        assistant_text=assistant_text,
+                        current_user_text=current_user_text,
+                        trace_id=trace_id,
+                        metrics=metrics,
+                    ),
+                    timeout=life.settings.life_timeout_seconds,
+                )
+        except TimeoutError:
+            logger.warning(
+                "life event 归一化超时 %.1fs，保留原状态",
+                life.settings.life_timeout_seconds,
+            )
+        except Exception:
+            logger.warning("life event 归一化失败，保留原状态", exc_info=True)
 
-    任何异常都吞掉，不影响主回复链路。
-    """
-    if not assistant_text:
-        return assistant_text
-    matches = _LIFE_MARKER_RE.findall(assistant_text)
-    if not matches:
-        return assistant_text
-
-    if enabled:
-        async def _apply_async() -> None:
-            try:
-                async with apply_lock:
-                    for raw in matches:
-                        try:
-                            await asyncio.to_thread(
-                                life.apply_marker_patch, raw, trigger="marker"
-                            )
-                        except Exception:
-                            logger.warning(
-                                "life marker async apply 单条失败", exc_info=True
-                            )
-            except Exception:
-                logger.warning("life marker async apply 总失败", exc_info=True)
-
-        task = asyncio.create_task(_apply_async())
-        if pending_tasks is not None:
-            pending_tasks.add(task)
-            # done_callback 在任务完成（含异常/取消）时自动从集合移除，避免长期累积。
-            # 这是配合"强引用 set"必须做的清理；否则 set 会一直增长。
-            task.add_done_callback(pending_tasks.discard)
-
-    # 剥离标记块（即使禁用也要剥，防止前端看到内部协议）
-    return _LIFE_MARKER_RE.sub("", assistant_text).strip()
+    task = asyncio.create_task(_apply_async())
+    if pending_tasks is not None:
+        pending_tasks.add(task)
+        task.add_done_callback(pending_tasks.discard)
 
 
 def available_sticker_names(settings: Settings) -> frozenset[str] | None:
