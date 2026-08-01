@@ -28,10 +28,11 @@ from xuwen.chat_api.chat_pipeline import (
     build_sticker_retry_hint,
     effective_reply_delay_seconds,
     effective_silence_sentinel,
-    extract_life_marker_async,
+    extract_life_events,
     fallback_for_rejected_sticker,
     is_ai_silence_signal,
     looks_like_sticker_only_intent,
+    schedule_life_events,
 )
 from xuwen.chat_api.companion_prompt import (
     build_persona_card_with_companion_context,
@@ -476,13 +477,9 @@ async def responses(
             stage="responses.complete",
             metrics=state.metrics,
         )
-        stripped = extract_life_marker_async(
-            raw_assistant_text,
-            state.life,
-            enabled=state.settings.life_marker_update_enabled,
-            apply_lock=state.life_apply_lock,
-            pending_tasks=state.pending_life_tasks,
-        )
+        life_extraction = extract_life_events(raw_assistant_text)
+        stripped = life_extraction.text
+        accepted_life_events = life_extraction.events
         valid_names = available_sticker_names(state.settings)
         assistant_text = sanitize_assistant_text(
             stripped,
@@ -522,13 +519,8 @@ async def responses(
                         stage="responses.complete.sticker_retry",
                         metrics=state.metrics,
                     )
-                    retry_stripped = extract_life_marker_async(
-                        retry_raw,
-                        state.life,
-                        enabled=state.settings.life_marker_update_enabled,
-                        apply_lock=state.life_apply_lock,
-                        pending_tasks=state.pending_life_tasks,
-                    )
+                    retry_extraction = extract_life_events(retry_raw)
+                    retry_stripped = retry_extraction.text
                     retry_text = sanitize_assistant_text(
                         retry_stripped,
                         valid_sticker_names=valid_names,
@@ -537,6 +529,7 @@ async def responses(
                         retry_stripped
                     ):
                         assistant_text = retry_text
+                        accepted_life_events = retry_extraction.events
                         retried = True
                         state.metrics.record(
                             "responses.sticker.retry_ok",
@@ -546,6 +539,7 @@ async def responses(
                 except Exception:
                     logger.warning("sticker retry 失败，回退到短句兜底", exc_info=True)
             if not retried:
+                accepted_life_events = ()
                 assistant_text = (
                     fallback_for_rejected_sticker(decision.reply_mode) or assistant_text
                 )
@@ -567,6 +561,21 @@ async def responses(
         )
         raise
 
+    if not ai_silenced:
+        schedule_life_events(
+            accepted_life_events,
+            state.life,
+            enabled=state.settings.life_marker_update_enabled,
+            llm=state.life_llm,
+            model=state.settings.resolved_life_model,
+            apply_lock=state.life_apply_lock,
+            pending_tasks=state.pending_life_tasks,
+            assistant_text=assistant_text,
+            current_user_text=current_user_text,
+            trace_id=trace_id,
+            metrics=state.metrics,
+        )
+
     if conversation_id:
         await state.writeback.enqueue_turn(
             WritebackTurn(
@@ -580,8 +589,7 @@ async def responses(
         await _remember_relationship_turn(
             state,
             conversation_id=conversation_id,
-            user_text=current_user_text,
-            assistant_text="" if ai_silenced else assistant_text,
+            decision=decision,
             trace_id=trace_id,
         )
     await state.proactive_context_cache.append_turn(
@@ -1091,23 +1099,30 @@ async def _stream_response(
     yield format_event("response.completed", {"response": completed_response})
     yield b"data: [DONE]\n\n"
 
-    # 流结束后用累积 raw 跑 life-update apply（不影响已发出事件）。
-    raw_full = output_filter.raw_text()
-    extract_life_marker_async(
-        raw_full,
-        state.life,
-        enabled=state.settings.life_marker_update_enabled,
-        apply_lock=state.life_apply_lock,
-        pending_tasks=state.pending_life_tasks,
-    )
-
-    # AI 自主沉默：累积完整 buffer == sentinel → 写历史时置空，避免污染检索；
-    # 流式事件已经发完，前端收到的内容仍是 sentinel，由 sentinel 自身表达沉默语义。
     ai_silenced = is_ai_silence_signal(
         assistant_text,
         sentinel=effective_silence_sentinel(state.settings),
         decision=decision,
     )
+    # 流结束后把最终采用的生活事件异步交给 Life 模型。
+    raw_full = output_filter.raw_text()
+    life_extraction = extract_life_events(raw_full)
+    schedule_life_events(
+        life_extraction.events if not ai_silenced else (),
+        state.life,
+        enabled=state.settings.life_marker_update_enabled,
+        llm=state.life_llm,
+        model=state.settings.resolved_life_model,
+        apply_lock=state.life_apply_lock,
+        pending_tasks=state.pending_life_tasks,
+        assistant_text=assistant_text,
+        current_user_text=user_text,
+        trace_id=trace_id,
+        metrics=state.metrics,
+    )
+
+    # AI 自主沉默：累积完整 buffer == sentinel → 写历史时置空，避免污染检索；
+    # 流式事件已经发完，前端收到的内容仍是 sentinel，由 sentinel 自身表达沉默语义。
     if ai_silenced:
         state.metrics.record(
             "responses.silenced.ai",
@@ -1128,8 +1143,7 @@ async def _stream_response(
         await _remember_relationship_turn(
             state,
             conversation_id=conversation_id,
-            user_text=user_text,
-            assistant_text=persisted_text,
+            decision=decision,
             trace_id=trace_id,
         )
     await state.proactive_context_cache.append_turn(
@@ -1155,15 +1169,13 @@ async def _remember_relationship_turn(
     state: AppState,
     *,
     conversation_id: str,
-    user_text: str,
-    assistant_text: str,
+    decision: ResponseDecision,
     trace_id: str,
 ) -> None:
     try:
         await state.relationship_memory.remember_turn(
             conversation_id=conversation_id,
-            user_text=user_text,
-            assistant_text=assistant_text,
+            entry=decision.relationship_memory,
         )
     except Exception:
         logger.warning("Responses 关系记忆写入失败，已忽略：trace=%s", trace_id, exc_info=True)

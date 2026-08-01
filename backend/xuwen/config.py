@@ -143,7 +143,7 @@ class Settings(BaseSettings):
     life_model: str = ""
     life_temperature: float = 0.35
     life_max_tokens: int = 1500
-    life_timeout_seconds: float = 12.0
+    life_timeout_seconds: float = 30.0
     # 最长多久让 life 模型重新判断一次当前状态。0 = 只按 next_update_at / 用户打断触发。
     life_update_interval_minutes: int = 60
     # 生活状态可建议延迟回复；这里限制实际 sleep 上限，避免请求被模型拖太久。
@@ -152,8 +152,9 @@ class Settings(BaseSettings):
     # 即使模型忘记给延迟，sleeping 也至少这个秒数（更像被叫醒迷糊回的节奏）。
     # 设为 0 关闭兜底。
     life_sleeping_min_reply_delay_seconds: int = 8
-    # 主模型在回复中输出 <life-update>JSON</life-update> 标记块时，
-    # 后端解析后直接 patch life 状态（零额外 API 调用），并从对外回复中剥离标记。
+    # 主模型在回复中输出 <life-event>自然语言事件</life-event> 时，
+    # 后端异步交给 Life 模型归一化并写入状态，再从对外回复中剥离标记。
+    # 旧 <life-update> 仍会被识别，但同样经过 Life 模型，不再直接 patch。
     # 关闭时仍兜底过滤标记块，避免前端看到。
     life_marker_update_enabled: bool = True
 

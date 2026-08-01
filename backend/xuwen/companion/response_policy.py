@@ -22,6 +22,7 @@ from typing import Any, Literal
 
 from xuwen.chat_api.llm_client import GenerationParams, LLMClient
 from xuwen.companion.life import LifeSnapshot
+from xuwen.companion.relationship import RelationshipMemoryEntry
 from xuwen.config import Settings
 from xuwen.core.metrics import MetricsRecorder
 from xuwen.core.models import RetrievalResult
@@ -92,6 +93,7 @@ _QUESTION_LIFE_PATTERNS = (
     "在干嘛", "在干什么", "吃了吗", "睡了吗", "醒了吗", "忙吗",
 )
 _NONSENSE_RE = re.compile(r"^[a-zA-Z0-9]{5,}$")
+_RELATIONSHIP_MEMORY_EVIDENCE_MIN_CHARS = 4
 
 
 @dataclass(slots=True, frozen=True)
@@ -109,6 +111,7 @@ class ResponseDecision:
     max_length: MaxLength = "short"
     do_not: list[str] = field(default_factory=list)
     instructions: list[str] = field(default_factory=list)
+    relationship_memory: RelationshipMemoryEntry | None = None
 
     def render_prompt_block(self, *, silence_sentinel: str = "") -> str:
         do_not = "\n".join(f"- {item}" for item in self.do_not) or "- 无"
@@ -147,7 +150,7 @@ class ResponseDecision:
                 "\n\n【沉默权限（可选）】\n"
                 "- 你可以选择本轮“不回复”，模拟真人不想接话/正忙/没共鸣时的自然反应。\n"
                 f"- 想沉默时，整条回复**只输出**：{silence_sentinel}\n"
-                "  不要在前后加任何字符（含空格、标点、emoji、解释、life-update 标记）。\n"
+                "  不要在前后加任何字符（含空格、标点、emoji、解释、life-event 标记）。\n"
                 "- 用户状态为 unsafe、serious、或对方明确在求情绪支持时，**禁止**沉默。"
             )
         return block
@@ -393,7 +396,8 @@ def _compact(text: str) -> str:
 
 _REFINE_SYSTEM_PROMPT = (
     "你是互动决策辅助。你不生成对话正文，只对规则层给出的本轮互动策略做意图层面的微调，"
-    "用于帮助主模型更准确判断该撒娇 / 接梗 / 转移 / 认真 / 安抚 / 关心。"
+    "用于帮助主模型更准确判断该撒娇 / 接梗 / 转移 / 认真 / 安抚 / 关心，"
+    "并判断本轮是否出现值得长期保留的关系记忆。"
     "你必须遵守安全边界："
     "1) 不能降低 risk_level（low→medium→high 单调上升）；"
     "2) 不能让 should_reply 从 false 改成 true；"
@@ -417,6 +421,10 @@ _RETRIEVAL_FOCUS_VALUES: frozenset[str] = frozenset({
 _RISK_ORDER: dict[str, int] = {"low": 0, "medium": 1, "high": 2}
 _REFINE_EXTRA_ITEM_LIMIT = 4
 _REFINE_EXTRA_ITEM_MAX_CHARS = 120
+_RELATIONSHIP_MEMORY_KINDS = frozenset(
+    {"preference", "boundary", "plan", "rhythm", "fact", "relationship"}
+)
+_PLACEHOLDER_VALUES = frozenset({"...", "…", "无", "none", "null"})
 
 
 async def refine_decision_with_llm(
@@ -472,7 +480,11 @@ async def refine_decision_with_llm(
     refined = _parse_refine_decision(raw)
     if not refined:
         return base
-    return _merge_with_base(base, refined)
+    return _merge_with_base(
+        base,
+        refined,
+        current_user_text=current_user_text,
+    )
 
 
 def _build_refine_prompt(
@@ -514,15 +526,21 @@ def _build_refine_prompt(
         f"- retrieval_focus: {base.retrieval_focus}\n"
         f"- 是否要图：{'是' if base.use_image else '否'}\n"
         f"- 是否要表情：{'是' if base.use_sticker else '否'}\n\n"
-        "请按以下 JSON 结构输出微调结果，未确定的字段保留规则层原值；"
-        "extra_instructions / extra_do_not 用于补充新规则，不要重复已有内容。\n"
+        "请输出一个 JSON 对象。reply_mode、user_state、risk_level、retrieval_focus "
+        "必须各自选择一个合法单值，不能输出用 | 拼接的候选。"
+        "extra_instructions / extra_do_not 没有新增内容时输出空数组。\n"
+        "relationship_memory 只记录用户明确表达、以后仍有价值的偏好、边界、计划、"
+        "稳定生活规律、身份事实或关系变化。寒暄、提问、即时状态、对 TA 的询问、"
+        "模型猜测一律输出 null。需要记录时，summary 必须是以“用户”开头的第三人称短句；"
+        "evidence 必须逐字复制本轮用户输入中的一段连续原文，不能改写。\n"
         "{\n"
-        '  "reply_mode": "serious|playful|clingy|calm|tease|topic_shift|silence|image|sticker|chaotic",\n'
-        '  "user_state": "normal|tired|angry|sad|anxious|joking|chaotic|intimate|unsafe",\n'
-        '  "risk_level": "low|medium|high",\n'
-        '  "retrieval_focus": "human_style|user_new|ai_continuity|relationship_memory|life_state|none",\n'
-        '  "extra_instructions": ["..."],\n'
-        '  "extra_do_not": ["..."]\n'
+        f'  "reply_mode": "{base.reply_mode}",\n'
+        f'  "user_state": "{base.user_state}",\n'
+        f'  "risk_level": "{base.risk_level}",\n'
+        f'  "retrieval_focus": "{base.retrieval_focus}",\n'
+        '  "extra_instructions": [],\n'
+        '  "extra_do_not": [],\n'
+        '  "relationship_memory": null\n'
         "}"
     )
 
@@ -549,6 +567,8 @@ def _parse_refine_decision(raw: str) -> dict[str, Any] | None:
 def _merge_with_base(
     base: ResponseDecision,
     refined: dict[str, Any],
+    *,
+    current_user_text: str,
 ) -> ResponseDecision:
     """把小模型可信修正合入 base，硬安全边界优先。"""
     locked_modes = {"image", "sticker"}
@@ -572,6 +592,10 @@ def _merge_with_base(
     )
     extra_do_not = _coerce_str_list(refined.get("extra_do_not"))
     extra_instructions = _coerce_str_list(refined.get("extra_instructions"))
+    relationship_memory = _coerce_relationship_memory(
+        refined.get("relationship_memory"),
+        current_user_text=current_user_text,
+    )
 
     merged_do_not = _merge_unique(base.do_not, extra_do_not)
     merged_instructions = _merge_unique(base.instructions, extra_instructions)
@@ -616,6 +640,7 @@ def _merge_with_base(
         max_length=new_max_length,
         do_not=merged_do_not,
         instructions=merged_instructions,
+        relationship_memory=relationship_memory,
     )
 
 
@@ -647,7 +672,7 @@ def _coerce_str_list(value: object) -> list[str]:
         if not isinstance(raw, str):
             continue
         cleaned = _compact(raw)
-        if not cleaned:
+        if not cleaned or cleaned.lower() in _PLACEHOLDER_VALUES:
             continue
         if len(cleaned) > _REFINE_EXTRA_ITEM_MAX_CHARS:
             cleaned = cleaned[: _REFINE_EXTRA_ITEM_MAX_CHARS - 1] + "…"
@@ -655,6 +680,38 @@ def _coerce_str_list(value: object) -> list[str]:
         if len(items) >= _REFINE_EXTRA_ITEM_LIMIT:
             break
     return items
+
+
+def _coerce_relationship_memory(
+    value: object,
+    *,
+    current_user_text: str,
+) -> RelationshipMemoryEntry | None:
+    if not isinstance(value, dict):
+        return None
+    kind = value.get("kind")
+    summary = _compact(str(value.get("summary") or ""))
+    evidence = _compact(str(value.get("evidence") or ""))
+    source = _compact(current_user_text)
+    importance = value.get("importance")
+    if kind not in _RELATIONSHIP_MEMORY_KINDS:
+        return None
+    if not isinstance(importance, int) or isinstance(importance, bool):
+        return None
+    if importance < 1 or importance > 3:
+        return None
+    if not summary.startswith("用户") or len(summary) < 6 or len(summary) > 120:
+        return None
+    if (
+        len(evidence) < _RELATIONSHIP_MEMORY_EVIDENCE_MIN_CHARS
+        or evidence not in source
+    ):
+        return None
+    return RelationshipMemoryEntry(
+        text=summary,
+        kind=kind,  # type: ignore[arg-type]
+        importance=importance,
+    )
 
 
 def _merge_unique(base: list[str], extras: list[str]) -> list[str]:

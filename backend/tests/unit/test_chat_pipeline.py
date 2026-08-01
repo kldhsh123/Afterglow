@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -15,10 +15,11 @@ from xuwen.chat_api.chat_pipeline import (
     build_policy_hint,
     effective_reply_delay_seconds,
     effective_silence_sentinel,
-    extract_life_marker_async,
+    extract_life_events,
     is_ai_silence_signal,
+    schedule_life_events,
 )
-from xuwen.companion.life import LifeSnapshot
+from xuwen.companion.life import LIFE_EVENT_TEXT_MAX_CHARS, LifeSnapshot
 from xuwen.companion.response_policy import ResponseDecision
 from xuwen.config import Settings
 
@@ -174,97 +175,122 @@ def test_effective_reply_delay_is_bounded_and_skips_silence():
     ) == 0
 
 
-# ---------- extract_life_marker_async ----------
+# ---------- life event extraction / scheduling ----------
 
 
-@pytest.mark.asyncio
-async def test_async_marker_returns_stripped_and_schedules_apply():
-    """有 marker 时同步返回剥离文本，apply 异步执行。"""
-    life = MagicMock()
-    lock = asyncio.Lock()
-    pending: set[asyncio.Task] = set()
-
-    text = '早安<life-update>{"mood": "happy"}</life-update>'
-    result = extract_life_marker_async(
-        text, life, enabled=True, apply_lock=lock, pending_tasks=pending,
+def test_extract_life_events_strips_new_and_legacy_protocols():
+    result = extract_life_events(
+        "准备吃饭<life-event>准备去吃饭，暂时忙一会儿</life-event>"
+        '<life-update>{"mood":"放松"}</life-update>'
     )
 
-    assert result == "早安"
-    # capture strong refs 后再 await，避免 weakset 中途 GC
-    tasks = list(pending)
-    assert len(tasks) == 1
-    await asyncio.gather(*tasks, return_exceptions=True)
-    life.apply_marker_patch.assert_called_once_with(
-        '{"mood": "happy"}', trigger="marker"
+    assert result.text == "准备吃饭"
+    assert result.events == (
+        "准备去吃饭，暂时忙一会儿",
+        '{"mood":"放松"}',
     )
+
+
+def test_extract_life_events_deduplicates_and_limits():
+    result = extract_life_events(
+        "正文<life-event>去吃饭</life-event>"
+        "<life-event>去吃饭</life-event>"
+        "<life-event>准备休息</life-event>",
+        max_events=1,
+    )
+
+    assert result.text == "正文"
+    assert result.events == ("去吃饭",)
+
+
+def test_extract_life_events_respects_total_downstream_budget():
+    blocks = "".join(
+        f"<life-event>{str(index) * 1200}</life-event>" for index in range(10)
+    )
+
+    result = extract_life_events(blocks, max_events=10)
+
+    assert len("\n".join(result.events)) <= LIFE_EVENT_TEXT_MAX_CHARS
 
 
 @pytest.mark.asyncio
 async def test_async_marker_no_marker_no_task():
-    """文本中没有 marker 时不创建任何 task。"""
+    """没有事件时不创建任何 task。"""
     life = MagicMock()
     lock = asyncio.Lock()
-    pending: set[asyncio.Task] = set()
+    pending: set[asyncio.Task[None]] = set()
 
-    result = extract_life_marker_async(
-        "纯净文本", life, enabled=True, apply_lock=lock, pending_tasks=pending,
+    schedule_life_events(
+        (),
+        life,
+        enabled=True,
+        llm=MagicMock(),
+        model="life-small",
+        apply_lock=lock,
+        pending_tasks=pending,
     )
 
-    assert result == "纯净文本"
     assert list(pending) == []
-    life.apply_marker_patch.assert_not_called()
+    life.apply_event.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_async_marker_disabled_strips_without_apply():
-    """enabled=False 时仍剥离标记块，但不调用 apply。"""
+    """enabled=False 时提取仍有效，但不调用 Life 模型。"""
     life = MagicMock()
     lock = asyncio.Lock()
-    pending: set[asyncio.Task] = set()
+    pending: set[asyncio.Task[None]] = set()
 
-    text = '早安<life-update>{}</life-update>'
-    result = extract_life_marker_async(
-        text, life, enabled=False, apply_lock=lock, pending_tasks=pending,
+    result = extract_life_events("早安<life-event>准备休息</life-event>")
+    schedule_life_events(
+        result.events,
+        life,
+        enabled=False,
+        llm=MagicMock(),
+        model="life-small",
+        apply_lock=lock,
+        pending_tasks=pending,
     )
 
-    assert result == "早安"
+    assert result.text == "早安"
     assert list(pending) == []
-    life.apply_marker_patch.assert_not_called()
+    life.apply_event.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_async_marker_serializes_under_lock():
-    """同一 lock 下的多个并发 task 必须串行执行，不可重入 apply。"""
+    """同一 lock 下的多个事件任务必须串行调用 Life 模型。"""
     apply_active = [False]
     call_order: list[str] = []
 
-    def slow_apply(raw: str, *, trigger: str) -> None:
-        # 进入临界区前断言：lock 没生效会两个 task 同时在这里
+    async def slow_apply(**kwargs: Any) -> None:
         assert not apply_active[0], "并发 apply 同时进入，lock 失效"
         apply_active[0] = True
-        # 模拟同步 IO 延迟（短一点避免拖慢测试）
-        import time
-
-        time.sleep(0.02)
-        call_order.append(raw)
+        await asyncio.sleep(0.02)
+        call_order.append(str(kwargs["event_text"]))
         apply_active[0] = False
 
     life = MagicMock()
-    life.apply_marker_patch.side_effect = slow_apply
+    life.settings.life_timeout_seconds = 1.0
+    life.apply_event = AsyncMock(side_effect=slow_apply)
     lock = asyncio.Lock()
-    pending: set[asyncio.Task] = set()
+    pending: set[asyncio.Task[None]] = set()
 
-    extract_life_marker_async(
-        "<life-update>a</life-update>",
+    schedule_life_events(
+        ("a",),
         life,
         enabled=True,
+        llm=MagicMock(),
+        model="life-small",
         apply_lock=lock,
         pending_tasks=pending,
     )
-    extract_life_marker_async(
-        "<life-update>b</life-update>",
+    schedule_life_events(
+        ("b",),
         life,
         enabled=True,
+        llm=MagicMock(),
+        model="life-small",
         apply_lock=lock,
         pending_tasks=pending,
     )
@@ -283,18 +309,23 @@ async def test_async_marker_serializes_under_lock():
 
 @pytest.mark.asyncio
 async def test_async_marker_swallows_apply_exception():
-    """apply 抛异常时 task 不向上传播，不影响主链路。"""
+    """Life 模型处理抛异常时 task 不向上传播。"""
     life = MagicMock()
-    life.apply_marker_patch.side_effect = RuntimeError("boom")
+    life.settings.life_timeout_seconds = 1.0
+    life.apply_event = AsyncMock(side_effect=RuntimeError("boom"))
     lock = asyncio.Lock()
-    pending: set[asyncio.Task] = set()
+    pending: set[asyncio.Task[None]] = set()
 
-    text = '<life-update>{}</life-update>'
-    result = extract_life_marker_async(
-        text, life, enabled=True, apply_lock=lock, pending_tasks=pending,
+    schedule_life_events(
+        ("准备休息",),
+        life,
+        enabled=True,
+        llm=MagicMock(),
+        model="life-small",
+        apply_lock=lock,
+        pending_tasks=pending,
     )
 
-    assert result == ""
     tasks = list(pending)
     results = await asyncio.gather(*tasks, return_exceptions=True)
     # 异常被吞，task 本身不应抛
