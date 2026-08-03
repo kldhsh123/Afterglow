@@ -312,7 +312,7 @@ class Settings(BaseSettings):
     analysis_proactive_enabled: bool = True
     # 单批交给最终分析模型的开聊记录数；较小可降低 JSON 截断概率。
     analysis_proactive_batch_size: int = Field(default=4, ge=1, le=12)
-    # 主动开聊原因分析的批次并发数；每批最多包含 8 次开聊。
+    # 主动开聊原因分析的批次并发数；每批最多包含 12 次开聊。
     analysis_proactive_max_concurrency: int = Field(default=4, ge=1)
     # 是否把关系分析中的作息、饮食、活动和忙闲习惯提供给生活时间线模型。
     analysis_life_context_enabled: bool = False

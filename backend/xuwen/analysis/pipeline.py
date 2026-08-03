@@ -125,7 +125,6 @@ async def analyze_relationship(
     results: list[BlockAnalysis] = []
     pending: list[tuple[AnalysisBlock, BlockAnalysis | None]] = []
     resumed = 0
-    requires_map = True
     for block in blocks:
         cached = storage.load_block(block.block_id) if resume else None
         experimental_cached = (
@@ -314,6 +313,9 @@ async def analyze_relationship(
             raise
 
         results.sort(key=lambda item: (item.start_time_ms, item.block_id))
+        requires_hierarchical_reduce = bool(
+            selected_targets & {"timeline", "life", "personality"}
+        )
         reduce_inputs = (
             await _hierarchical_results(
                 results,
@@ -322,8 +324,8 @@ async def analyze_relationship(
                 progress_cb=progress_cb,
                 timezone=settings.app_timezone,
             )
-            if requires_map
-            else []
+            if requires_hierarchical_reduce
+            else results
         )
 
         timeline_path: Path | None = None

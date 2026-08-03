@@ -398,6 +398,44 @@ async def test_stream_responses_refusal_raises_without_yielding_text():
 
 
 @pytest.mark.asyncio
+async def test_stream_chat_rejects_redirect_response():
+    settings = _settings()
+    async with httpx.AsyncClient() as raw:
+        client = LLMClient(settings, client=raw, max_retries=1)
+        with respx.mock(base_url=LLM_BASE) as router:
+            router.post("/chat/completions").mock(
+                return_value=httpx.Response(302, headers={"location": "https://other.test"})
+            )
+            with pytest.raises(LLMError, match="重定向"):
+                async for _piece in client.stream_chat(
+                    [{"role": "user", "content": "x"}]
+                ):
+                    pass
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_reports_content_filter_instead_of_empty_stream():
+    settings = _settings()
+    sse_body = (
+        'data: {"choices":[{"delta":{},"finish_reason":"content_filter"}]}\n\n'
+        "data: [DONE]\n\n"
+    )
+    async with httpx.AsyncClient() as raw:
+        client = LLMClient(settings, client=raw)
+        with respx.mock(base_url=LLM_BASE) as router:
+            router.post("/chat/completions").mock(
+                return_value=httpx.Response(200, content=sse_body.encode("utf-8"))
+            )
+            with pytest.raises(LLMError, match="内容过滤") as caught:
+                async for _piece in client.stream_chat(
+                    [{"role": "user", "content": "x"}]
+                ):
+                    pass
+
+    assert caught.value.detail["reason"] == "content_filter"
+
+
+@pytest.mark.asyncio
 async def test_stream_chat_handles_malformed_chunks():
     """单条 chunk 解析失败时不影响整流；上游偶发非 JSON 行应被跳过。"""
     settings = _settings()

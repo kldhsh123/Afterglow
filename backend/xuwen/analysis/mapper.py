@@ -161,15 +161,28 @@ class AnalysisMapper:
         errors: list[str] = []
         raw_outputs: list[str] = []
         for attempt in range(2):
-            raw = await self.llm.complete_chat(
-                messages,
-                GenerationParams(
-                    temperature=self.settings.analysis_temperature,
-                    max_tokens=self.settings.analysis_max_tokens,
-                ),
-                model=self.settings.resolved_analysis_model,
-                stage="analysis.life.map" if attempt == 0 else "analysis.life.map.repair",
-            )
+            try:
+                raw = await self.llm.complete_chat(
+                    messages,
+                    GenerationParams(
+                        temperature=self.settings.analysis_temperature,
+                        max_tokens=self.settings.analysis_max_tokens,
+                    ),
+                    model=self.settings.resolved_analysis_model,
+                    stage=(
+                        "analysis.life.map"
+                        if attempt == 0
+                        else "analysis.life.map.repair"
+                    ),
+                )
+            except LLMError as exc:
+                if _is_model_refusal_error(exc):
+                    raise _refusal_output_error(
+                        block,
+                        stage="life_map",
+                        exc=exc,
+                    ) from exc
+                raise
             try:
                 obj = _parse_json_object(raw)
                 raw_habits = obj.get("life_habits")
@@ -223,19 +236,28 @@ class AnalysisMapper:
         errors: list[str] = []
         raw_outputs: list[str] = []
         for attempt in range(2):
-            raw = await self.llm.complete_chat(
-                messages,
-                GenerationParams(
-                    temperature=self.settings.analysis_temperature,
-                    max_tokens=self.settings.analysis_max_tokens,
-                ),
-                model=self.settings.resolved_analysis_model,
-                stage=(
-                    "analysis.experimental.map"
-                    if attempt == 0
-                    else "analysis.experimental.map.repair"
-                ),
-            )
+            try:
+                raw = await self.llm.complete_chat(
+                    messages,
+                    GenerationParams(
+                        temperature=self.settings.analysis_temperature,
+                        max_tokens=self.settings.analysis_max_tokens,
+                    ),
+                    model=self.settings.resolved_analysis_model,
+                    stage=(
+                        "analysis.experimental.map"
+                        if attempt == 0
+                        else "analysis.experimental.map.repair"
+                    ),
+                )
+            except LLMError as exc:
+                if _is_model_refusal_error(exc):
+                    raise _refusal_output_error(
+                        block,
+                        stage="experimental_map",
+                        exc=exc,
+                    ) from exc
+                raise
             try:
                 return _coerce_block_result(raw, block, experimental=True)
             except (ValueError, ValidationError) as exc:
@@ -912,3 +934,17 @@ def _is_model_refusal_error(exc: LLMError) -> bool:
         "message_refusal",
         "responses_refusal",
     }
+
+
+def _refusal_output_error(
+    block: AnalysisBlock,
+    *,
+    stage: str,
+    exc: LLMError,
+) -> AnalysisBlockOutputError:
+    return AnalysisBlockOutputError(
+        block.block_id,
+        stage=stage,
+        errors=[f"LLMError: {exc.message}"],
+        raw_outputs=[],
+    )

@@ -284,6 +284,7 @@ onMounted(load)
               <button
                 v-if="opening.previous_tail || opening.response_excerpt"
                 class="mt-3 inline-flex items-center gap-1.5 text-xs text-accent dark:text-night-accent"
+                :aria-expanded="expanded.has(opening.opening_id)"
                 @click="toggle(opening.opening_id)"
               >
                 {{ expanded.has(opening.opening_id) ? '收起对话上下文' : '查看对话上下文' }}

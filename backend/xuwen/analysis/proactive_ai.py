@@ -61,7 +61,7 @@ async def analyze_proactive_reasons(
                     llm=llm,
                     settings=settings,
                 )
-        except Exception:
+        except ValueError:
             if len(batch) > 1:
                 midpoint = len(batch) // 2
                 logger.info(
@@ -76,6 +76,9 @@ async def analyze_proactive_reasons(
                 )
                 return [*left, *right]
             logger.warning("主动开聊原因分析批次失败，保留未分析状态", exc_info=True)
+            return []
+        except Exception:
+            logger.warning("主动开聊原因分析请求失败，保留未分析状态", exc_info=True)
             return []
 
     batch_results = await asyncio.gather(*(analyze_batch(batch) for batch in batches))
@@ -269,13 +272,24 @@ def _ground_evidence(
     opening: ProactiveOpeningRecord,
     quotes: list[str],
 ) -> list[Evidence]:
-    source = "\n".join(
-        [opening.previous_tail, opening.content, opening.response_excerpt]
-    )
+    normalized_sources = [
+        "".join(text.split())
+        for text in (
+            opening.previous_tail,
+            opening.content,
+            opening.response_excerpt,
+        )
+        if text.strip()
+    ]
     evidence: list[Evidence] = []
     for raw in quotes:
         quote = " ".join(raw.split()).strip()[:300]
-        if not quote or quote not in source or any(item.quote == quote for item in evidence):
+        normalized_quote = "".join(quote.split())
+        if (
+            not normalized_quote
+            or not any(normalized_quote in source for source in normalized_sources)
+            or any(item.quote == quote for item in evidence)
+        ):
             continue
         evidence.append(
             Evidence(
