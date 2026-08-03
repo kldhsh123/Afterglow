@@ -12,6 +12,10 @@ from dataclasses import dataclass
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 
+from xuwen.analysis.proactive import (
+    load_proactive_analysis,
+    render_runtime_proactive_context,
+)
 from xuwen.chat_api.chat_pipeline import (
     available_sticker_names,
     build_policy_hint,
@@ -41,6 +45,7 @@ from xuwen.companion.response_policy import (
 )
 from xuwen.core.errors import RetrievalError
 from xuwen.core.models import RetrievalQuery, RetrievalResult
+from xuwen.core.time import local_now
 from xuwen.memory.writer import WritebackTurn
 from xuwen.persona.prompt import build_chat_messages
 
@@ -368,6 +373,15 @@ async def _generate_proactive_response(
     persist: bool = True,
 ) -> ProactiveResponse:
     base_life = state.life.snapshot()
+    proactive_analysis = load_proactive_analysis(
+        state.settings.analysis_data_dir / "proactive_analysis.json"
+    )
+    local_time = local_now(state.settings.app_timezone)
+    analysis_context = render_runtime_proactive_context(
+        proactive_analysis,
+        hour=local_time.hour,
+        weekday=local_time.weekday(),
+    )
     retrieval_query = "\n".join(
         part
         for part in [
@@ -377,6 +391,7 @@ async def _generate_proactive_response(
             f"可聊话题：{base_life.topic_seed}",
             f"内部背景：{req.private_context}" if req.private_context else "",
             f"话题方向：{req.topic_hint}" if req.topic_hint else "",
+            analysis_context,
         ]
         if part
     )
@@ -434,6 +449,7 @@ async def _generate_proactive_response(
         "retrieved_fused": len(retrieved.fused),
         "retrieved_live": len(retrieved.recent_live),
         "retrieved_response_pairs": len(retrieved.response_pairs),
+        "analysis_openings": len(proactive_analysis.openings) if proactive_analysis else 0,
         "relationship_hook": bool(_relationship_topic_hook(relationship_context)),
         "topic_hook_found": topic_hook.found,
         "topic_hook_source": topic_hook.source,

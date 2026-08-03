@@ -90,16 +90,30 @@ _TITLES: dict[str, str] = {
     "CROSS_RERANK_PROTOCOL": "粗排 API 协议",
     "CHUNKING_STRATEGY": "历史切分策略",
     "ADAPTIVE_CHUNK_MODEL_ENABLED": "启用模型自适应切分",
-    "ANALYSIS_API_URL": "块级分析接口地址",
-    "ANALYSIS_API_KEY": "块级分析接口密钥",
-    "ANALYSIS_MODEL": "块级分析模型",
     "ANALYSIS_LIFE_CONTEXT_ENABLED": "生活时间线使用作息与习惯分析",
-    "ANALYSIS_FINAL_MODEL": "最终报告与画像模型",
-    "ANALYSIS_FINAL_API_URL": "最终报告与画像接口地址",
-    "ANALYSIS_FINAL_API_KEY": "最终报告与画像接口密钥",
     "ANALYSIS_PERSONALITY_PROMPT_ENABLED": "聊天 AI 使用普通人格画像",
-    "ANALYSIS_EXPERIMENTAL_ENABLED": "生成实验性关系信号",
-    "ANALYSIS_EXPERIMENTAL_PROMPT_ENABLED": "聊天 AI 使用实验性关系信号",
+}
+
+# 完整聊天记录分析只通过 CLI、.env 和高级文档配置，不进入配置向导。
+_EXCLUDED_SCHEMA_KEYS: set[str] = {
+    "ANALYSIS_API_URL",
+    "ANALYSIS_API_KEY",
+    "ANALYSIS_MODEL",
+    "ANALYSIS_FINAL_API_URL",
+    "ANALYSIS_FINAL_API_KEY",
+    "ANALYSIS_FINAL_MODEL",
+    "ANALYSIS_TEMPERATURE",
+    "ANALYSIS_MAX_TOKENS",
+    "ANALYSIS_FINAL_MAX_TOKENS",
+    "ANALYSIS_TIMEOUT_SECONDS",
+    "ANALYSIS_BLOCK_CHAR_BUDGET",
+    "ANALYSIS_MAX_CONCURRENCY",
+    "ANALYSIS_REQUEST_INTERVAL_SECONDS",
+    "ANALYSIS_PROACTIVE_ENABLED",
+    "ANALYSIS_PROACTIVE_BATCH_SIZE",
+    "ANALYSIS_PROACTIVE_MAX_CONCURRENCY",
+    "ANALYSIS_EXPERIMENTAL_ENABLED",
+    "ANALYSIS_EXPERIMENTAL_PROMPT_ENABLED",
 }
 
 # 高级字段（向导默认折叠）。
@@ -126,23 +140,8 @@ _ADVANCED_KEYS: set[str] = {
     "ADAPTIVE_CHUNK_OVERLAP_TURNS",
     "ADAPTIVE_CHUNK_SOFT_GAP_MINUTES",
     "ADAPTIVE_CHUNK_MAX_CONCURRENCY",
-    "ANALYSIS_API_URL",
-    "ANALYSIS_API_KEY",
-    "ANALYSIS_MODEL",
-    "ANALYSIS_FINAL_API_URL",
-    "ANALYSIS_FINAL_API_KEY",
-    "ANALYSIS_FINAL_MODEL",
-    "ANALYSIS_TEMPERATURE",
-    "ANALYSIS_MAX_TOKENS",
-    "ANALYSIS_FINAL_MAX_TOKENS",
-    "ANALYSIS_TIMEOUT_SECONDS",
-    "ANALYSIS_BLOCK_CHAR_BUDGET",
-    "ANALYSIS_MAX_CONCURRENCY",
-    "ANALYSIS_REQUEST_INTERVAL_SECONDS",
     "ANALYSIS_LIFE_CONTEXT_ENABLED",
     "ANALYSIS_PERSONALITY_PROMPT_ENABLED",
-    "ANALYSIS_EXPERIMENTAL_ENABLED",
-    "ANALYSIS_EXPERIMENTAL_PROMPT_ENABLED",
     "RESPONSE_PAIR_TOP_K",
     "FRIEND_TOP_K",
     "WINDOW_TOP_K",
@@ -150,6 +149,7 @@ _ADVANCED_KEYS: set[str] = {
     "LIVE_TOP_K",
     "FINAL_CONTEXT_K",
     "RRF_K",
+    "RETRIEVAL_TIMEOUT_SECONDS",
     "RECENCY_HALF_LIFE_DAYS",
     "RECENCY_MAX_BOOST",
     "WARMTH_BOOST",
@@ -366,6 +366,8 @@ def build_schema(example_path: Path) -> SchemaSnapshot:
     # 用 Settings 的字段顺序遍历，保证 schema 顺序稳定
     for name, info in Settings.model_fields.items():
         key = name.upper()
+        if key in _EXCLUDED_SCHEMA_KEYS:
+            continue
         if key not in group_map and key not in _TITLES:
             # 既不在 .env.example 也不在显式标题表里 → 跳过（避免暴露内部字段）
             continue

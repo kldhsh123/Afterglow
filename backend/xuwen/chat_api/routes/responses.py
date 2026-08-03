@@ -74,7 +74,6 @@ from xuwen.persona.prompt import build_chat_messages
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["responses"])
 
-_RESPONSES_RETRIEVAL_TIMEOUT_SECONDS = 15.0
 _RESPONSES_RELATIONSHIP_TIMEOUT_SECONDS = 5.0
 
 
@@ -159,7 +158,7 @@ async def responses(
                     metrics=state.metrics,
                     trace_id=trace_id,
                 ),
-                timeout=_RESPONSES_RETRIEVAL_TIMEOUT_SECONDS,
+                timeout=state.settings.retrieval_timeout_seconds,
             )
             state.metrics.record(
                 "retrieval",
@@ -170,7 +169,7 @@ async def responses(
         except TimeoutError:
             logger.warning(
                 "Responses 检索超时 %.1fs，降级到无 RAG 模式",
-                _RESPONSES_RETRIEVAL_TIMEOUT_SECONDS,
+                state.settings.retrieval_timeout_seconds,
             )
             state.metrics.record("retrieval", 0.0, error="TimeoutError")
             return empty_retrieval_result()

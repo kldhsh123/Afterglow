@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import pytest
+
 from xuwen.config import Settings
 from xuwen.ingestion.cli import (
     _auto_build_vector_indices,
+    _build_parser,
     _rebuild_proactive_profile_from_store,
 )
 from xuwen.persona.proactive_profile import (
@@ -18,9 +21,54 @@ class _FakeStore:
         self.rows = rows
         self.limit: int | None = None
 
-    async def list_dialogue_windows(self, limit: int = 10_000) -> list[dict[str, object]]:
+    async def list_dialogue_windows(
+        self,
+        limit: int = 10_000,
+    ) -> list[dict[str, object]]:
         self.limit = limit
         return self.rows
+
+
+def test_analyze_cli_accepts_repeated_targets() -> None:
+    args = _build_parser().parse_args(
+        [
+            "analyze",
+            "chat.json",
+            "--target",
+            "timeline",
+            "--target",
+            "personality",
+        ]
+    )
+
+    assert args.targets == ["timeline", "personality"]
+
+
+def test_proactive_analysis_has_a_separate_cli_command() -> None:
+    args = _build_parser().parse_args(
+        ["analyze-proactive", "chat.json", "--since", "2025-01"]
+    )
+
+    assert args.cmd == "analyze-proactive"
+    assert args.paths[0].name == "chat.json"
+    assert args.since == "2025-01"
+
+
+def test_relationship_analysis_rejects_proactive_target() -> None:
+    with pytest.raises(SystemExit):
+        _build_parser().parse_args(
+            ["analyze", "chat.json", "--target", "proactive"]
+        )
+
+
+def test_analyze_cli_keeps_legacy_single_target_flags() -> None:
+    parser = _build_parser()
+
+    timeline = parser.parse_args(["analyze", "chat.json", "--timeline-only"])
+    personality = parser.parse_args(["analyze", "chat.json", "--personality-only"])
+
+    assert timeline.timeline_only is True
+    assert personality.personality_only is True
 
 
 async def test_rebuild_proactive_profile_from_store_saves_combined_rows(tmp_path) -> None:

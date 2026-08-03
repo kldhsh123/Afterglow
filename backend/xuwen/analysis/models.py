@@ -41,6 +41,34 @@ LifeTargetField = Literal[
     "reply_delay_seconds",
     "topic_seed",
 ]
+ProactiveOpeningType = Literal[
+    "greeting",
+    "life_check",
+    "care",
+    "continue_topic",
+    "self_share",
+    "playful",
+    "affection",
+    "wake_ping",
+    "short_ping",
+    "question_probe",
+    "night_ping",
+    "other",
+]
+ProactiveReasonCategory = Literal[
+    "continue_topic",
+    "event_trigger",
+    "care",
+    "self_share",
+    "question",
+    "emotional_need",
+    "routine",
+    "greeting",
+    "playful",
+    "affection",
+    "other",
+    "unknown",
+]
 
 
 def utc_now_iso() -> str:
@@ -165,6 +193,67 @@ class LifeProfile(BaseModel):
     generated_at: str = Field(default_factory=utc_now_iso)
     summary: str = ""
     habits: list[LifeHabit] = Field(default_factory=list)
+
+
+class ProactivePeriodCount(BaseModel):
+    period: str
+    count: int = Field(ge=0)
+
+
+class ProactiveOpeningRecord(BaseModel):
+    opening_id: str
+    session_id: str
+    initiator: Literal["friend", "self"] = "friend"
+    timestamp_ms: int
+    occurred_at: str
+    hour: int = Field(ge=0, le=23)
+    weekday: int = Field(ge=0, le=6)
+    idle_gap_minutes: int | None = Field(default=None, ge=0)
+    opening_type: ProactiveOpeningType = "other"
+    messages: list[str] = Field(default_factory=list)
+    content: str = ""
+    message_count: int = Field(default=0, ge=0)
+    previous_tail: str = ""
+    response_excerpt: str = ""
+    reason_category: ProactiveReasonCategory | None = None
+    reason_summary: str = ""
+    time_explanation: str = ""
+    reason_evidence: list[Evidence] = Field(default_factory=list, max_length=4)
+    reason_confidence: float | None = Field(default=None, ge=0, le=1)
+    reason_alternative_explanations: list[str] = Field(default_factory=list, max_length=4)
+
+
+class ProactiveAnalysisReport(BaseModel):
+    """完整的对方主动开聊统计，也是运行时调度画像的首选数据源。"""
+
+    schema_version: int = 1
+    generated_at: str = Field(default_factory=utc_now_iso)
+    session_gap_minutes: int = Field(default=30, ge=1)
+    source_session_count: int = Field(default=0, ge=0)
+    source_message_count: int = Field(default=0, ge=0)
+    eligible_session_count: int = Field(default=0, ge=0)
+    initiative_count: int = Field(default=0, ge=0)
+    opening_count: int = Field(default=0, ge=0)
+    friend_initiative_count: int = Field(default=0, ge=0)
+    self_started_count: int = Field(default=0, ge=0)
+    unknown_started_count: int = Field(default=0, ge=0)
+    initiative_rate: float = Field(default=0, ge=0, le=1)
+    range_start: str = ""
+    range_end: str = ""
+    span_days: int = Field(default=0, ge=0)
+    active_days: int = Field(default=0, ge=0)
+    average_per_30_days: float = Field(default=0, ge=0)
+    median_idle_gap_minutes: int | None = Field(default=None, ge=0)
+    hour_counts: list[int] = Field(default_factory=lambda: [0] * 24)
+    weekday_counts: list[int] = Field(default_factory=lambda: [0] * 7)
+    monthly_counts: list[ProactivePeriodCount] = Field(default_factory=list)
+    opening_type_counts: dict[ProactiveOpeningType, int] = Field(default_factory=dict)
+    reason_counts: dict[ProactiveReasonCategory, int] = Field(default_factory=dict)
+    ai_analysis_status: Literal["not_requested", "completed", "partial", "failed"] = (
+        "not_requested"
+    )
+    ai_analyzed_count: int = Field(default=0, ge=0)
+    openings: list[ProactiveOpeningRecord] = Field(default_factory=list)
 
 
 class ExperimentalReport(BaseModel):

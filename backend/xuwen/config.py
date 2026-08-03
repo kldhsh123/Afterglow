@@ -308,6 +308,12 @@ class Settings(BaseSettings):
     analysis_block_char_budget: int = 10_000
     analysis_max_concurrency: int = 3
     analysis_request_interval_seconds: float = 0.0
+    # 是否让分析模型解释双方每次重新开聊的动机和时间原因。
+    analysis_proactive_enabled: bool = True
+    # 单批交给最终分析模型的开聊记录数；较小可降低 JSON 截断概率。
+    analysis_proactive_batch_size: int = Field(default=4, ge=1, le=12)
+    # 主动开聊原因分析的批次并发数；每批最多包含 12 次开聊。
+    analysis_proactive_max_concurrency: int = Field(default=4, ge=1)
     # 是否把关系分析中的作息、饮食、活动和忙闲习惯提供给生活时间线模型。
     analysis_life_context_enabled: bool = False
     # 是否把去证据的普通人格画像提供给主聊天模型；默认关闭。
@@ -325,6 +331,8 @@ class Settings(BaseSettings):
     live_top_k: int = 12
     final_context_k: int = 12
     rrf_k: int = 60
+    # 单轮完整记忆检索（改写、向量化、召回和重排）的总时间预算。
+    retrieval_timeout_seconds: float = 15.0
     # 每路向量召回的 overfetch 倍数：实际 limit = top_k × retrieval_overfetch。
     # 下游 _filter_xxx_rows 会丢弃 low_signal / echo / 无 friend 信号窗口（~20-40%），
     # 跨 query rewrite variant 还要去重，retrieval_overfetch 是给这些损耗的余量。
@@ -662,6 +670,7 @@ class Settings(BaseSettings):
         "vision_timeout_seconds",
         "embedding_timeout_seconds",
         "adaptive_chunk_timeout_seconds",
+        "retrieval_timeout_seconds",
         "query_rewrite_timeout_seconds",
         "rerank_timeout_seconds",
         "cross_rerank_timeout_seconds",

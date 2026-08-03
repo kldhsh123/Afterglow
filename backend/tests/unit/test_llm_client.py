@@ -112,6 +112,34 @@ async def test_complete_chat_returns_content():
 
 
 @pytest.mark.asyncio
+async def test_complete_chat_reports_content_filter_instead_of_returning_empty_text():
+    settings = _settings()
+    async with httpx.AsyncClient() as raw:
+        client = LLMClient(settings, client=raw)
+        with respx.mock(base_url=LLM_BASE) as router:
+            router.post("/chat/completions").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "choices": [
+                            {
+                                "message": {"content": ""},
+                                "finish_reason": "content_filter",
+                            }
+                        ]
+                    },
+                )
+            )
+            with pytest.raises(LLMError, match="内容过滤") as caught:
+                await client.complete_chat([{"role": "user", "content": "x"}])
+
+    assert caught.value.detail == {
+        "request_id": None,
+        "reason": "content_filter",
+    }
+
+
+@pytest.mark.asyncio
 async def test_model_chain_summary_includes_schedule_debug():
     settings = _settings()
     metrics = MetricsRecorder()
@@ -211,6 +239,33 @@ async def test_complete_chat_retries_on_5xx():
             router.post("/chat/completions").mock(side_effect=lambda req: next(seq))
             text = await client.complete_chat([{"role": "user", "content": "x"}])
     assert text == "ok"
+
+
+@pytest.mark.asyncio
+async def test_complete_chat_retries_redirect_without_following_location():
+    settings = _settings()
+    async with httpx.AsyncClient() as raw:
+        client = LLMClient(settings, client=raw)
+        with respx.mock(base_url=LLM_BASE) as router:
+            seq = iter(
+                [
+                    httpx.Response(
+                        301,
+                        headers={"location": "https://redirect.test/chat/completions"},
+                    ),
+                    httpx.Response(
+                        200,
+                        json={"choices": [{"message": {"content": "ok"}}]},
+                    ),
+                ]
+            )
+            route = router.post("/chat/completions").mock(
+                side_effect=lambda req: next(seq)
+            )
+            text = await client.complete_chat([{"role": "user", "content": "x"}])
+
+    assert text == "ok"
+    assert route.call_count == 2
 
 
 @pytest.mark.asyncio
@@ -340,6 +395,44 @@ async def test_stream_responses_refusal_raises_without_yielding_text():
                     chunks.append(piece)
 
     assert chunks == []
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_rejects_redirect_response():
+    settings = _settings()
+    async with httpx.AsyncClient() as raw:
+        client = LLMClient(settings, client=raw, max_retries=1)
+        with respx.mock(base_url=LLM_BASE) as router:
+            router.post("/chat/completions").mock(
+                return_value=httpx.Response(302, headers={"location": "https://other.test"})
+            )
+            with pytest.raises(LLMError, match="重定向"):
+                async for _piece in client.stream_chat(
+                    [{"role": "user", "content": "x"}]
+                ):
+                    pass
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_reports_content_filter_instead_of_empty_stream():
+    settings = _settings()
+    sse_body = (
+        'data: {"choices":[{"delta":{},"finish_reason":"content_filter"}]}\n\n'
+        "data: [DONE]\n\n"
+    )
+    async with httpx.AsyncClient() as raw:
+        client = LLMClient(settings, client=raw)
+        with respx.mock(base_url=LLM_BASE) as router:
+            router.post("/chat/completions").mock(
+                return_value=httpx.Response(200, content=sse_body.encode("utf-8"))
+            )
+            with pytest.raises(LLMError, match="内容过滤") as caught:
+                async for _piece in client.stream_chat(
+                    [{"role": "user", "content": "x"}]
+                ):
+                    pass
+
+    assert caught.value.detail["reason"] == "content_filter"
 
 
 @pytest.mark.asyncio

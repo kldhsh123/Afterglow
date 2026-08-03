@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from xuwen.analysis.models import ProactiveAnalysisReport
 from xuwen.core.models import MessageKind, NormalizedMessage, Session
 from xuwen.core.time import now_ms
 
@@ -229,6 +230,47 @@ def compute_proactive_profile_from_window_rows(
         samples,
         self_started=self_started,
         total_sessions=len(ordered),
+        min_gap_minutes=min_gap_minutes,
+        sample_limit=sample_limit,
+    )
+
+
+def compute_proactive_profile_from_analysis(
+    report: ProactiveAnalysisReport,
+    *,
+    min_gap_minutes: int,
+    sample_limit: int = 12,
+) -> ProactiveProfile:
+    """把离线主动开聊报告转换成运行时调度画像。"""
+    samples: list[ProactiveOpeningSample] = []
+    for opening in report.openings:
+        gap = opening.idle_gap_minutes
+        if (
+            opening.initiator != "friend"
+            or gap is None
+            or gap < min_gap_minutes
+            or not _usable_text(opening.content)
+        ):
+            continue
+        samples.append(
+            ProactiveOpeningSample(
+                timestamp_ms=opening.timestamp_ms,
+                hour=opening.hour,
+                weekday=opening.weekday,
+                idle_gap_minutes=gap,
+                idle_bucket=idle_gap_bucket(gap),
+                # 当前分析报告未保存上一轮末句的说话方，不能靠文本猜测。
+                previous_last_speaker="unknown",
+                opening_type=opening.opening_type,
+                opening_text=_short(opening.content, 80),
+                previous_tail=_short(opening.previous_tail, 80),
+            )
+        )
+
+    return _build_profile(
+        samples,
+        self_started=report.self_started_count,
+        total_sessions=report.source_session_count,
         min_gap_minutes=min_gap_minutes,
         sample_limit=sample_limit,
     )
