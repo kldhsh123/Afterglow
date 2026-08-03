@@ -83,6 +83,10 @@ uv run python scripts/analyze_persona.py chat.json chunks/*.jsonl
 # 可选：从原始聊天文件生成关系时间线和性格报告
 uv run python -m xuwen.ingestion.cli analyze chat.json chunks/*.jsonl
 
+# 主动消息倾向不会随关系分析自动运行，需单独执行并检查质量
+uv run xuwen analyze-proactive chat.json chunks/*.jsonl
+uv run python scripts/check_proactive_quality.py
+
 # 可选：导入历史图片
 uv run python -m xuwen.ingestion.cli import-images export-dir
 

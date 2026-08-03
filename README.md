@@ -52,8 +52,9 @@ Afterglow 是一个本地运行的 AI 朋友系统。它把真实聊天记录清
 |---|---|
 | 多源导入 | 支持 QQChatExporter、WeFlow、Douyin Chat Export、Afterglow Chat 的 JSON / JSONL，以及多文件画像合并 |
 | 分层混合检索 | 三类历史文本、历史图片摘要与 Live 记忆五路向量召回，RRF 融合并可选 Query Rewrite / Reranker |
-| 人格与状态 | Persona、场景风格、作息画像、生活时间线、关系记忆与互动决策 |
-| 关系分析 | 从原始聊天记录离线生成关系时间线与性格报告；实验性观察默认隔离且关闭 |
+| 人格与状态 | Persona、场景风格、作息画像、Life 状态、可选分析画像、关系记忆与互动决策 |
+| 离线关系分析 | `xuwen analyze` 显式生成时间线、人格与 Life 报告；报告是否进入运行时由各自开关控制 |
+| 主动消息倾向 | `xuwen analyze-proactive` 单独生成主动倾向报告；只读质量检查通过后再由用户决定是否启用 |
 | 记忆分层 | 区分真人历史、用户新消息和 AI 回复，默认防止 AI 内容污染长期人格 |
 | 开放接入 | 同时提供 OpenAI Chat Completions 与 Responses API，可接入第三方客户端 |
 | 本地优先 | LanceDB、本地 persona 和资源缓存，支持 PII 脱敏、Bearer 鉴权与全离线模型服务 |
@@ -77,10 +78,12 @@ flowchart LR
     LayerA --> Life["LifeStateManager<br/>life_state + 作息画像 + LIFE_*"]
     LayerA --> Relationship["关系记忆<br/>用户近况蒸馏"]
     Auth --> Policy["本轮互动决策层<br/>规则引擎 + 可选小模型复核"]
+    Auth --> Proactive["主动消息引擎<br/>画像调度 + 防打扰门控"]
     Auth --> Web["可选联网搜索<br/>URL 网页读取"]
     Retrieve --> Policy
     Life --> Policy
     Relationship --> Policy
+    Proactive --> Prompt
     Policy --> Prompt["Prompt Builder<br/>persona + 记忆 + 状态 + 决策"]
     Web --> Prompt
     Prompt --> ChatLLM["主聊天模型<br/>OpenAI 兼容"]
@@ -100,16 +103,25 @@ flowchart LR
     Split --> Chunk["三类历史文本 chunk<br/>friend / window / response_pair"]
     Chunk --> Embed["Embedding 模型"]
     Chunk --> Label["可选打标签小模型"]
-    Split --> PersonaBuild["persona / style / circadian 画像"]
+    Split --> PersonaBuild["persona / style / circadian<br/>轻量主动画像"]
     message --> ImageImport["import-images<br/>图片引用 + 原图"]
     ImageImport --> Vision["VLM 图片摘要"]
     Vision --> ImageEmbed["摘要 Embedding"]
+  end
+
+  subgraph OfflineAnalysis["显式离线分析（不随导入自动运行）"]
+    message --> RelationshipAnalysis["xuwen analyze<br/>时间线 / 人格 / Life / 实验画像"]
+    message --> ProactiveAnalysis["xuwen analyze-proactive<br/>主动倾向统计 + 可选 AI 归因"]
+    ProactiveAnalysis --> QualityCheck["只读质量检查<br/>ready / limited / not_ready"]
   end
 
   subgraph Storage["本地持久化"]
     Lance[(LanceDB<br/>A/B/C 文本历史 + D 图片摘要<br/>live + relationship)]
     Persona["persona_card.md<br/>persona_style_profile.json"]
     Circadian["circadian_profile.json<br/>真实作息画像"]
+    LegacyProactive["proactive_profile.json<br/>导入期轻量主动画像"]
+    AnalysisReports["timeline / personality / life<br/>显式关系分析产物"]
+    ProactiveReport["proactive_analysis.json<br/>独立主动倾向报告"]
     LifeFile["life_state.json<br/>当天生活时间线"]
     ImageCache["历史原图缓存<br/>.data/images"]
     Stickers["表情包缓存<br/>.data/stickers/index.json + 文件"]
@@ -121,9 +133,15 @@ flowchart LR
   Label --> Lance
   PersonaBuild --> Persona
   PersonaBuild --> Circadian
+  PersonaBuild --> LegacyProactive
+  RelationshipAnalysis --> AnalysisReports
+  ProactiveAnalysis --> ProactiveReport
   Retrieve --> Lance
   Relationship --> Lance
   Prompt --> Persona
+  AnalysisReports -. "按独立开关注入人格 / Life；时间线仅展示" .-> Prompt
+  ProactiveReport -. "优先调度画像与话题检索" .-> Proactive
+  LegacyProactive -. "报告缺失时回退" .-> Proactive
   Life --> Circadian
   Life --> LifeFile
   LifePatch --> LifeFile
@@ -133,8 +151,10 @@ flowchart LR
   API --> Stickers
 ```
 
-- **离线导入**：文本生成 A/B/C 三类历史索引和人格画像；可选图片导入使用 VLM 生成摘要，写入 D 类 `history_images` 向量表。
+- **离线导入**：文本生成 A/B/C 三类历史索引，以及 persona、风格、作息和轻量主动画像；不会运行时间线、人格报告或主动消息 AI 归因。
+- **显式分析**：`xuwen analyze` 生成时间线、人格和 Life 等关系报告；`xuwen analyze-proactive` 是完全独立的主动倾向入口，生成后可用只读脚本检查是否适合启用。
 - **在线对话**：HybridRetriever 并发执行五路向量召回并读取 Recent Live；外层再与关系记忆、生活状态并发，经互动决策组装 Prompt。
+- **运行时消费**：时间线当前只供查看；人格与 Life 分别受独立开关控制；主动消息优先使用主动倾向报告，无有效报告时回退导入期轻量画像。
 - **本地持久化**：向量、persona、作息、生活状态、图片与表情资源默认保存在本机。
 
 完整能力地图和关键设计见[架构文档](https://github.com/kldhsh123/Afterglow/wiki/整体架构)。

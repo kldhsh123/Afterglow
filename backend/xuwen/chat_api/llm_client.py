@@ -2,7 +2,7 @@
 
 特性：
 - 同时支持流式（SSE delta）与非流式
-- 指数退避重试 5xx / 429 / 网络错误；4xx 立即失败
+- 指数退避重试 3xx / 5xx / 429 / 网络错误；4xx 立即失败
 - 错误信息不回显响应正文（避免泄露 prompt 与 key 详情）
 """
 
@@ -286,6 +286,26 @@ class LLMClient:
             ) from e
 
         request_id = resp.headers.get("x-request-id") or resp.headers.get("request-id")
+        if 300 <= resp.status_code < 400:
+            _record_model_call(
+                metrics,
+                trace_id=trace_id,
+                stage=stage,
+                attempt=attempt_number,
+                payload=payload,
+                url=self._url,
+                latency_ms=(time.perf_counter() - start) * 1000,
+                status="error",
+                status_code=resp.status_code,
+                upstream_request_id=request_id or "",
+                request=request_summary,
+                response=_response_summary(resp.text, include_full=include_full_payloads),
+                error=f"HTTP {resp.status_code}",
+            )
+            raise _RetryableLLMError(
+                f"LLM 上游返回重定向（HTTP {resp.status_code}）",
+                detail={"status": resp.status_code, "request_id": request_id},
+            )
         if resp.status_code in (429,) or 500 <= resp.status_code < 600:
             _record_model_call(
                 metrics,
@@ -350,7 +370,29 @@ class LLMClient:
                 detail={"status": resp.status_code, "request_id": request_id},
             ) from e
 
-        if self._api_protocol == "responses":
+        if self._api_protocol == "chat_completions":
+            refusal_reason = _chat_completion_refusal_reason(data)
+            if refusal_reason:
+                _record_model_call(
+                    metrics,
+                    trace_id=trace_id,
+                    stage=stage,
+                    attempt=attempt_number,
+                    payload=payload,
+                    url=self._url,
+                    latency_ms=(time.perf_counter() - start) * 1000,
+                    status="error",
+                    status_code=resp.status_code,
+                    upstream_request_id=request_id or "",
+                    request=request_summary,
+                    response=_json_response_summary(data),
+                    error=refusal_reason,
+                )
+                raise LLMError(
+                    "主模型触发内容过滤",
+                    detail={"request_id": request_id, "reason": refusal_reason},
+                )
+        else:
             failure = _responses_failure_reason(data)
             if failure:
                 _record_model_call(
@@ -716,6 +758,21 @@ def _responses_has_refusal(data: dict[str, Any]) -> bool:
         ):
             return True
     return False
+
+
+def _chat_completion_refusal_reason(data: dict[str, Any]) -> str:
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return ""
+    choice = choices[0]
+    if not isinstance(choice, dict):
+        return ""
+    if choice.get("finish_reason") == "content_filter":
+        return "content_filter"
+    message = choice.get("message")
+    if isinstance(message, dict) and message.get("refusal"):
+        return "message_refusal"
+    return ""
 
 
 def _attempt_number(state: RetryCallState) -> int:

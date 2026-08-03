@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,9 +24,19 @@ from xuwen.analysis.models import (
     LifeProfile,
     Observation,
     PersonalityReport,
+    ProactiveAnalysisReport,
     ReportSection,
 )
 from xuwen.analysis.pipeline import AnalysisPipelineError, analyze_relationship
+from xuwen.analysis.proactive import (
+    analyze_proactive_openings,
+    render_runtime_proactive_context,
+)
+from xuwen.analysis.proactive_ai import (
+    analyze_proactive_reasons,
+    merge_cached_proactive_reasons,
+)
+from xuwen.analysis.proactive_runner import analyze_proactive_tendency
 from xuwen.analysis.reducers import (
     reduce_experimental,
     reduce_personality,
@@ -38,6 +49,7 @@ from xuwen.chat_api.companion_prompt import (
     load_experimental_prompt_context,
     load_personality_prompt_context,
 )
+from xuwen.chat_api.llm_client import GenerationParams
 from xuwen.chat_api.routes.analysis import router
 from xuwen.chat_api.state import get_state
 from xuwen.config import Settings
@@ -170,6 +182,362 @@ def test_analysis_blocks_use_last_included_message_as_split_end_time() -> None:
         (timestamps[1], timestamps[1]),
         (timestamps[2], timestamps[2]),
     ]
+
+
+def test_proactive_analysis_keeps_both_sides_opening_messages() -> None:
+    base = 1_700_000_000_000
+    sessions = [
+        Session(
+            session_id="sess-first",
+            messages=[
+                _message("m1", base, self_message=False, text="早"),
+                _message("m2", base + 30_000, self_message=False, text="起床了吗"),
+                _message("m3", base + 60_000, self_message=True, text="起来了"),
+            ],
+            start_time_ms=base,
+            end_time_ms=base + 60_000,
+        ),
+        Session(
+            session_id="sess-self",
+            messages=[
+                _message("m4", base + 3_600_000, self_message=True, text="吃饭了吗"),
+                _message("m5", base + 3_660_000, self_message=False, text="吃了"),
+            ],
+            start_time_ms=base + 3_600_000,
+            end_time_ms=base + 3_660_000,
+        ),
+        Session(
+            session_id="sess-later",
+            messages=[
+                _message("m6", base + 10_800_000, self_message=False, text="我刚看到一个视频"),
+                _message("m7", base + 10_830_000, self_message=False, text="笑死我了"),
+                _message("m8", base + 10_860_000, self_message=True, text="发来看看"),
+            ],
+            start_time_ms=base + 10_800_000,
+            end_time_ms=base + 10_860_000,
+        ),
+    ]
+
+    report = analyze_proactive_openings(sessions, timezone="Asia/Shanghai")
+
+    assert isinstance(report, ProactiveAnalysisReport)
+    assert report.initiative_count == 2
+    assert report.opening_count == 3
+    assert report.friend_initiative_count == 2
+    assert report.self_started_count == 1
+    assert report.eligible_session_count == 3
+    assert report.initiative_rate == pytest.approx(2 / 3, abs=0.0001)
+    assert report.openings[0].messages == ["早", "起床了吗"]
+    assert report.openings[0].idle_gap_minutes is None
+    assert report.openings[1].initiator == "self"
+    assert report.openings[1].messages == ["吃饭了吗"]
+    assert report.openings[1].response_excerpt == "吃了"
+    assert report.openings[2].messages == ["我刚看到一个视频", "笑死我了"]
+    assert report.openings[2].idle_gap_minutes == 119
+    assert report.openings[2].opening_type == "self_share"
+    assert sum(report.hour_counts) == 2
+    assert sum(report.weekday_counts) == 2
+    assert sum(item.count for item in report.monthly_counts) == 2
+
+
+class _ProactiveReasonLlm:
+    def __init__(self, opening_id: str) -> None:
+        self.opening_id = opening_id
+        self.stages: list[str] = []
+        self.max_tokens: list[int] = []
+
+    async def complete_chat(
+        self,
+        _messages: object,
+        _params: GenerationParams,
+        **kwargs: object,
+    ) -> str:
+        self.stages.append(str(kwargs.get("stage")))
+        self.max_tokens.append(_params.max_tokens)
+        return json.dumps(
+            {
+                "analyses": [
+                    {
+                        "opening_id": self.opening_id,
+                        "reason_category": "care",
+                        "reason_summary": "可能想确认对方最近的状态",
+                        "time_explanation": "记录中没有足够信息解释为何选择这个时间",
+                        "evidence_quotes": ["最近还好吗", "模型编造的证据"],
+                        "confidence": 0.78,
+                        "alternative_explanations": ["也可能只是固定早间问候"],
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        )
+
+
+async def test_ai_analyzes_opening_reason_and_grounds_evidence() -> None:
+    report = analyze_proactive_openings([_session()], timezone="Asia/Shanghai")
+    opening = report.openings[0]
+    llm = _ProactiveReasonLlm(opening.opening_id)
+
+    analyzed = await analyze_proactive_reasons(
+        report,
+        llm=llm,  # type: ignore[arg-type]
+        settings=Settings(analysis_final_max_tokens=4321),
+    )
+
+    result = analyzed.openings[0]
+    assert analyzed.ai_analysis_status == "completed"
+    assert analyzed.ai_analyzed_count == 1
+    assert analyzed.reason_counts == {"care": 1}
+    assert result.reason_category == "care"
+    assert result.reason_summary == "可能想确认对方最近的状态"
+    assert result.time_explanation == "记录中没有足够信息解释为何选择这个时间"
+    assert [evidence.quote for evidence in result.reason_evidence] == ["最近还好吗"]
+    assert result.reason_confidence == 0.78
+    assert llm.stages == ["analysis.proactive.reasons"]
+    assert llm.max_tokens == [4321]
+
+
+class _RepairingProactiveReasonLlm(_ProactiveReasonLlm):
+    async def complete_chat(
+        self,
+        messages: object,
+        params: GenerationParams,
+        **kwargs: object,
+    ) -> str:
+        if not self.stages:
+            self.stages.append(str(kwargs.get("stage")))
+            self.max_tokens.append(params.max_tokens)
+            return "我先解释一下这些开聊记录。"
+        return await super().complete_chat(messages, params, **kwargs)
+
+
+async def test_ai_repairs_non_json_batch_response_once() -> None:
+    report = analyze_proactive_openings([_session()], timezone="Asia/Shanghai")
+    llm = _RepairingProactiveReasonLlm(report.openings[0].opening_id)
+
+    analyzed = await analyze_proactive_reasons(
+        report,
+        llm=llm,  # type: ignore[arg-type]
+        settings=Settings(),
+    )
+
+    assert analyzed.ai_analysis_status == "completed"
+    assert analyzed.openings[0].reason_category == "care"
+    assert llm.stages == [
+        "analysis.proactive.reasons",
+        "analysis.proactive.reasons.repair",
+    ]
+
+
+class _TruncatingProactiveReasonLlm:
+    def __init__(self) -> None:
+        self.batch_sizes: list[int] = []
+
+    async def complete_chat(
+        self,
+        messages: list[dict[str, str]],
+        _params: GenerationParams,
+        **_kwargs: object,
+    ) -> str:
+        payload = json.loads(messages[1]["content"].rsplit("\n", 1)[-1])
+        records = payload["records"]
+        self.batch_sizes.append(len(records))
+        if len(records) > 1:
+            return '{"analyses":[{"opening_id":"truncated'
+        return json.dumps(
+            {
+                "analyses": [
+                    {
+                        "opening_id": records[0]["opening_id"],
+                        "reason_category": "unknown",
+                        "reason_summary": "证据不足",
+                        "time_explanation": "无法判断",
+                        "evidence_quotes": [],
+                        "confidence": 0.2,
+                        "alternative_explanations": ["可能只是随手发消息"],
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        )
+
+
+async def test_ai_splits_truncated_batches_until_they_can_be_parsed() -> None:
+    report = analyze_proactive_openings([_session()], timezone="Asia/Shanghai")
+    template = report.openings[0]
+    report.openings = [
+        template.model_copy(update={"opening_id": f"opening-{index}"})
+        for index in range(4)
+    ]
+    llm = _TruncatingProactiveReasonLlm()
+
+    analyzed = await analyze_proactive_reasons(
+        report,
+        llm=llm,  # type: ignore[arg-type]
+        settings=Settings(analysis_proactive_max_concurrency=2),
+        batch_size=4,
+    )
+
+    assert analyzed.ai_analysis_status == "completed"
+    assert analyzed.ai_analyzed_count == 4
+    assert llm.batch_sizes.count(4) == 2
+    assert llm.batch_sizes.count(2) == 4
+    assert llm.batch_sizes.count(1) == 4
+
+
+async def test_ai_splits_batches_that_return_only_some_openings() -> None:
+    report = analyze_proactive_openings([_session()], timezone="Asia/Shanghai")
+    template = report.openings[0]
+    report.openings = [
+        template.model_copy(update={"opening_id": f"opening-{index}"})
+        for index in range(2)
+    ]
+    llm = _TruncatingProactiveReasonLlm()
+    complete_single = llm.complete_chat
+
+    async def partial_batch(
+        messages: list[dict[str, str]],
+        params: GenerationParams,
+        **kwargs: object,
+    ) -> str:
+        payload = json.loads(messages[1]["content"].rsplit("\n", 1)[-1])
+        records = payload["records"]
+        if len(records) > 1:
+            records = records[:1]
+        single_messages = [messages[0], {**messages[1], "content": json.dumps({"records": records})}]
+        return await complete_single(single_messages, params, **kwargs)
+
+    llm.complete_chat = partial_batch  # type: ignore[method-assign]
+    analyzed = await analyze_proactive_reasons(
+        report,
+        llm=llm,  # type: ignore[arg-type]
+        settings=Settings(analysis_proactive_max_concurrency=2),
+        batch_size=2,
+    )
+
+    assert analyzed.ai_analysis_status == "completed"
+    assert analyzed.ai_analyzed_count == 2
+
+
+async def test_ai_reuses_cached_opening_reason_without_another_request() -> None:
+    current = analyze_proactive_openings([_session()], timezone="Asia/Shanghai")
+    first_llm = _ProactiveReasonLlm(current.openings[0].opening_id)
+    cached = await analyze_proactive_reasons(
+        current,
+        llm=first_llm,  # type: ignore[arg-type]
+        settings=Settings(),
+    )
+
+    merged = merge_cached_proactive_reasons(
+        analyze_proactive_openings([_session()], timezone="Asia/Shanghai"),
+        cached,
+    )
+    second_llm = _ProactiveReasonLlm(merged.openings[0].opening_id)
+    restored = await analyze_proactive_reasons(
+        merged,
+        llm=second_llm,  # type: ignore[arg-type]
+        settings=Settings(),
+    )
+
+    assert restored.ai_analysis_status == "completed"
+    assert restored.openings[0].reason_summary == "可能想确认对方最近的状态"
+    assert second_llm.stages == []
+
+
+async def test_ai_analyzes_proactive_batches_with_bounded_concurrency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report = analyze_proactive_openings([_session()], timezone="Asia/Shanghai")
+    template = report.openings[0]
+    report.openings = [
+        template.model_copy(update={"opening_id": f"opening-{index}"})
+        for index in range(7)
+    ]
+    active = 0
+    max_active = 0
+
+    async def fake_analyze_batch(*args: object, **kwargs: object) -> list[object]:
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return []
+
+    monkeypatch.setattr(
+        "xuwen.analysis.proactive_ai._analyze_batch",
+        fake_analyze_batch,
+    )
+
+    await analyze_proactive_reasons(
+        report,
+        llm=object(),  # type: ignore[arg-type]
+        settings=Settings(analysis_proactive_max_concurrency=3),
+        batch_size=1,
+    )
+
+    assert max_active == 3
+
+
+def test_proactive_analysis_ignores_system_only_sessions_and_keeps_placeholders() -> None:
+    base = 1_700_000_000_000
+    placeholder = _message("m2", base + 3_600_000, self_message=False, text="")
+    placeholder.placeholders = ["[图片]"]
+    system = _message("m1", base, self_message=False, text="系统消息")
+    system.sender_role = "system"
+    sessions = [
+        Session("system", [system], base, base),
+        Session("friend", [placeholder], base + 3_600_000, base + 3_600_000),
+    ]
+
+    report = analyze_proactive_openings(sessions)
+
+    assert report.source_session_count == 2
+    assert report.eligible_session_count == 1
+    assert report.unknown_started_count == 1
+    assert report.openings[0].content == "[图片]"
+
+
+def test_proactive_analysis_uses_previous_human_session_across_system_notice() -> None:
+    base = 1_700_000_000_000
+    first = _message("m1", base, self_message=False, text="明天出结果")
+    notice = _message("m2", base + 3_600_000, self_message=False, text="系统通知")
+    notice.sender_role = "system"
+    later = _message("m3", base + 7_200_000, self_message=True, text="结果怎么样")
+    sessions = [
+        Session("first", [first], base, base),
+        Session("notice", [notice], notice.timestamp_ms, notice.timestamp_ms),
+        Session("later", [later], later.timestamp_ms, later.timestamp_ms),
+    ]
+
+    report = analyze_proactive_openings(sessions)
+
+    assert report.openings[1].previous_tail == "明天出结果"
+    assert report.openings[1].idle_gap_minutes == 120
+
+
+def test_runtime_proactive_context_prefers_matching_time_without_dumping_report() -> None:
+    base = 1_700_000_000_000
+    sessions = [
+        Session(
+            "morning",
+            [_message("m1", base, self_message=False, text="今天考试结果出来了")],
+            base,
+            base,
+        ),
+        Session(
+            "night",
+            [_message("m2", base + 12 * 3_600_000, self_message=False, text="晚上看到一个展览")],
+            base + 12 * 3_600_000,
+            base + 12 * 3_600_000,
+        ),
+    ]
+    report = analyze_proactive_openings(sessions, timezone="Asia/Shanghai")
+
+    context = render_runtime_proactive_context(report, hour=0, weekday=report.openings[0].weekday)
+
+    assert "历史主动开聊参考" in context
+    assert "今天考试结果出来了" in context
+    assert len(context) < 2_000
 
 
 def test_storage_keeps_experimental_block_data_in_separate_directory(tmp_path: Path) -> None:
@@ -360,6 +728,23 @@ class _RefusingMapLlm:
         return "I cannot assist with that request because it goes against my guidelines."
 
 
+class _ContentFilteringMapLlm:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def complete_chat(
+        self,
+        _messages: object,
+        _params: object,
+        **_kwargs: object,
+    ) -> str:
+        self.calls += 1
+        raise LLMError(
+            "主模型触发内容过滤",
+            detail={"reason": "content_filter"},
+        )
+
+
 async def test_mapper_stops_retrying_after_map_refusal() -> None:
     refusing = _RefusingMapLlm()
     mapper = AnalysisMapper(
@@ -372,6 +757,23 @@ async def test_mapper_stops_retrying_after_map_refusal() -> None:
         await mapper.map_block(block, experimental=False)
 
     assert refusing.calls == 1
+
+
+async def test_mapper_records_content_filter_as_skippable_block() -> None:
+    filtering = _ContentFilteringMapLlm()
+    mapper = AnalysisMapper(
+        Settings(),
+        llm=filtering,  # type: ignore[arg-type]
+    )
+    block = build_analysis_blocks([_session()], self_name="我", friend_name="TA")[0]
+
+    with pytest.raises(AnalysisBlockOutputError, match="多次返回无效 JSON") as caught:
+        await mapper.map_block(block, experimental=False)
+
+    assert filtering.calls == 1
+    assert caught.value.stage == "map"
+    assert caught.value.raw_outputs == []
+    assert caught.value.errors == ["LLMError: 主模型触发内容过滤"]
 
 
 async def test_mapper_uses_final_model_for_complete_personality_report() -> None:
@@ -639,6 +1041,7 @@ async def test_pipeline_writes_reports_and_resumes_completed_blocks(tmp_path: Pa
     assert Path(first.personality_prompt_path or "").exists()
     assert Path(first.life_profile_path or "").exists()
     assert Path(first.life_context_path or "").exists()
+    assert first.proactive_analysis_path is None
     assert Path(first.experimental_path or "").exists()
 
     second_mapper = _FakeMapper()
@@ -664,6 +1067,55 @@ async def test_pipeline_writes_reports_and_resumes_completed_blocks(tmp_path: Pa
     assert migrated_mapper.calls == 0
     assert migrated_mapper.experimental_calls == 1
     assert migrated.resumed == 0
+
+
+async def test_proactive_analysis_runs_separately_from_relationship_pipeline(tmp_path: Path) -> None:
+    source = tmp_path / "chat.json"
+    _write_source(source)
+    settings = Settings(
+        self_name="我",
+        self_uid="me",
+        friend_name="TA",
+        friend_uid="friend",
+        analysis_data_dir=tmp_path / "analysis",
+        analysis_proactive_enabled=False,
+    )
+    report = await analyze_proactive_tendency(
+        [source],
+        settings,
+    )
+
+    assert Path(report.output_path).exists()
+    assert report.openings == 1
+    assert report.friend_openings == 0
+    assert not (settings.analysis_data_dir / "timeline.json").exists()
+    assert not (settings.analysis_data_dir / "personality_report.json").exists()
+
+
+async def test_pipeline_timeline_target_does_not_generate_other_reports(tmp_path: Path) -> None:
+    source = tmp_path / "chat.json"
+    _write_source(source)
+    settings = Settings(
+        self_name="我",
+        self_uid="me",
+        friend_name="TA",
+        friend_uid="friend",
+        analysis_data_dir=tmp_path / "analysis",
+        analysis_experimental_enabled=True,
+    )
+
+    report = await analyze_relationship(
+        [source],
+        settings,
+        targets={"timeline"},
+        mapper=_FakeMapper(),  # type: ignore[arg-type]
+    )
+
+    assert Path(report.timeline_path or "").exists()
+    assert report.proactive_analysis_path is None
+    assert report.personality_path is None
+    assert report.life_profile_path is None
+    assert report.experimental_path is None
 
 
 async def test_pipeline_does_not_publish_reports_when_any_block_fails(tmp_path: Path) -> None:
@@ -692,6 +1144,7 @@ async def test_pipeline_does_not_publish_reports_when_any_block_fails(tmp_path: 
     assert not (analysis_dir / "personality_prompt_context.md").exists()
     assert not (analysis_dir / "life_profile.json").exists()
     assert not (analysis_dir / "life_context.md").exists()
+    assert not (analysis_dir / "proactive_analysis.json").exists()
     assert not (analysis_dir / "manifest.json").exists()
 
 
@@ -741,6 +1194,25 @@ def test_experimental_endpoint_is_independently_gated(tmp_path: Path) -> None:
         response = client.get("/analysis/experimental")
     assert response.status_code == 200
     assert response.json() == {"signals": []}
+
+
+def test_proactive_analysis_endpoint_reads_isolated_artifact(tmp_path: Path) -> None:
+    analysis_dir = tmp_path / "analysis"
+    analysis_dir.mkdir()
+    (analysis_dir / "proactive_analysis.json").write_text(
+        '{"initiative_count": 7, "openings": []}',
+        encoding="utf-8",
+    )
+    app = FastAPI()
+    app.include_router(router)
+    settings = Settings(analysis_data_dir=analysis_dir)
+    app.dependency_overrides[get_state] = lambda: SimpleNamespace(settings=settings)
+
+    with TestClient(app) as client:
+        response = client.get("/analysis/proactive")
+
+    assert response.status_code == 200
+    assert response.json()["initiative_count"] == 7
 
 
 def test_experimental_prompt_requires_second_switch_and_uses_optimized_file(

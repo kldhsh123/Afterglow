@@ -5,6 +5,7 @@ const SettingsView = () => import('@/views/SettingsView.vue')
 const StickersView = () => import('@/views/StickersView.vue')
 const TimelineView = () => import('@/views/TimelineView.vue')
 const ReportView = () => import('@/views/ReportView.vue')
+const ProactiveAnalysisView = () => import('@/views/ProactiveAnalysisView.vue')
 
 export const router = createRouter({
   // 用 hash 路由，避免单机部署时需要服务器 rewrite
@@ -15,6 +16,7 @@ export const router = createRouter({
     { path: '/stickers', component: StickersView, name: 'stickers' },
     { path: '/timeline', component: TimelineView, name: 'timeline' },
     { path: '/report', component: ReportView, name: 'report' },
+    { path: '/proactive-analysis', component: ProactiveAnalysisView, name: 'proactive-analysis' },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
 })

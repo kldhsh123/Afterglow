@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from xuwen.analysis.models import ProactiveAnalysisReport, ProactiveOpeningRecord
 from xuwen.core.models import MessageKind, NormalizedMessage, Session
 from xuwen.persona.proactive_profile import (
     classify_opening,
     compute_proactive_profile,
+    compute_proactive_profile_from_analysis,
     compute_proactive_profile_from_window_rows,
 )
 
@@ -245,3 +247,86 @@ def test_classify_opening_types():
     assert classify_opening("abc") == "short_ping"
     assert classify_opening("[回复 @我: [图片]]") == "continue_topic"
     assert classify_opening("我去昨晚又睡着了") == "self_share"
+
+
+def test_analysis_report_profile_only_uses_eligible_friend_openings():
+    report = ProactiveAnalysisReport(
+        source_session_count=8,
+        self_started_count=3,
+        openings=[
+            ProactiveOpeningRecord(
+                opening_id="eligible",
+                session_id="s1",
+                timestamp_ms=_ts(22),
+                occurred_at="2026-01-01T22:00:00+00:00",
+                hour=22,
+                weekday=3,
+                idle_gap_minutes=180,
+                opening_type="life_check",
+                content="在干嘛",
+            ),
+            ProactiveOpeningRecord(
+                opening_id="too-soon",
+                session_id="s2",
+                timestamp_ms=_ts(23),
+                occurred_at="2026-01-01T23:00:00+00:00",
+                hour=23,
+                weekday=3,
+                idle_gap_minutes=30,
+                opening_type="greeting",
+                content="晚上好",
+            ),
+            ProactiveOpeningRecord(
+                opening_id="self-started",
+                session_id="s3",
+                initiator="self",
+                timestamp_ms=_ts(9, day=2),
+                occurred_at="2026-01-02T09:00:00+00:00",
+                hour=9,
+                weekday=4,
+                idle_gap_minutes=180,
+                opening_type="greeting",
+                content="早",
+            ),
+        ],
+    )
+
+    profile = compute_proactive_profile_from_analysis(
+        report,
+        min_gap_minutes=120,
+    )
+
+    assert profile.sample_size == 1
+    assert profile.self_started_sessions == 3
+    assert profile.total_sessions == 8
+    assert profile.hour_weights[22] == 1.0
+    assert profile.weekday_weights[3] == 1.0
+    assert profile.idle_gap_weights["three_to_eight_hours"] == 1.0
+    assert profile.previous_last_speaker_weights["unknown"] == 1.0
+    assert profile.opening_type_weights["life_check"] == 1.0
+    assert profile.samples[0].opening_text == "在干嘛"
+
+
+def test_analysis_report_profile_is_empty_without_eligible_samples():
+    report = ProactiveAnalysisReport(
+        source_session_count=1,
+        openings=[
+            ProactiveOpeningRecord(
+                opening_id="too-soon",
+                session_id="s1",
+                timestamp_ms=_ts(10),
+                occurred_at="2026-01-01T10:00:00+00:00",
+                hour=10,
+                weekday=3,
+                idle_gap_minutes=30,
+                content="在吗",
+            )
+        ],
+    )
+
+    profile = compute_proactive_profile_from_analysis(
+        report,
+        min_gap_minutes=120,
+    )
+
+    assert profile.sample_size == 0

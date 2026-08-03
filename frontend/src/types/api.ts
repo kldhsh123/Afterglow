@@ -98,6 +98,91 @@ export interface ExperimentalReport {
   signals: ExperimentalSignal[]
 }
 
+export type ProactiveOpeningType =
+  | 'greeting'
+  | 'life_check'
+  | 'care'
+  | 'continue_topic'
+  | 'self_share'
+  | 'playful'
+  | 'affection'
+  | 'wake_ping'
+  | 'short_ping'
+  | 'question_probe'
+  | 'night_ping'
+  | 'other'
+
+export type ProactiveReasonCategory =
+  | 'continue_topic'
+  | 'event_trigger'
+  | 'care'
+  | 'self_share'
+  | 'question'
+  | 'emotional_need'
+  | 'routine'
+  | 'greeting'
+  | 'playful'
+  | 'affection'
+  | 'other'
+  | 'unknown'
+
+export interface ProactivePeriodCount {
+  period: string
+  count: number
+}
+
+export interface ProactiveOpeningRecord {
+  opening_id: string
+  session_id: string
+  initiator: 'friend' | 'self'
+  timestamp_ms: number
+  occurred_at: string
+  hour: number
+  weekday: number
+  idle_gap_minutes: number | null
+  opening_type: ProactiveOpeningType
+  messages: string[]
+  content: string
+  message_count: number
+  previous_tail: string
+  response_excerpt: string
+  reason_category: ProactiveReasonCategory | null
+  reason_summary: string
+  time_explanation: string
+  reason_evidence: AnalysisEvidence[]
+  reason_confidence: number | null
+  reason_alternative_explanations: string[]
+}
+
+export interface ProactiveAnalysisReport {
+  schema_version: number
+  generated_at: string
+  session_gap_minutes: number
+  source_session_count: number
+  source_message_count: number
+  eligible_session_count: number
+  initiative_count: number
+  opening_count: number
+  friend_initiative_count: number
+  self_started_count: number
+  unknown_started_count: number
+  initiative_rate: number
+  range_start: string
+  range_end: string
+  span_days: number
+  active_days: number
+  average_per_30_days: number
+  median_idle_gap_minutes: number | null
+  hour_counts: number[]
+  weekday_counts: number[]
+  monthly_counts: ProactivePeriodCount[]
+  opening_type_counts: Partial<Record<ProactiveOpeningType, number>>
+  reason_counts: Partial<Record<ProactiveReasonCategory, number>>
+  ai_analysis_status: 'not_requested' | 'completed' | 'partial' | 'failed'
+  ai_analyzed_count: number
+  openings: ProactiveOpeningRecord[]
+}
+
 export type Role = 'system' | 'user' | 'assistant'
 
 // OpenAI 多模态 content part

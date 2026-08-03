@@ -112,6 +112,34 @@ async def test_complete_chat_returns_content():
 
 
 @pytest.mark.asyncio
+async def test_complete_chat_reports_content_filter_instead_of_returning_empty_text():
+    settings = _settings()
+    async with httpx.AsyncClient() as raw:
+        client = LLMClient(settings, client=raw)
+        with respx.mock(base_url=LLM_BASE) as router:
+            router.post("/chat/completions").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "choices": [
+                            {
+                                "message": {"content": ""},
+                                "finish_reason": "content_filter",
+                            }
+                        ]
+                    },
+                )
+            )
+            with pytest.raises(LLMError, match="内容过滤") as caught:
+                await client.complete_chat([{"role": "user", "content": "x"}])
+
+    assert caught.value.detail == {
+        "request_id": None,
+        "reason": "content_filter",
+    }
+
+
+@pytest.mark.asyncio
 async def test_model_chain_summary_includes_schedule_debug():
     settings = _settings()
     metrics = MetricsRecorder()
@@ -211,6 +239,33 @@ async def test_complete_chat_retries_on_5xx():
             router.post("/chat/completions").mock(side_effect=lambda req: next(seq))
             text = await client.complete_chat([{"role": "user", "content": "x"}])
     assert text == "ok"
+
+
+@pytest.mark.asyncio
+async def test_complete_chat_retries_redirect_without_following_location():
+    settings = _settings()
+    async with httpx.AsyncClient() as raw:
+        client = LLMClient(settings, client=raw)
+        with respx.mock(base_url=LLM_BASE) as router:
+            seq = iter(
+                [
+                    httpx.Response(
+                        301,
+                        headers={"location": "https://redirect.test/chat/completions"},
+                    ),
+                    httpx.Response(
+                        200,
+                        json={"choices": [{"message": {"content": "ok"}}]},
+                    ),
+                ]
+            )
+            route = router.post("/chat/completions").mock(
+                side_effect=lambda req: next(seq)
+            )
+            text = await client.complete_chat([{"role": "user", "content": "x"}])
+
+    assert text == "ok"
+    assert route.call_count == 2
 
 
 @pytest.mark.asyncio
