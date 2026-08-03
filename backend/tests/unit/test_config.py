@@ -13,6 +13,7 @@ MODEL_TIMEOUT_FIELDS = (
     "vision_timeout_seconds",
     "embedding_timeout_seconds",
     "adaptive_chunk_timeout_seconds",
+    "retrieval_timeout_seconds",
     "query_rewrite_timeout_seconds",
     "rerank_timeout_seconds",
     "cross_rerank_timeout_seconds",
@@ -52,6 +53,10 @@ def test_embedding_throttle_defaults(monkeypatch: pytest.MonkeyPatch):
 
 def test_life_timeout_default_allows_slow_small_models():
     assert Settings(_env_file=None).life_timeout_seconds == 30.0
+
+
+def test_retrieval_timeout_default_preserves_existing_route_budget():
+    assert Settings(_env_file=None).retrieval_timeout_seconds == 15.0
 
 
 def test_embedding_throttle_rejects_invalid_values():

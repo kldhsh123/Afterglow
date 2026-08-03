@@ -73,7 +73,6 @@ from xuwen.persona.prompt import build_chat_messages
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["chat"])
 
-_CHAT_RETRIEVAL_TIMEOUT_SECONDS = 15.0
 _CHAT_RELATIONSHIP_TIMEOUT_SECONDS = 5.0
 
 
@@ -228,7 +227,7 @@ async def chat_completions(
                     metrics=state.metrics,
                     trace_id=trace_id,
                 ),
-                timeout=_CHAT_RETRIEVAL_TIMEOUT_SECONDS,
+                timeout=state.settings.retrieval_timeout_seconds,
             )
             state.metrics.record(
                 "retrieval",
@@ -239,7 +238,7 @@ async def chat_completions(
         except TimeoutError:
             logger.warning(
                 "检索超时 %.1fs，停止本轮聊天",
-                _CHAT_RETRIEVAL_TIMEOUT_SECONDS,
+                state.settings.retrieval_timeout_seconds,
             )
             state.metrics.record(
                 "retrieval",
@@ -249,7 +248,7 @@ async def chat_completions(
             raise HTTPException(
                 status_code=504,
                 detail=(
-                    f"记忆检索超时（>{_CHAT_RETRIEVAL_TIMEOUT_SECONDS:.0f}s）。"
+                    f"记忆检索超时（>{state.settings.retrieval_timeout_seconds:g}s）。"
                     "本轮已停止：请先检查 Embedding/向量模型连通性。"
                 ),
             ) from None
