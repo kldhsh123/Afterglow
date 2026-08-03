@@ -723,6 +723,7 @@ curl -F "file=@notes.pdf" \
 |---|---|
 | `GET /analysis/timeline` | 读取 `.data/analysis/timeline.json`。 |
 | `GET /analysis/personality` | 读取结构化性格报告。 |
+| `GET /analysis/proactive` | 读取 `proactive_analysis.json`，包含双方开聊记录、AI 动机与时间归因、证据和置信度，以及对方主动的频率与时间分布。 |
 | `GET /analysis/experimental` | 独立读取实验结果；`ANALYSIS_EXPERIMENTAL_ENABLED=false` 时返回 `404`。 |
 
 实验结果不会混入前两个响应。块级小模型只提取结构化候选；最终大模型负责重组普通人格报告、关系阶段、实验人格画像和生活画像。普通人格报告会生成去证据的 `personality_prompt_context.md`，供主聊天模型了解目标角色的人格与关系互动倾向。生活规律先写入结构化 `life_profile.json`，再渲染为 `life_context.md` 供生活时间线使用。只有开启 `ANALYSIS_PERSONALITY_PROMPT_ENABLED` 后，普通人格画像才会进入主聊天 Prompt；只有开启 `ANALYSIS_LIFE_CONTEXT_ENABLED` 后，生活画像才会进入生活时间线模型的状态决策 Prompt。

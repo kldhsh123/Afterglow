@@ -14,6 +14,7 @@ import {
 import type { AppInfo, UpdateInfo } from '@/types/api'
 import {
   BookOpenText,
+  Clock3,
   ChevronLeft,
   ChevronRight,
   ExternalLink,
@@ -371,6 +372,21 @@ function back() {
               <span class="block font-medium">关系与性格报告</span>
               <span class="block mt-0.5 text-xs text-ink-soft dark:text-night-text-soft">
                 查看沟通模式、相处方式和证据
+              </span>
+            </span>
+          </span>
+          <ChevronRight :size="17" class="text-ink-soft dark:text-night-text-soft" />
+        </button>
+        <button
+          class="w-full flex items-center justify-between p-4 text-left"
+          @click="router.push('/proactive-analysis')"
+        >
+          <span class="flex items-center gap-3">
+            <Clock3 :size="18" />
+            <span>
+              <span class="block font-medium">主动开聊分析</span>
+              <span class="block mt-0.5 text-xs text-ink-soft dark:text-night-text-soft">
+                查看双方为什么开聊，以及对方主动的频率与时间
               </span>
             </span>
           </span>

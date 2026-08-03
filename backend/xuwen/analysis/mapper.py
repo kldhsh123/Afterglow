@@ -26,6 +26,7 @@ from xuwen.analysis.models import (
 from xuwen.analysis.storage import LIFE_CACHE_VERSION
 from xuwen.chat_api.llm_client import GenerationParams, LLMClient
 from xuwen.config import Settings
+from xuwen.core.errors import LLMError
 
 logger = logging.getLogger(__name__)
 
@@ -99,15 +100,25 @@ class AnalysisMapper:
         errors: list[str] = []
         raw_outputs: list[str] = []
         for attempt in range(2):
-            raw = await self.llm.complete_chat(
-                messages,
-                GenerationParams(
-                    temperature=self.settings.analysis_temperature,
-                    max_tokens=self.settings.analysis_max_tokens,
-                ),
-                model=self.settings.resolved_analysis_model,
-                stage="analysis.map" if attempt == 0 else "analysis.map.repair",
-            )
+            try:
+                raw = await self.llm.complete_chat(
+                    messages,
+                    GenerationParams(
+                        temperature=self.settings.analysis_temperature,
+                        max_tokens=self.settings.analysis_max_tokens,
+                    ),
+                    model=self.settings.resolved_analysis_model,
+                    stage="analysis.map" if attempt == 0 else "analysis.map.repair",
+                )
+            except LLMError as exc:
+                if _is_model_refusal_error(exc):
+                    raise AnalysisBlockOutputError(
+                        block.block_id,
+                        stage="map",
+                        errors=[f"LLMError: {exc.message}"],
+                        raw_outputs=[],
+                    ) from exc
+                raise
             try:
                 return _coerce_block_result(raw, block, experimental=experimental)
             except (ValueError, ValidationError) as exc:
@@ -891,3 +902,13 @@ def _looks_like_model_refusal(raw: str) -> bool:
         "无法帮助",
     )
     return any(marker in normalized for marker in markers)
+
+
+def _is_model_refusal_error(exc: LLMError) -> bool:
+    if not isinstance(exc.detail, dict):
+        return False
+    return exc.detail.get("reason") in {
+        "content_filter",
+        "message_refusal",
+        "responses_refusal",
+    }

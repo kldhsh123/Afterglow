@@ -39,6 +39,11 @@ def personality(state: AppState = Depends(get_state)) -> Any:
     return _read_artifact(state.settings.analysis_data_dir / "personality_report.json")
 
 
+@router.get("/proactive")
+def proactive_analysis(state: AppState = Depends(get_state)) -> Any:
+    return _read_artifact(state.settings.analysis_data_dir / "proactive_analysis.json")
+
+
 @router.get("/experimental")
 def experimental(state: AppState = Depends(get_state)) -> Any:
     if not state.settings.analysis_experimental_enabled:

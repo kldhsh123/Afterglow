@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from xuwen.analysis.models import ProactiveAnalysisReport, ProactiveOpeningRecord
 from xuwen.companion.life import LifeSnapshot
 from xuwen.companion.proactive import ProactiveEngine
 from xuwen.config import Settings
@@ -16,11 +17,13 @@ from xuwen.persona.proactive_profile import ProactiveProfile, save_proactive_pro
 def _settings(tmp_path, **overrides: object) -> Settings:
     values: dict[str, object] = {
         "persona_data_dir": tmp_path / "persona",
+        "analysis_data_dir": tmp_path / "analysis",
         "proactive_enabled": True,
         "proactive_quiet_hours": "",
         "proactive_min_idle_minutes": 60,
         "proactive_score_threshold": 0.55,
         "proactive_max_per_day": 1,
+        "proactive_skip_when_life_busy": True,
         "self_name": "Me",
         "self_uid": "u-self",
         "friend_name": "TA",
@@ -84,6 +87,37 @@ def _evening_profile() -> ProactiveProfile:
         opening_type_weights={"life_check": 1.0},
         summary="晚上 22 点常主动开聊",
     )
+
+
+def _save_analysis_report(
+    settings: Settings,
+    *,
+    hour: int,
+    gap_minutes: int = 180,
+    content: str = "在干嘛",
+) -> None:
+    report = ProactiveAnalysisReport(
+        source_session_count=10,
+        self_started_count=2,
+        openings=[
+            ProactiveOpeningRecord(
+                opening_id=f"opening-{hour}",
+                session_id=f"session-{hour}",
+                timestamp_ms=int(
+                    datetime(2026, 7, 4, hour, tzinfo=UTC).timestamp() * 1000
+                ),
+                occurred_at=f"2026-07-04T{hour:02d}:00:00+00:00",
+                hour=hour,
+                weekday=5,
+                idle_gap_minutes=gap_minutes,
+                opening_type="life_check",
+                content=content,
+            )
+        ],
+    )
+    path = settings.analysis_data_dir / "proactive_analysis.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(report.model_dump_json(indent=2), encoding="utf-8")
 
 
 @pytest.mark.asyncio
@@ -398,3 +432,67 @@ async def test_proactive_engine_reloads_profile_when_file_changes(tmp_path):
     snapshot = engine.snapshot()
     assert isinstance(snapshot["profile"], dict)
     assert snapshot["profile"]["summary"] == "新画像"
+
+
+@pytest.mark.asyncio
+async def test_proactive_analysis_report_controls_next_poll_before_legacy_profile(tmp_path):
+    settings = _settings(tmp_path, proactive_check_interval_seconds=3600)
+    save_proactive_profile(
+        _evening_profile(),
+        settings.persona_data_dir / "proactive_profile.json",
+    )
+    _save_analysis_report(settings, hour=18)
+    engine = ProactiveEngine(settings)
+
+    result = await engine.poll(
+        conversation_id="conv-1",
+        life=_life(),
+        now=datetime(2026, 7, 4, 10, 0, tzinfo=UTC),
+    )
+
+    scheduled = datetime.fromtimestamp(result.next_poll_at_ms / 1000, tz=UTC)
+    assert scheduled.hour == 18
+    assert engine.snapshot()["profile_source"] == "analysis"
+
+
+@pytest.mark.asyncio
+async def test_empty_analysis_report_falls_back_to_legacy_profile(tmp_path):
+    settings = _settings(tmp_path, proactive_check_interval_seconds=3600)
+    save_proactive_profile(
+        _evening_profile(),
+        settings.persona_data_dir / "proactive_profile.json",
+    )
+    _save_analysis_report(settings, hour=18, gap_minutes=30)
+    engine = ProactiveEngine(settings)
+
+    result = await engine.poll(
+        conversation_id="conv-1",
+        life=_life(),
+        now=datetime(2026, 7, 4, 10, 0, tzinfo=UTC),
+    )
+
+    scheduled = datetime.fromtimestamp(result.next_poll_at_ms / 1000, tz=UTC)
+    assert scheduled.hour == 22
+    assert engine.snapshot()["profile_source"] == "legacy"
+
+
+def test_proactive_engine_reloads_analysis_report_when_file_changes(tmp_path):
+    settings = _settings(tmp_path)
+    _save_analysis_report(settings, hour=18)
+    report_path = settings.analysis_data_dir / "proactive_analysis.json"
+    engine = ProactiveEngine(settings)
+
+    first = engine.snapshot()
+    assert first["profile_source"] == "analysis"
+    assert first["profile"]["hour_weights"][18] == 1.0
+
+    old_mtime_ns = report_path.stat().st_mtime_ns
+    _save_analysis_report(settings, hour=20)
+    os.utime(
+        report_path,
+        ns=(old_mtime_ns + 1_000_000, old_mtime_ns + 1_000_000),
+    )
+
+    second = engine.snapshot()
+    assert second["profile_source"] == "analysis"
+    assert second["profile"]["hour_weights"][20] == 1.0

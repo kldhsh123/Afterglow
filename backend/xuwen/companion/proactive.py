@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from xuwen.analysis.proactive import load_proactive_analysis
 from xuwen.companion.life import LifeSnapshot
 from xuwen.config import Settings
 from xuwen.core.time import local_now
@@ -17,6 +18,7 @@ from xuwen.memory.store import MemoryStore
 from xuwen.persona.proactive_profile import (
     PROACTIVE_PROFILE_FILENAME,
     ProactiveProfile,
+    compute_proactive_profile_from_analysis,
     compute_proactive_profile_from_window_rows,
     idle_gap_bucket,
     load_proactive_profile,
@@ -85,11 +87,14 @@ class ProactiveEngine:
         self.settings = settings
         self.store = store
         self.profile_path = settings.persona_data_dir / PROACTIVE_PROFILE_FILENAME
+        self.analysis_profile_path = settings.analysis_data_dir / "proactive_analysis.json"
         self.audit_path = settings.persona_data_dir / "proactive_audit.jsonl"
         self.state_path = settings.persona_data_dir / "proactive_poll_state.json"
         self._profile: ProactiveProfile | None = None
         self._profile_loaded = False
         self._profile_mtime_ns: int | None = None
+        self._analysis_profile_mtime_ns: int | None = None
+        self._profile_source = "empty"
         self._audit_lock = asyncio.Lock()
         self._state_lock = asyncio.Lock()
         self._audit: deque[dict[str, Any]] = deque(maxlen=settings.proactive_audit_max_records)
@@ -437,8 +442,11 @@ class ProactiveEngine:
         return {
             "enabled": self.settings.proactive_enabled,
             "profile_path": str(self.profile_path),
+            "analysis_profile_path": str(self.analysis_profile_path),
             "poll_state_path": str(self.state_path),
             "profile_exists": self.profile_path.exists(),
+            "analysis_profile_exists": self.analysis_profile_path.exists(),
+            "profile_source": self._profile_source,
             "profile": _profile_to_dict(profile),
             "pending_candidates": {
                 cid: asdict(candidate) for cid, candidate in self._candidates.items()
@@ -471,16 +479,39 @@ class ProactiveEngine:
             self._profile = rebuilt
             self._profile_loaded = True
             self._profile_mtime_ns = _file_mtime_ns(self.profile_path)
+            self._analysis_profile_mtime_ns = _file_mtime_ns(self.analysis_profile_path)
+            self._profile_source = "store"
             return rebuilt
         return profile or rebuilt
 
     def _load_profile_sync(self) -> ProactiveProfile | None:
-        mtime_ns = _file_mtime_ns(self.profile_path)
-        if self._profile_loaded and self._profile_mtime_ns == mtime_ns:
+        profile_mtime_ns = _file_mtime_ns(self.profile_path)
+        analysis_mtime_ns = _file_mtime_ns(self.analysis_profile_path)
+        if (
+            self._profile_loaded
+            and self._profile_mtime_ns == profile_mtime_ns
+            and self._analysis_profile_mtime_ns == analysis_mtime_ns
+        ):
             return self._profile
-        self._profile = load_proactive_profile(self.profile_path)
+
+        report = load_proactive_analysis(self.analysis_profile_path)
+        analysis_profile = (
+            compute_proactive_profile_from_analysis(
+                report,
+                min_gap_minutes=self.settings.proactive_learning_min_gap_minutes,
+            )
+            if report is not None
+            else None
+        )
+        if analysis_profile is not None and analysis_profile.sample_size > 0:
+            self._profile = analysis_profile
+            self._profile_source = "analysis"
+        else:
+            self._profile = load_proactive_profile(self.profile_path)
+            self._profile_source = "legacy" if self._profile is not None else "empty"
         self._profile_loaded = True
-        self._profile_mtime_ns = mtime_ns
+        self._profile_mtime_ns = profile_mtime_ns
+        self._analysis_profile_mtime_ns = analysis_mtime_ns
         return self._profile
 
     async def _recent_live(self, conversation_id: str | None) -> list[dict[str, Any]]:

@@ -19,6 +19,7 @@ from .test_proactive_engine import _life
 def _settings(tmp_path, **overrides: object) -> Settings:
     values: dict[str, object] = {
         "persona_data_dir": tmp_path / "persona",
+        "analysis_data_dir": tmp_path / "analysis",
         "proactive_enabled": True,
         "proactive_quiet_hours": "",
         "proactive_min_idle_minutes": 0,

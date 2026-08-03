@@ -154,12 +154,38 @@ def _build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--timeline-only", action="store_true", help="只生成时间线")
     mode.add_argument("--personality-only", action="store_true", help="只生成性格报告")
     p_analyze.add_argument(
+        "--target",
+        dest="targets",
+        action="append",
+        choices=("timeline", "personality", "life", "experimental"),
+        help="只运行指定关系分析；可重复传入。不传则运行现有全量分析",
+    )
+    p_analyze.add_argument(
         "--resume",
         action=argparse.BooleanOptionalAction,
         default=True,
         help="复用已完成的确定性分析块（默认开启）",
     )
     p_analyze.add_argument("--since", default=None, metavar="YYYY-MM", help="只分析该月份以后")
+    p_proactive = sub.add_parser(
+        "analyze-proactive",
+        help="单独分析主动消息倾向；不会运行时间线、人格或生活分析",
+    )
+    p_proactive.add_argument("paths", nargs="+", type=Path, help="聊天 JSON / JSONL 文件")
+    p_proactive.add_argument("--env-file", type=Path, default=None, help="可选：.env 文件路径")
+    p_proactive.add_argument("--out-dir", type=Path, default=None, help="输出目录")
+    p_proactive.add_argument(
+        "--resume",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="复用已完成的主动开聊 AI 归因（默认开启）",
+    )
+    p_proactive.add_argument(
+        "--since",
+        default=None,
+        metavar="YYYY-MM",
+        help="只分析该月份以后",
+    )
     return parser
 
 
@@ -622,6 +648,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_run_optimize(args))
     if args.cmd == "analyze":
         return asyncio.run(_run_analyze(args))
+    if args.cmd == "analyze-proactive":
+        return asyncio.run(_run_analyze_proactive(args))
     parser.print_help()
     return 1
 
@@ -634,6 +662,9 @@ async def _run_analyze(args: argparse.Namespace) -> int:
     )
 
     settings = _load_settings(args.env_file)
+    if args.targets and (args.timeline_only or args.personality_only):
+        console.print("[bold red]--target 不能和 --timeline-only/--personality-only 同时使用[/]")
+        return 1
     if args.list_blocks or args.inspect_block:
         _, _, blocks = await load_analysis_blocks(
             args.paths,
@@ -686,6 +717,12 @@ async def _run_analyze(args: argparse.Namespace) -> int:
 
     console.print("[bold]正在分析关系记录...[/]")
 
+    selected_targets = set(args.targets) if args.targets else None
+    if args.timeline_only:
+        selected_targets = {"timeline"}
+    elif args.personality_only:
+        selected_targets = {"personality"}
+
     def progress(done: int, total: int, stage: str) -> None:
         if total:
             console.print(f"  {stage}: {done}/{total}")
@@ -697,6 +734,7 @@ async def _run_analyze(args: argparse.Namespace) -> int:
             out_dir=args.out_dir,
             timeline=not args.personality_only,
             personality=not args.timeline_only,
+            targets=selected_targets,
             resume=args.resume,
             since=args.since,
             progress_cb=progress,
@@ -710,6 +748,30 @@ async def _run_analyze(args: argparse.Namespace) -> int:
             "详情见输出目录的 failures/ 和 manifest.json。"
         )
     console.print_json(data=report.to_dict())
+    return 0
+
+
+async def _run_analyze_proactive(args: argparse.Namespace) -> int:
+    from xuwen.analysis.proactive_runner import analyze_proactive_tendency
+
+    settings = _load_settings(args.env_file)
+    console.print("[bold]正在单独分析主动消息倾向...[/]")
+    try:
+        report = await analyze_proactive_tendency(
+            args.paths,
+            settings,
+            out_dir=args.out_dir,
+            resume=args.resume,
+            since=args.since,
+        )
+    except ValueError as exc:
+        console.print(f"[bold red]主动消息倾向分析失败：[/]{exc}")
+        return 1
+    console.print_json(data=report.to_dict())
+    console.print(
+        "[yellow]分析完成后请运行数据质量检查，再决定是否启用主动消息：[/]\n"
+        "  uv run python scripts/check_proactive_quality.py"
+    )
     return 0
 
 

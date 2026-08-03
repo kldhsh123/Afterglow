@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import defaultdict
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from xuwen.analysis.blocks import build_analysis_blocks
@@ -35,6 +36,10 @@ from xuwen.core.models import Session
 from xuwen.persona.generator import PersonaDataset, load_persona_dataset
 
 ProgressCallback = Callable[[int, int, str], None]
+AnalysisTarget = Literal["timeline", "personality", "life", "experimental"]
+ANALYSIS_TARGETS: frozenset[AnalysisTarget] = frozenset(
+    {"timeline", "personality", "life", "experimental"}
+)
 
 
 class AnalysisPipelineError(RuntimeError):
@@ -77,6 +82,7 @@ class AnalysisRunReport:
     personality_prompt_path: str | None
     life_profile_path: str | None
     life_context_path: str | None
+    proactive_analysis_path: str | None
     experimental_path: str | None
     experimental_markdown_path: str | None
 
@@ -91,20 +97,27 @@ async def analyze_relationship(
     out_dir: str | Path | None = None,
     timeline: bool = True,
     personality: bool = True,
+    targets: Collection[AnalysisTarget] | None = None,
     resume: bool = True,
     since: str | None = None,
     progress_cb: ProgressCallback | None = None,
     mapper: AnalysisMapper | None = None,
 ) -> AnalysisRunReport:
     """执行一次离线分析；所有块完整成功后才发布最终报告。"""
-    if not timeline and not personality:
+    selected_targets = _resolve_analysis_targets(
+        settings,
+        targets=targets,
+        timeline=timeline,
+        personality=personality,
+    )
+    if targets is None and not timeline and not personality:
         raise ValueError("timeline 和 personality 至少启用一个")
     started = time.perf_counter()
     dataset, sessions, blocks = await load_analysis_blocks(paths, settings, since=since)
     if not blocks:
         raise AnalysisPipelineError("没有可分析的聊天消息，请检查输入文件和 --since 范围")
     storage = AnalysisStorage(out_dir or settings.analysis_data_dir)
-    experimental = settings.analysis_experimental_enabled
+    experimental = "experimental" in selected_targets
     storage.prepare(experimental=experimental)
 
     active_mapper = mapper or AnalysisMapper(settings)
@@ -112,6 +125,7 @@ async def analyze_relationship(
     results: list[BlockAnalysis] = []
     pending: list[tuple[AnalysisBlock, BlockAnalysis | None]] = []
     resumed = 0
+    requires_map = True
     for block in blocks:
         cached = storage.load_block(block.block_id) if resume else None
         experimental_cached = (
@@ -127,7 +141,10 @@ async def analyze_relationship(
             cached.experimental_signals = experimental_cached.experimental_signals
         if (
             cached is not None
-            and cached.life_schema_version == LIFE_CACHE_VERSION
+            and (
+                "life" not in selected_targets
+                or cached.life_schema_version == LIFE_CACHE_VERSION
+            )
             and (not experimental or experimental_cached is not None)
         ):
             results.append(cached)
@@ -165,7 +182,10 @@ async def analyze_relationship(
                 result = result or await active_mapper.map_block(
                     block, experimental=False
                 )
-                if result.life_schema_version != LIFE_CACHE_VERSION:
+                if (
+                    "life" in selected_targets
+                    and result.life_schema_version != LIFE_CACHE_VERSION
+                ):
                     await wait_for_rate_slot()
                     life_result = await active_mapper.map_life_block(block)
                     result = result.model_copy(
@@ -294,15 +314,17 @@ async def analyze_relationship(
             raise
 
         results.sort(key=lambda item: (item.start_time_ms, item.block_id))
-        reduce_inputs = await _hierarchical_results(
-            results,
-            message_count=sum(session.message_count for session in sessions),
-            mapper=active_mapper,
-            progress_cb=progress_cb,
-            timezone=settings.app_timezone,
+        reduce_inputs = (
+            await _hierarchical_results(
+                results,
+                message_count=sum(session.message_count for session in sessions),
+                mapper=active_mapper,
+                progress_cb=progress_cb,
+                timezone=settings.app_timezone,
+            )
+            if requires_map
+            else []
         )
-        if progress_cb:
-            progress_cb(0, 1, "reduce")
 
         timeline_path: Path | None = None
         personality_path: Path | None = None
@@ -313,7 +335,10 @@ async def analyze_relationship(
         experimental_path: Path | None = None
         experimental_markdown_path: Path | None = None
         message_count = sum(session.message_count for session in sessions)
-        if timeline:
+        proactive_analysis_path: Path | None = None
+        if "timeline" in selected_targets:
+            if progress_cb:
+                progress_cb(0, 1, "timeline")
             timeline_report = await reduce_timeline(
                 reduce_inputs,
                 message_count=message_count,
@@ -321,34 +346,43 @@ async def analyze_relationship(
                 mapper=active_mapper,
             )
             timeline_path = storage.write_json(storage.root / "timeline.json", timeline_report)
+            if progress_cb:
+                progress_cb(1, 1, "timeline")
 
-        life_habits = [habit for result in reduce_inputs for habit in result.life_habits]
-        life_profile = LifeProfile(
-            habits=[
-                habit
-                for habit in life_habits
-                if habit.subject == "friend"
-                and not habit.sensitive_relationship_context
-                and habit.target_fields
-            ][:16]
-        )
-        if isinstance(active_mapper, AnalysisMapper):
-            try:
-                life_profile = await active_mapper.reduce_life_profile(life_habits)
-            except Exception:
-                pass
-        life_profile_path = storage.write_json(
-            storage.root / "life_profile.json", life_profile
-        )
-        life_context_path = storage.write_text(
-            storage.root / "life_context.md",
-            render_life_analysis_context(
-                life_profile,
-                friend_name=settings.friend_name,
-            ),
-        )
+        if "life" in selected_targets:
+            if progress_cb:
+                progress_cb(0, 1, "life")
+            life_habits = [habit for result in reduce_inputs for habit in result.life_habits]
+            life_profile = LifeProfile(
+                habits=[
+                    habit
+                    for habit in life_habits
+                    if habit.subject == "friend"
+                    and not habit.sensitive_relationship_context
+                    and habit.target_fields
+                ][:16]
+            )
+            if isinstance(active_mapper, AnalysisMapper):
+                try:
+                    life_profile = await active_mapper.reduce_life_profile(life_habits)
+                except Exception:
+                    pass
+            life_profile_path = storage.write_json(
+                storage.root / "life_profile.json", life_profile
+            )
+            life_context_path = storage.write_text(
+                storage.root / "life_context.md",
+                render_life_analysis_context(
+                    life_profile,
+                    friend_name=settings.friend_name,
+                ),
+            )
+            if progress_cb:
+                progress_cb(1, 1, "life")
 
-        if personality:
+        if "personality" in selected_targets:
+            if progress_cb:
+                progress_cb(0, 1, "personality")
             personality_report = reduce_personality(reduce_inputs)
             if isinstance(active_mapper, AnalysisMapper):
                 try:
@@ -386,7 +420,11 @@ async def analyze_relationship(
                 storage.root / "personality_prompt_context.md",
                 personality_context,
             )
+            if progress_cb:
+                progress_cb(1, 1, "personality")
         if experimental:
+            if progress_cb:
+                progress_cb(0, 1, "experimental")
             experimental_report = reduce_experimental(results)
             if isinstance(active_mapper, AnalysisMapper):
                 try:
@@ -431,6 +469,8 @@ async def analyze_relationship(
                         + optimized_context
                     )
             storage.write_text(storage.experimental_dir / "prompt_context.md", prompt_context)
+            if progress_cb:
+                progress_cb(1, 1, "experimental")
         storage.write_json(
             storage.root / "manifest.json",
             {
@@ -440,10 +480,9 @@ async def analyze_relationship(
                 "failed": failures,
                 "skipped": skipped_failures,
                 "experimental": experimental,
+                "targets": sorted(selected_targets),
             },
         )
-        if progress_cb:
-            progress_cb(1, 1, "reduce")
         return AnalysisRunReport(
             source_files=dataset.source_files,
             messages=message_count,
@@ -464,6 +503,9 @@ async def analyze_relationship(
             ),
             life_profile_path=str(life_profile_path) if life_profile_path else None,
             life_context_path=str(life_context_path) if life_context_path else None,
+            proactive_analysis_path=(
+                str(proactive_analysis_path) if proactive_analysis_path else None
+            ),
             experimental_path=str(experimental_path) if experimental_path else None,
             experimental_markdown_path=(
                 str(experimental_markdown_path) if experimental_markdown_path else None
@@ -478,6 +520,34 @@ def _safe_failure_message(exc: Exception) -> str:
     message = getattr(exc, "message", None)
     text = str(message if isinstance(message, str) and message else exc)
     return " ".join(text.split())[:300] or "未知错误"
+
+
+def _resolve_analysis_targets(
+    settings: Settings,
+    *,
+    targets: Collection[AnalysisTarget] | None,
+    timeline: bool,
+    personality: bool,
+) -> frozenset[AnalysisTarget]:
+    if targets is not None:
+        selected = frozenset(targets)
+        unknown = selected - ANALYSIS_TARGETS
+        if unknown:
+            raise ValueError(f"未知分析目标：{', '.join(sorted(unknown))}")
+        if not selected:
+            raise ValueError("至少指定一个分析目标")
+        if "experimental" in selected and not settings.analysis_experimental_enabled:
+            raise ValueError("experimental 分析需要 ANALYSIS_EXPERIMENTAL_ENABLED=true")
+        return selected
+
+    selected: set[AnalysisTarget] = {"life"}
+    if timeline:
+        selected.add("timeline")
+    if personality:
+        selected.add("personality")
+    if settings.analysis_experimental_enabled:
+        selected.add("experimental")
+    return frozenset(selected)
 
 
 async def _hierarchical_results(
