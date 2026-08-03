@@ -55,6 +55,20 @@ def test_build_schema_includes_core_fields(real_schema: SchemaSnapshot) -> None:
     assert "LABELING_ENABLED" in keys
 
 
+def test_build_schema_excludes_offline_analysis_task_fields(
+    real_schema: SchemaSnapshot,
+) -> None:
+    keys = {field.key for field in real_schema.fields}
+    assert "ANALYSIS_API_URL" not in keys
+    assert "ANALYSIS_MAX_CONCURRENCY" not in keys
+    assert "ANALYSIS_PROACTIVE_ENABLED" not in keys
+    assert "ANALYSIS_PROACTIVE_BATCH_SIZE" not in keys
+    assert "ANALYSIS_PROACTIVE_MAX_CONCURRENCY" not in keys
+    assert "ANALYSIS_EXPERIMENTAL_ENABLED" not in keys
+    assert "ANALYSIS_LIFE_CONTEXT_ENABLED" in keys
+    assert "ANALYSIS_PERSONALITY_PROMPT_ENABLED" in keys
+
+
 def test_secret_fields_marked_secret(real_schema: SchemaSnapshot) -> None:
     by_key = {f.key: f for f in real_schema.fields}
     assert by_key["OPENAI_API_KEY"].secret is True

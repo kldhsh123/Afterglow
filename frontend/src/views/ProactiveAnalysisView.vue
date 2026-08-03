@@ -146,7 +146,9 @@ onMounted(load)
         <MessageCircle :size="30" class="mb-3 text-ink-soft dark:text-night-text-soft" />
         <p class="font-medium">主动开聊分析尚不可用</p>
         <p class="text-sm mt-2 max-w-md text-ink-soft dark:text-night-text-soft">{{ error }}</p>
-        <p class="mt-3 text-xs text-ink-soft dark:text-night-text-soft">请先运行一次聊天记录分析。</p>
+        <p class="mt-3 text-xs text-ink-soft dark:text-night-text-soft">
+          请先运行 xuwen analyze-proactive 生成主动开聊分析报告。
+        </p>
       </div>
       <template v-else-if="report">
         <aside class="my-8 border-l-2 border-accent-soft pl-4 text-sm leading-6 text-ink-soft dark:text-night-text-soft">
