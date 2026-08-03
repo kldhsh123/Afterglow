@@ -384,6 +384,50 @@ async def test_ai_splits_truncated_batches_until_they_can_be_parsed() -> None:
     assert llm.batch_sizes.count(1) == 4
 
 
+class _UnavailableProactiveReasonLlm:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def complete_chat(self, *_args: object, **_kwargs: object) -> str:
+        self.calls += 1
+        raise LLMError("上游不可用")
+
+
+async def test_ai_does_not_split_batches_for_upstream_errors() -> None:
+    report = analyze_proactive_openings([_session()], timezone="Asia/Shanghai")
+    template = report.openings[0]
+    report.openings = [
+        template.model_copy(update={"opening_id": f"opening-{index}"})
+        for index in range(4)
+    ]
+    llm = _UnavailableProactiveReasonLlm()
+
+    analyzed = await analyze_proactive_reasons(
+        report,
+        llm=llm,  # type: ignore[arg-type]
+        settings=Settings(),
+        batch_size=4,
+    )
+
+    assert llm.calls == 1
+    assert analyzed.ai_analysis_status == "failed"
+
+
+async def test_ai_evidence_matching_normalizes_source_whitespace() -> None:
+    report = analyze_proactive_openings([_session()], timezone="Asia/Shanghai")
+    opening = report.openings[0]
+    report.openings[0] = opening.model_copy(update={"content": "最近\n还好吗"})
+    llm = _ProactiveReasonLlm(opening.opening_id)
+
+    analyzed = await analyze_proactive_reasons(
+        report,
+        llm=llm,  # type: ignore[arg-type]
+        settings=Settings(),
+    )
+
+    assert [item.quote for item in analyzed.openings[0].reason_evidence] == ["最近还好吗"]
+
+
 async def test_ai_splits_batches_that_return_only_some_openings() -> None:
     report = analyze_proactive_openings([_session()], timezone="Asia/Shanghai")
     template = report.openings[0]
@@ -776,6 +820,33 @@ async def test_mapper_records_content_filter_as_skippable_block() -> None:
     assert caught.value.errors == ["LLMError: 主模型触发内容过滤"]
 
 
+@pytest.mark.parametrize(
+    ("method_name", "expected_stage"),
+    [
+        ("map_life_block", "life_map"),
+        ("map_experimental_block", "experimental_map"),
+    ],
+)
+async def test_specialized_maps_record_content_filter_as_skippable_block(
+    method_name: str,
+    expected_stage: str,
+) -> None:
+    filtering = _ContentFilteringMapLlm()
+    mapper = AnalysisMapper(
+        Settings(),
+        llm=filtering,  # type: ignore[arg-type]
+    )
+    block = build_analysis_blocks([_session()], self_name="我", friend_name="TA")[0]
+
+    with pytest.raises(AnalysisBlockOutputError) as caught:
+        await getattr(mapper, method_name)(block)
+
+    assert filtering.calls == 1
+    assert caught.value.stage == expected_stage
+    assert caught.value.raw_outputs == []
+    assert caught.value.errors == ["LLMError: 主模型触发内容过滤"]
+
+
 async def test_mapper_uses_final_model_for_complete_personality_report() -> None:
     llm = _SummaryLlm()
     mapper = AnalysisMapper(Settings(), llm=llm)  # type: ignore[arg-type]
@@ -1116,6 +1187,39 @@ async def test_pipeline_timeline_target_does_not_generate_other_reports(tmp_path
     assert report.personality_path is None
     assert report.life_profile_path is None
     assert report.experimental_path is None
+
+
+async def test_pipeline_experimental_only_skips_hierarchical_reduce(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "chat.json"
+    _write_source(source)
+    settings = Settings(
+        self_name="我",
+        self_uid="me",
+        friend_name="TA",
+        friend_uid="friend",
+        analysis_data_dir=tmp_path / "analysis",
+        analysis_experimental_enabled=True,
+    )
+
+    async def fail_hierarchical_reduce(*_args: object, **_kwargs: object) -> list[BlockAnalysis]:
+        raise AssertionError("experimental-only 不应执行分层归约")
+
+    monkeypatch.setattr(
+        "xuwen.analysis.pipeline._hierarchical_results",
+        fail_hierarchical_reduce,
+    )
+
+    report = await analyze_relationship(
+        [source],
+        settings,
+        targets={"experimental"},
+        mapper=_FakeMapper(),  # type: ignore[arg-type]
+    )
+
+    assert Path(report.experimental_path or "").exists()
 
 
 async def test_pipeline_does_not_publish_reports_when_any_block_fails(tmp_path: Path) -> None:
