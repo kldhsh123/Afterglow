@@ -63,6 +63,7 @@ def _isolate_dotenv(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
                 "ANALYSIS_",
                 "QUERY_REWRITE_",
                 "RERANK_",
+                "RETRIEVAL_",
                 "RECENCY_",
                 "DEBUG_",
             )

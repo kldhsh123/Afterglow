@@ -325,6 +325,8 @@ class Settings(BaseSettings):
     live_top_k: int = 12
     final_context_k: int = 12
     rrf_k: int = 60
+    # 单轮完整记忆检索（改写、向量化、召回和重排）的总时间预算。
+    retrieval_timeout_seconds: float = 15.0
     # 每路向量召回的 overfetch 倍数：实际 limit = top_k × retrieval_overfetch。
     # 下游 _filter_xxx_rows 会丢弃 low_signal / echo / 无 friend 信号窗口（~20-40%），
     # 跨 query rewrite variant 还要去重，retrieval_overfetch 是给这些损耗的余量。
@@ -662,6 +664,7 @@ class Settings(BaseSettings):
         "vision_timeout_seconds",
         "embedding_timeout_seconds",
         "adaptive_chunk_timeout_seconds",
+        "retrieval_timeout_seconds",
         "query_rewrite_timeout_seconds",
         "rerank_timeout_seconds",
         "cross_rerank_timeout_seconds",

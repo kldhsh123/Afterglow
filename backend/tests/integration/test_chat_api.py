@@ -325,9 +325,16 @@ async def test_chat_completions_silence_skips_web_tools(
             "web_fetch_enabled": True,
             "web_search_api_key": "tvly-test",
             "writeback_enabled": False,
+            "retrieval_timeout_seconds": 42.0,
         }
     )
     calls = {"search": 0, "resolve": 0}
+    wait_for_timeouts: list[float | None] = []
+    original_wait_for = asyncio.wait_for
+
+    async def spy_wait_for(awaitable, *, timeout=None):
+        wait_for_timeouts.append(timeout)
+        return await original_wait_for(awaitable, timeout=timeout)
 
     class NoopMetrics:
         def record(self, *args, **kwargs):
@@ -369,6 +376,7 @@ async def test_chat_completions_silence_skips_web_tools(
         return []
 
     monkeypatch.setattr(chat_route, "resolve_fetch_urls", spy_resolve_fetch_urls)
+    monkeypatch.setattr(chat_route.asyncio, "wait_for", spy_wait_for)
     state = SimpleNamespace(
         settings=s,
         metrics=NoopMetrics(),
@@ -404,6 +412,7 @@ async def test_chat_completions_silence_skips_web_tools(
     assert resp.policy is not None
     assert resp.policy.should_reply is False
     assert calls == {"search": 0, "resolve": 0}
+    assert wait_for_timeouts[0] == 42.0
 
 
 def test_chat_completions_silenced_openai_compat_mode(tmp_path):
@@ -969,9 +978,16 @@ async def test_responses_silence_skips_web_tools(
             "web_fetch_enabled": True,
             "web_search_api_key": "tvly-test",
             "writeback_enabled": False,
+            "retrieval_timeout_seconds": 43.0,
         }
     )
     calls = {"search": 0, "resolve": 0}
+    wait_for_timeouts: list[float | None] = []
+    original_wait_for = asyncio.wait_for
+
+    async def spy_wait_for(awaitable, *, timeout=None):
+        wait_for_timeouts.append(timeout)
+        return await original_wait_for(awaitable, timeout=timeout)
 
     class NoopMetrics:
         def record(self, *args, **kwargs):
@@ -1017,6 +1033,7 @@ async def test_responses_silence_skips_web_tools(
         return []
 
     monkeypatch.setattr(responses_route, "resolve_fetch_urls", spy_resolve_fetch_urls)
+    monkeypatch.setattr(responses_route.asyncio, "wait_for", spy_wait_for)
     state = SimpleNamespace(
         settings=s,
         metrics=NoopMetrics(),
@@ -1046,6 +1063,7 @@ async def test_responses_silence_skips_web_tools(
     assert resp.policy is not None
     assert resp.policy.should_reply is False
     assert calls == {"search": 0, "resolve": 0}
+    assert wait_for_timeouts[0] == 43.0
 
 
 def test_responses_stream_event_sequence(settings: Settings):

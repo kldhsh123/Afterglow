@@ -12,7 +12,6 @@ from xuwen.web_ui.schema import (
     parse_env_example,
 )
 
-
 REPO_ENV_EXAMPLE = Path(__file__).resolve().parents[2] / ".env.example"
 
 
@@ -73,6 +72,7 @@ def test_advanced_fields_marked_advanced(real_schema: SchemaSnapshot) -> None:
     by_key = {f.key: f for f in real_schema.fields}
     # 调优 / 内部字段应当标为 advanced，向导默认折叠
     assert by_key["RRF_K"].advanced is True
+    assert by_key["RETRIEVAL_TIMEOUT_SECONDS"].advanced is True
     assert by_key["WINDOW_SIZE"].advanced is True
     assert by_key["WRITEBACK_BATCH_TURNS"].advanced is True
 
