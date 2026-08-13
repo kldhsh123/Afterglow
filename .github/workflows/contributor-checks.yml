@@ -45,6 +45,9 @@ jobs:
       - name: Lint
         run: uv run ruff check xuwen scripts ../scripts
 
+      - name: Type check
+        run: uv run mypy xuwen
+
       - name: Run backend tests
         run: uv run pytest tests -q
 

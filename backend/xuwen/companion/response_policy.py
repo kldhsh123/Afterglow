@@ -709,7 +709,7 @@ def _coerce_relationship_memory(
         return None
     return RelationshipMemoryEntry(
         text=summary,
-        kind=kind,  # type: ignore[arg-type]
+        kind=kind,
         importance=importance,
     )
 

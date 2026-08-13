@@ -71,8 +71,10 @@ ignore = ["E501", "RUF001", "RUF002", "RUF003"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 filterwarnings = [
-  # jieba 上游遗留的 re 转义字符警告，与本项目无关
-  "ignore::SyntaxWarning:jieba.*",
+  # jieba 上游遗留的 re 转义字符警告，与本项目无关。
+  # 编译期 SyntaxWarning 的 module 字段是源文件路径而非包名，按包名 `jieba.*`
+  # 匹配不上，只能按 message 前缀匹配。
+  "ignore:invalid escape sequence:SyntaxWarning",
 ]
 
 [tool.mypy]

@@ -284,3 +284,86 @@ async def test_embed_malformed_data_array():
             )
             with pytest.raises(EmbeddingError):
                 await client.embed_texts(["x"])
+
+
+@pytest.mark.asyncio
+async def test_embed_texts_tolerant_skips_failed_batch():
+    """中间批次重试耗尽 → 对应位置为 None，其余批次正常返回，不抛异常。"""
+    settings = Settings(
+        embedding_api_url=EMB_BASE,
+        embedding_api_key="sk-test",  # type: ignore[arg-type]
+        embedding_model="Qwen3-Embedding-8B",
+        embedding_dim=8,
+        embedding_retry_attempts=1,  # 立即耗尽，避免测试等待退避
+    )
+    async with httpx.AsyncClient() as raw:
+        client = EmbeddingClient(settings, client=raw)
+        with respx.mock(base_url=EMB_BASE) as router:
+            def handle(req: httpx.Request) -> httpx.Response:
+                inputs = json.loads(req.content.decode("utf-8"))["input"]
+                if "bad" in inputs:
+                    return httpx.Response(500, text="boom")
+                return httpx.Response(200, json=_embedding_response(inputs))
+
+            router.post("/embeddings").mock(side_effect=handle)
+            result = await client.embed_texts_tolerant(
+                ["a", "b", "bad", "bad2", "c", "d"], batch_size=2
+            )
+
+    assert result.total_batches == 3
+    assert result.failed_batches == 1
+    assert result.last_error is not None
+    assert len(result.vectors) == 6
+    assert result.vectors[2] is None and result.vectors[3] is None
+    ok = [v for i, v in enumerate(result.vectors) if i not in (2, 3)]
+    assert all(v is not None and len(v) == 8 for v in ok)
+
+
+@pytest.mark.asyncio
+async def test_embed_texts_tolerant_4xx_batch_skipped_without_retry():
+    """4xx 在 tolerant 模式下同样跳过（不重试），交由调用方的连续失败判定兜底。"""
+    settings = _settings()
+    calls = 0
+    async with httpx.AsyncClient() as raw:
+        client = EmbeddingClient(settings, client=raw)
+        with respx.mock(base_url=EMB_BASE) as router:
+            def handle(req: httpx.Request) -> httpx.Response:
+                nonlocal calls
+                calls += 1
+                return httpx.Response(401, text="bad key")
+
+            router.post("/embeddings").mock(side_effect=handle)
+            result = await client.embed_texts_tolerant(["x"], batch_size=1)
+
+    assert calls == 1  # 4xx 不重试
+    assert result.failed_batches == 1 and result.total_batches == 1
+    assert result.vectors == [None]
+
+
+@pytest.mark.asyncio
+async def test_embed_texts_tolerant_all_success_matches_embed_texts():
+    settings = _settings()
+    async with httpx.AsyncClient() as raw:
+        client = EmbeddingClient(settings, client=raw)
+        with respx.mock(base_url=EMB_BASE) as router:
+            def handle(req: httpx.Request) -> httpx.Response:
+                inputs = json.loads(req.content.decode("utf-8"))["input"]
+                return httpx.Response(200, json=_embedding_response(inputs))
+
+            router.post("/embeddings").mock(side_effect=handle)
+            strict_vecs = await client.embed_texts(["a", "b", "c"], batch_size=2)
+            result = await client.embed_texts_tolerant(["a", "b", "c"], batch_size=2)
+
+    assert result.failed_batches == 0
+    assert result.total_batches == 2
+    assert result.vectors == strict_vecs
+
+
+@pytest.mark.asyncio
+async def test_embed_texts_tolerant_empty_input():
+    settings = _settings()
+    async with httpx.AsyncClient() as raw:
+        client = EmbeddingClient(settings, client=raw)
+        result = await client.embed_texts_tolerant([])
+    assert result.vectors == []
+    assert result.total_batches == 0 and result.failed_batches == 0

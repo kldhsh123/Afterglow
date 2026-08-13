@@ -18,6 +18,7 @@ import logging
 import time
 from collections import deque
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -53,6 +54,20 @@ class _RetryableEmbeddingError(EmbeddingError):
     4xx 一律抛 `EmbeddingError`（不可重试）；
     5xx / 429 / 网络错误抛 `_RetryableEmbeddingError`，会被 tenacity 重试。
     """
+
+
+@dataclass(slots=True)
+class TolerantEmbedResult:
+    """`embed_texts_tolerant` 的结果。
+
+    vectors 与输入 texts 等长且顺序一致；重试耗尽的批次覆盖的位置为 None，
+    由调用方决定跳过还是终止。
+    """
+
+    vectors: list[list[float] | None]
+    failed_batches: int
+    total_batches: int
+    last_error: BaseException | None = None
 
 
 class _AsyncSlidingWindowRateLimiter:
@@ -150,14 +165,7 @@ class EmbeddingClient:
         if not texts:
             return []
 
-        effective_batch = batch_size if batch_size is not None else self.settings.embedding_batch_size
-        if self.settings.embedding_input_mode == "single":
-            effective_batch = 1
-        effective_batch = max(1, effective_batch)
-
-        batches: list[list[str]] = []
-        for i in range(0, len(texts), effective_batch):
-            batches.append(list(texts[i : i + effective_batch]))
+        batches = self._split_batches(texts, batch_size)
 
         async def _run(batch: list[str]) -> list[list[float]]:
             async with self._semaphore:
@@ -174,6 +182,73 @@ class EmbeddingClient:
                 f"返回向量数量与输入不一致：期望 {len(texts)}，实际 {len(out)}"
             )
         return out
+
+    async def embed_texts_tolerant(
+        self,
+        texts: Sequence[str],
+        *,
+        batch_size: int | None = None,
+    ) -> TolerantEmbedResult:
+        """批量向量化，单批失败不炸整体。
+
+        与 embed_texts 相同的切批、并发与重试策略；差别在于某个 HTTP 批次
+        重试耗尽后不向上抛，而是把该批覆盖的位置置为 None 返回，
+        供导入链路跳过失败批次继续处理（连续失败的终止判定由调用方负责）。
+        """
+        if not texts:
+            return TolerantEmbedResult(vectors=[], failed_batches=0, total_batches=0)
+
+        batches = self._split_batches(texts, batch_size)
+
+        async def _run(batch: list[str]) -> list[list[float]]:
+            async with self._semaphore:
+                return await self._embed_batch(batch)
+
+        results = await asyncio.gather(
+            *(_run(b) for b in batches), return_exceptions=True
+        )
+        vectors: list[list[float] | None] = []
+        failed = 0
+        last_error: BaseException | None = None
+        offset = 0
+        for batch, result in zip(batches, results, strict=True):
+            if isinstance(result, asyncio.CancelledError):
+                raise result
+            if isinstance(result, BaseException):
+                failed += 1
+                last_error = result
+                logger.warning(
+                    "embedding 批次失败已跳过（第 %d-%d 条）：%s",
+                    offset,
+                    offset + len(batch) - 1,
+                    result,
+                )
+                vectors.extend([None] * len(batch))
+            else:
+                vectors.extend(result)
+            offset += len(batch)
+        if len(vectors) != len(texts):
+            raise EmbeddingError(
+                f"返回向量数量与输入不一致：期望 {len(texts)}，实际 {len(vectors)}"
+            )
+        return TolerantEmbedResult(
+            vectors=vectors,
+            failed_batches=failed,
+            total_batches=len(batches),
+            last_error=last_error,
+        )
+
+    def _split_batches(
+        self, texts: Sequence[str], batch_size: int | None
+    ) -> list[list[str]]:
+        effective_batch = batch_size if batch_size is not None else self.settings.embedding_batch_size
+        if self.settings.embedding_input_mode == "single":
+            effective_batch = 1
+        effective_batch = max(1, effective_batch)
+        return [
+            list(texts[i : i + effective_batch])
+            for i in range(0, len(texts), effective_batch)
+        ]
 
     async def embed_one(self, text: str) -> list[float]:
         """便捷的单条接口。"""

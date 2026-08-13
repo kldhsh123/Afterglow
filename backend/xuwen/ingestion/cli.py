@@ -20,6 +20,7 @@ from rich.logging import RichHandler
 from rich.table import Table
 
 from xuwen.config import Settings, get_settings
+from xuwen.core.models import ImportReport
 from xuwen.ingestion.embedder import EmbeddingClient
 from xuwen.ingestion.importer import import_history
 from xuwen.memory.schema import (
@@ -349,7 +350,7 @@ async def _run_import(args: argparse.Namespace) -> int:
     store.ensure_tables()
     embedder = EmbeddingClient(settings)
 
-    reports: list = []
+    reports: list[tuple[Path, ImportReport]] = []
     try:
         for idx, path in enumerate(paths):
             if multi:
@@ -405,7 +406,9 @@ async def _run_import(args: argparse.Namespace) -> int:
     return 0
 
 
-def _print_report(report, L: dict[str, str], *, header: str | None = None) -> None:
+def _print_report(
+    report: ImportReport, L: dict[str, str], *, header: str | None = None
+) -> None:
     """打印单个文件的导入报告。"""
     title = L["title"] if header is None else f"{L['title']} — {header}"
     tbl = Table(title=title, show_lines=False)
@@ -430,7 +433,9 @@ def _print_report(report, L: dict[str, str], *, header: str | None = None) -> No
         console.print(f"[yellow]{L['tip']}[/]{note}")
 
 
-def _print_aggregate(reports: list, L: dict[str, str]) -> None:
+def _print_aggregate(
+    reports: list[tuple[Path, ImportReport]], L: dict[str, str]
+) -> None:
     """打印多文件汇总。所有数值简单相加，duration 累加为总耗时。"""
     if not reports:
         return
@@ -692,11 +697,11 @@ async def _run_analyze(args: argparse.Namespace) -> int:
             console.print(table)
             return 0
 
-        block = next(
+        target_block = next(
             (item for item in blocks if item.block_id == args.inspect_block),
             None,
         )
-        if block is None:
+        if target_block is None:
             console.print(
                 f"[bold red]未找到分析块：[/]{args.inspect_block}。"
                 "请确认输入文件、身份配置、--since 和 ANALYSIS_BLOCK_CHAR_BUDGET 与失败时一致。"
@@ -704,15 +709,15 @@ async def _run_analyze(args: argparse.Namespace) -> int:
             return 1
         console.print_json(
             data={
-                "block_id": block.block_id,
-                "start_time_ms": block.start_time_ms,
-                "end_time_ms": block.end_time_ms,
-                "message_count": block.message_count,
-                "char_count": len(block.text),
-                "session_ids": block.session_ids,
+                "block_id": target_block.block_id,
+                "start_time_ms": target_block.start_time_ms,
+                "end_time_ms": target_block.end_time_ms,
+                "message_count": target_block.message_count,
+                "char_count": len(target_block.text),
+                "session_ids": target_block.session_ids,
             }
         )
-        console.print(block.text, markup=False)
+        console.print(target_block.text, markup=False)
         return 0
 
     console.print("[bold]正在分析关系记录...[/]")

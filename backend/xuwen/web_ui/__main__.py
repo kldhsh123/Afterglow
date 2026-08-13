@@ -77,7 +77,7 @@ def main() -> None:
         return build_standalone_app(base_url=base_url)
 
     uvicorn.run(
-        factory,  # type: ignore[arg-type]
+        factory,
         factory=True,
         host=args.host,
         port=args.port,
