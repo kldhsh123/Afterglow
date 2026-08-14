@@ -261,3 +261,47 @@ async def test_adaptive_cache_key_depends_on_model(tmp_path):
         cache=AdaptiveChunkCache(cache_path),
     )
     llm2.complete_chat.assert_awaited_once()  # 换模型 → key 不同 → 未命中
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("setting_name", "updated_value"),
+    [
+        ("adaptive_chunk_temperature", 0.7),
+        ("adaptive_chunk_max_tokens", 901),
+    ],
+)
+async def test_adaptive_cache_key_depends_on_generation_settings(
+    tmp_path, setting_name, updated_value
+):
+    settings = Settings(
+        chunking_strategy="adaptive",
+        adaptive_chunk_model_enabled=True,
+        adaptive_chunk_max_messages_per_call=20,
+        adaptive_chunk_overlap_turns=0,
+    )
+    messages = [_msg(1, "self", "你在干嘛"), _msg(2, "friend", "刚吃饭")]
+    cache_path = tmp_path / "chunk_cache.jsonl"
+    reply = '{"segments":[{"start_turn":0,"end_turn":1}]}'
+
+    llm = AsyncMock()
+    llm.complete_chat = AsyncMock(return_value=reply)
+    await build_adaptive_windows(
+        [_session(messages)],
+        settings,
+        llm=llm,
+        model="glm-4-flash",
+        cache=AdaptiveChunkCache(cache_path),
+    )
+
+    changed_settings = settings.model_copy(update={setting_name: updated_value})
+    llm2 = AsyncMock()
+    llm2.complete_chat = AsyncMock(return_value=reply)
+    await build_adaptive_windows(
+        [_session(messages)],
+        changed_settings,
+        llm=llm2,
+        model="glm-4-flash",
+        cache=AdaptiveChunkCache(cache_path),
+    )
+    llm2.complete_chat.assert_awaited_once()

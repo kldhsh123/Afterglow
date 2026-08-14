@@ -1,6 +1,6 @@
 [project]
 name = "xuwen"
-version = "0.3.5"
+version = "0.3.6"
 description = "Afterglow（续温）—— 基于真实聊天记录的 RAG 陪伴系统，把曾经对你好的话续成往后的陪伴"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
@@ -72,9 +72,8 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 filterwarnings = [
   # jieba 上游遗留的 re 转义字符警告，与本项目无关。
-  # 编译期 SyntaxWarning 的 module 字段是源文件路径而非包名，按包名 `jieba.*`
-  # 匹配不上，只能按 message 前缀匹配。
-  "ignore:invalid escape sequence:SyntaxWarning",
+  # 编译期 SyntaxWarning 的 module 字段是源文件路径，需按 jieba 路径匹配。
+  "ignore:invalid escape sequence:SyntaxWarning:.*[/\\\\]jieba[/\\\\].*",
 ]
 
 [tool.mypy]

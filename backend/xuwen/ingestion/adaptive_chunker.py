@@ -196,6 +196,8 @@ def _batch_cache_key(batch: list[_Turn], settings: Settings, model: str) -> str:
         model,
         settings.adaptive_chunk_target_chars,
         settings.adaptive_chunk_max_chars,
+        settings.adaptive_chunk_temperature,
+        settings.adaptive_chunk_max_tokens,
         [[t.role, [m.text for m in t.messages]] for t in batch],
     ]
     serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
