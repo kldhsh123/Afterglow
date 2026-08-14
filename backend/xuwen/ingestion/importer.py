@@ -38,7 +38,7 @@ from xuwen.ingestion.chunker import (
     build_window_chunks,
 )
 from xuwen.ingestion.cleaner import Cleaner
-from xuwen.ingestion.embedder import EmbeddingClient
+from xuwen.ingestion.embedder import EmbeddingClient, TolerantEmbedResult
 from xuwen.ingestion.parser import load_qq_json
 from xuwen.ingestion.plugins import InspectableImportPlugin, select_plugin
 from xuwen.ingestion.splitter import build_windows, split_sessions
@@ -53,6 +53,28 @@ from xuwen.memory.store import MemoryStore
 # task。LanceDB 写锁让真正在执行的始终只有 1 个，剩下的排队，主要影响内存中暂存
 # 的 embeddings 数量。4 × 100 条 × 4096 维 ≈ 6 MB / track，整体可控。
 _UPSERT_INFLIGHT_LIMIT = 4
+
+
+class _EmbeddingCircuitBreaker:
+    """一次导入内由三路 embedding 流水线共享的连续失败计数。"""
+
+    def __init__(self, max_consecutive_failures: int) -> None:
+        self._failure_limit = max(1, max_consecutive_failures)
+        self._consecutive_failed = 0
+
+    def record(self, result: TolerantEmbedResult) -> None:
+        if result.failed_batches < result.total_batches:
+            # 任一路有成功请求都说明 API 仍可用，重置导入级连续失败计数。
+            self._consecutive_failed = 0
+            return
+
+        self._consecutive_failed += result.failed_batches
+        if self._consecutive_failed >= self._failure_limit:
+            raise IngestionError(
+                f"embedding 连续 {self._consecutive_failed} 个请求失败，"
+                f"判定为系统性故障，终止导入（已入库部分重跑时自动跳过）。"
+                f"最后错误：{result.last_error}"
+            ) from result.last_error
 
 
 async def import_history(
@@ -255,41 +277,61 @@ async def import_history(
 
             return _cb
 
-        friend_stats, window_stats, pair_stats = await asyncio.gather(
-            _embed_and_upsert_track(
-                embedder=embedder,
-                store=store,
-                chunks=bundle.friend_chunks,
-                text_of=lambda c: c.dialogue_snippet or c.text,
-                table=TABLE_FRIEND_MESSAGES,
-                upsert_fn=store.upsert_friend_chunks,
-                batch_size=upsert_batch,
-                max_consecutive_failures=settings.embedding_max_consecutive_failures,
-                progress_cb=_make_track_cb(0),
-            ),
-            _embed_and_upsert_track(
-                embedder=embedder,
-                store=store,
-                chunks=bundle.window_chunks,
-                text_of=lambda c: c.text,
-                table=TABLE_DIALOGUE_WINDOWS,
-                upsert_fn=store.upsert_window_chunks,
-                batch_size=upsert_batch,
-                max_consecutive_failures=settings.embedding_max_consecutive_failures,
-                progress_cb=_make_track_cb(1),
-            ),
-            _embed_and_upsert_track(
-                embedder=embedder,
-                store=store,
-                chunks=bundle.response_pair_chunks,
-                text_of=lambda c: c.user_text,
-                table=TABLE_RESPONSE_PAIRS,
-                upsert_fn=store.upsert_response_pair_chunks,
-                batch_size=upsert_batch,
-                max_consecutive_failures=settings.embedding_max_consecutive_failures,
-                progress_cb=_make_track_cb(2),
-            ),
+        circuit_breaker = _EmbeddingCircuitBreaker(
+            settings.embedding_max_consecutive_failures
         )
+        track_tasks = [
+            asyncio.create_task(
+                _embed_and_upsert_track(
+                    embedder=embedder,
+                    store=store,
+                    chunks=bundle.friend_chunks,
+                    text_of=lambda c: c.dialogue_snippet or c.text,
+                    table=TABLE_FRIEND_MESSAGES,
+                    upsert_fn=store.upsert_friend_chunks,
+                    batch_size=upsert_batch,
+                    max_consecutive_failures=settings.embedding_max_consecutive_failures,
+                    circuit_breaker=circuit_breaker,
+                    progress_cb=_make_track_cb(0),
+                )
+            ),
+            asyncio.create_task(
+                _embed_and_upsert_track(
+                    embedder=embedder,
+                    store=store,
+                    chunks=bundle.window_chunks,
+                    text_of=lambda c: c.text,
+                    table=TABLE_DIALOGUE_WINDOWS,
+                    upsert_fn=store.upsert_window_chunks,
+                    batch_size=upsert_batch,
+                    max_consecutive_failures=settings.embedding_max_consecutive_failures,
+                    circuit_breaker=circuit_breaker,
+                    progress_cb=_make_track_cb(1),
+                )
+            ),
+            asyncio.create_task(
+                _embed_and_upsert_track(
+                    embedder=embedder,
+                    store=store,
+                    chunks=bundle.response_pair_chunks,
+                    text_of=lambda c: c.user_text,
+                    table=TABLE_RESPONSE_PAIRS,
+                    upsert_fn=store.upsert_response_pair_chunks,
+                    batch_size=upsert_batch,
+                    max_consecutive_failures=settings.embedding_max_consecutive_failures,
+                    circuit_breaker=circuit_breaker,
+                    progress_cb=_make_track_cb(2),
+                )
+            ),
+        ]
+        try:
+            friend_stats, window_stats, pair_stats = await asyncio.gather(*track_tasks)
+        except BaseException:
+            for task in track_tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*track_tasks, return_exceptions=True)
+            raise
     finally:
         if owns_embedder:
             await embedder.aclose()
@@ -424,6 +466,7 @@ async def _embed_and_upsert_track(
     upsert_fn: Callable[[list[Any], dict[str, list[float]]], Awaitable[int]],
     batch_size: int,
     max_consecutive_failures: int,
+    circuit_breaker: _EmbeddingCircuitBreaker | None = None,
     progress_cb: Callable[[int, int], None] | None = None,
 ) -> dict[str, int]:
     """一路 chunk 的"查库去重 → 分批 embed → 异步 upsert"流程。
@@ -444,10 +487,11 @@ async def _embed_and_upsert_track(
     - failed：embedding 重试耗尽后被跳过的 chunk 数（重跑同一文件可补齐）
 
     容错策略：单个 HTTP 批次重试耗尽只跳过该批的 chunk，导入继续；
-    一个外层批次的请求全部失败时累计连续失败数，达到 max_consecutive_failures
-    （EMBEDDING_MAX_CONSECUTIVE_FAILURES，最小按 1 处理）判定为系统性故障，
-    抛 `IngestionError` 终止（先等已 spawn 的 upsert 落库）。
-    任何成功请求都会清零连续计数。
+    一个外层批次的请求全部失败时累计连续失败数。import_history 会为三路传入
+    同一个 circuit_breaker，让阈值在本次导入内共享；直接调用本函数时则创建
+    单路状态。达到 max_consecutive_failures（最小按 1 处理）后抛
+    `IngestionError` 终止（先等已 spawn 的 upsert 落库）。任何成功请求都会
+    清零连续计数。
     """
     stats = {"total": len(chunks), "skipped": 0, "embedded": 0, "upserted": 0, "failed": 0}
     if not chunks:
@@ -469,6 +513,7 @@ async def _embed_and_upsert_track(
     bs = max(1, batch_size)
     sem = asyncio.Semaphore(_UPSERT_INFLIGHT_LIMIT)
     upsert_tasks: list[asyncio.Task[int]] = []
+    breaker = circuit_breaker or _EmbeddingCircuitBreaker(max_consecutive_failures)
 
     async def _upsert_one(
         batch_: list[Any], embeddings_: dict[str, list[float]]
@@ -479,25 +524,13 @@ async def _embed_and_upsert_track(
             sem.release()
 
     try:
-        consecutive_failed = 0
-        failure_limit = max(1, max_consecutive_failures)
         for offset in range(0, len(pending), bs):
             batch = pending[offset : offset + bs]
             if not batch:
                 continue
             texts = [text_of(c) for c in batch]
             result = await embedder.embed_texts_tolerant(texts)
-            if result.failed_batches < result.total_batches:
-                # 有成功请求（含全成功）：API 活着，失败是数据性的，清零计数
-                consecutive_failed = 0
-            else:
-                consecutive_failed += result.failed_batches
-                if consecutive_failed >= failure_limit:
-                    raise IngestionError(
-                        f"embedding 连续 {consecutive_failed} 个请求失败，"
-                        f"判定为系统性故障，终止导入（已入库部分重跑时自动跳过）。"
-                        f"最后错误：{result.last_error}"
-                    ) from result.last_error
+            breaker.record(result)
             ok_pairs = [
                 (c, vec)
                 for c, vec in zip(batch, result.vectors, strict=True)

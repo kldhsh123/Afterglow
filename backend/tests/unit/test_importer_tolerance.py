@@ -5,13 +5,16 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
 
+from xuwen.config import Settings
 from xuwen.core.errors import IngestionError
 from xuwen.ingestion.embedder import TolerantEmbedResult
-from xuwen.ingestion.importer import _embed_and_upsert_track
+from xuwen.ingestion.importer import _embed_and_upsert_track, import_history
 
 
 @dataclass(slots=True)
@@ -23,6 +26,15 @@ class _Chunk:
 class _FakeStore:
     async def existing_ids(self, table: str, ids: list[str]) -> set[str]:
         return set()
+
+    async def upsert_friend_chunks(self, batch, embeddings) -> int:
+        return len(batch)
+
+    async def upsert_window_chunks(self, batch, embeddings) -> int:
+        return len(batch)
+
+    async def upsert_response_pair_chunks(self, batch, embeddings) -> int:
+        return len(batch)
 
 
 class _ScriptedEmbedder:
@@ -71,6 +83,22 @@ class _UpsertRecorder:
 
 def _chunks(n: int) -> list[_Chunk]:
     return [_Chunk(chunk_id=f"c{i}", text=f"t{i}") for i in range(n)]
+
+
+def _import_settings(**updates) -> Settings:
+    settings = Settings(
+        self_name="Me",
+        self_uid="uid-self-001",
+        friend_name="TestFriend",
+        friend_uid="uid-friend-001",
+        relationship_type="friend",
+        embedding_max_consecutive_failures=3,
+    )
+    return settings.model_copy(update=updates)
+
+
+def _sample_path() -> Path:
+    return Path(__file__).resolve().parent.parent / "fixtures" / "sample_chat.json"
 
 
 @pytest.mark.asyncio
@@ -163,3 +191,80 @@ async def test_failure_threshold_is_configurable():
 
     assert embedder.calls == 2
     assert upserts.chunk_ids == []
+
+
+@pytest.mark.asyncio
+async def test_import_circuit_breaker_counts_failures_across_tracks():
+    embedder = _ScriptedEmbedder(["fail", "fail", "fail"])
+
+    with pytest.raises(IngestionError):
+        await import_history(
+            _sample_path(),
+            _import_settings(),
+            store=_FakeStore(),  # type: ignore[arg-type]
+            embedder=embedder,  # type: ignore[arg-type]
+            update_circadian=False,
+            update_proactive=False,
+        )
+
+    assert embedder.calls == 3
+
+
+class _CancellationProbeEmbedder:
+    instance: _CancellationProbeEmbedder | None = None
+
+    def __init__(self, settings: Settings) -> None:
+        type(self).instance = self
+        self.started = 0
+        self.cancelled = 0
+        self.cleaned = 0
+        self.closed_after_cleanup = False
+        self._all_started = asyncio.Event()
+        self._block = asyncio.Event()
+
+    async def embed_texts_tolerant(self, texts) -> TolerantEmbedResult:
+        self.started += 1
+        if self.started == 3:
+            self._all_started.set()
+        if self.started == 1:
+            await self._all_started.wait()
+            return TolerantEmbedResult(
+                vectors=[None] * len(texts),
+                failed_batches=1,
+                total_batches=1,
+                last_error=RuntimeError("boom"),
+            )
+        try:
+            await self._block.wait()
+        except asyncio.CancelledError:
+            self.cancelled += 1
+            await asyncio.sleep(0)
+            self.cleaned += 1
+            raise
+        raise AssertionError("blocked embedding call unexpectedly resumed")
+
+    async def aclose(self) -> None:
+        self.closed_after_cleanup = self.cleaned == 2
+
+
+@pytest.mark.asyncio
+async def test_import_cancels_and_waits_for_siblings_before_closing_embedder(monkeypatch):
+    monkeypatch.setattr(
+        "xuwen.ingestion.importer.EmbeddingClient",
+        _CancellationProbeEmbedder,
+    )
+
+    with pytest.raises(IngestionError):
+        await import_history(
+            _sample_path(),
+            _import_settings(embedding_max_consecutive_failures=1),
+            store=_FakeStore(),  # type: ignore[arg-type]
+            update_circadian=False,
+            update_proactive=False,
+        )
+
+    embedder = _CancellationProbeEmbedder.instance
+    assert embedder is not None
+    assert embedder.cancelled == 2
+    assert embedder.cleaned == 2
+    assert embedder.closed_after_cleanup is True
