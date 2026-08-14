@@ -267,9 +267,10 @@ def _adaptive_context_for_message(
     """按字符预算收集自适应切分所需的上下文。"""
     budget = max(0, settings.single_context_max_chars)
     if budget <= 0:
-        before = list(messages[max(0, idx - settings.single_context_before) : idx])
-        after = list(messages[idx + 1 : idx + 1 + settings.single_context_after])
-        return before, after
+        return (
+            list(messages[max(0, idx - settings.single_context_before) : idx]),
+            list(messages[idx + 1 : idx + 1 + settings.single_context_after]),
+        )
 
     before_rev: list[NormalizedMessage] = []
     used = 0

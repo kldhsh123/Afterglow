@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -15,6 +16,7 @@ from dataclasses import dataclass
 from xuwen.chat_api.llm_client import GenerationParams, LLMClient
 from xuwen.config import Settings
 from xuwen.core.models import MessageKind, MessageWindow, NormalizedMessage, Session
+from xuwen.ingestion.chunk_cache import AdaptiveChunkCache
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +53,7 @@ async def build_adaptive_windows(
     model: str = "",
     progress_cb: Callable[[int, int], None] | None = None,
     max_concurrency: int = 1,
+    cache: AdaptiveChunkCache | None = None,
 ) -> list[MessageWindow]:
     """根据按话题划分的自适应分段构建对话窗口。
 
@@ -59,6 +62,8 @@ async def build_adaptive_windows(
     max_concurrency：会话级并发上限（>=1）。模型切分时每个会话内部仍按
         ADAPTIVE_CHUNK_MAX_MESSAGES_PER_CALL 串行调用小模型，但不同会话之间
         通过 Semaphore 同时进行；用上游 API 的并发额度大幅压缩总耗时。
+    cache：模型切分结果缓存（批次级）。命中时跳过该批的小模型调用；
+        仅缓存模型成功的批次，退回启发式的批次下次仍会重试模型。
     输出窗口的顺序按 processable session 原序排列（gather 保序）。
     """
     processable = [
@@ -85,6 +90,7 @@ async def build_adaptive_windows(
                     settings,
                     llm=llm,
                     model=model,
+                    cache=cache,
                 )
             for seg in segments:
                 start_idx = max(0, seg.start_idx - settings.adaptive_chunk_overlap_turns)
@@ -115,6 +121,7 @@ async def _segments_for_session(
     *,
     llm: LLMClient | None,
     model: str,
+    cache: AdaptiveChunkCache | None = None,
 ) -> list[_TurnSegment]:
     if (
         settings.adaptive_chunk_model_enabled
@@ -122,7 +129,9 @@ async def _segments_for_session(
         and model
     ):
         try:
-            segments = await _model_segments_batched(turns, settings, llm=llm, model=model)
+            segments = await _model_segments_batched(
+                turns, settings, llm=llm, model=model, cache=cache
+            )
             if segments:
                 return segments
         except Exception:
@@ -136,25 +145,38 @@ async def _model_segments_batched(
     *,
     llm: LLMClient,
     model: str,
+    cache: AdaptiveChunkCache | None = None,
 ) -> list[_TurnSegment]:
     """让模型在大小受限的消息批次中判断边界。
 
     导出的聊天记录经常包含很长的会话；限制单次模型调用规模可以避免提示词过长，
     同时仍能覆盖完整会话的语义边界，而不是完全退回启发式切分。
+
+    cache 命中的批次直接复用历史结果；只有模型真正返回有效边界的批次才写入
+    缓存，失败退回启发式的批次不缓存，下次导入会重试模型。
     """
     segments: list[_TurnSegment] = []
     for offset, batch in _turn_batches_by_message_count(
         turns,
         settings.adaptive_chunk_max_messages_per_call,
     ):
-        try:
-            batch_segments = await _model_segments(batch, settings, llm=llm, model=model)
-        except Exception:
-            logger.warning(
-                "adaptive chunk model batch failed; using heuristic batch windows",
-                exc_info=True,
+        key = _batch_cache_key(batch, settings, model) if cache is not None else ""
+        cached = cache.get(key) if cache is not None else None
+        if cached is not None:
+            batch_segments = _normalize_segments(
+                [_TurnSegment(start, end) for start, end in cached], len(batch)
             )
-            batch_segments = []
+        else:
+            try:
+                batch_segments = await _model_segments(batch, settings, llm=llm, model=model)
+            except Exception:
+                logger.warning(
+                    "adaptive chunk model batch failed; using heuristic batch windows",
+                    exc_info=True,
+                )
+                batch_segments = []
+            if batch_segments and cache is not None:
+                cache.put(key, [[seg.start_idx, seg.end_idx] for seg in batch_segments])
         if not batch_segments:
             batch_segments = _heuristic_segments(batch, settings)
         segments.extend(
@@ -162,6 +184,24 @@ async def _model_segments_batched(
             for seg in batch_segments
         )
     return _normalize_segments(segments, len(turns))
+
+
+def _batch_cache_key(batch: list[_Turn], settings: Settings, model: str) -> str:
+    """批次缓存 key：模型 + 影响提示词的切分参数 + 批内 (角色, 消息文本)。
+
+    刻意不含 seq 与时间戳——重新导出导致 seq 漂移但文本未变时仍能命中；
+    模型返回的是批内局部 turn 索引，与 seq 无关，复用是安全的。
+    """
+    payload = [
+        model,
+        settings.adaptive_chunk_target_chars,
+        settings.adaptive_chunk_max_chars,
+        settings.adaptive_chunk_temperature,
+        settings.adaptive_chunk_max_tokens,
+        [[t.role, [m.text for m in t.messages]] for t in batch],
+    ]
+    serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
 async def _model_segments(

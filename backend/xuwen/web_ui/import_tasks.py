@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import asyncio
+import builtins
 import json
 import sys
 import time
@@ -77,8 +78,12 @@ class ImportTaskManager:
     def list(self) -> list[ImportTask]:
         return list(self._tasks.values())
 
-    def list_active(self) -> list[ImportTask]:
-        """所有未结束的任务（前端刷新页面后用来恢复跟踪）。"""
+    def list_active(self) -> builtins.list[ImportTask]:
+        """所有未结束的任务（前端刷新页面后用来恢复跟踪）。
+
+        注：返回类型写 builtins.list 是因为上面的 `list()` 方法在类作用域内
+        遮蔽了内建名，直接写 list[ImportTask] 会被解析成方法而报错。
+        """
         return [
             t for t in self._tasks.values()
             if t.status not in ("done", "failed", "cancelled")

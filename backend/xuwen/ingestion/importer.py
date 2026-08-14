@@ -7,15 +7,16 @@
 - chunk_id 基于内容 hash 确定性生成，相同源文件得到相同 id；
 - 三路 chunk（friend / window / response_pair）各自独立执行 "查库去重 →
   分批 embed → 立刻 upsert" 流程；
-- 任意一批 embedding API 失败时，**已经 upsert 入库的 batch 不丢**，重跑
-  会跳过这些已存在的 chunk_id，仅对剩余未入库的部分发 embedding 调用。
+- 单个 embedding 请求重试耗尽只跳过该批 chunk 并继续，连续全部失败才终止
+  （判定为系统性故障）；无论跳过还是终止，**已经 upsert 入库的 batch 不丢**，
+  重跑会跳过这些已存在的 chunk_id，仅对剩余未入库的部分发 embedding 调用。
 """
 
 from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -30,13 +31,14 @@ from xuwen.core.models import (
     ResponsePairChunk,
 )
 from xuwen.ingestion.adaptive_chunker import build_adaptive_windows
+from xuwen.ingestion.chunk_cache import AdaptiveChunkCache
 from xuwen.ingestion.chunker import (
     build_friend_chunks,
     build_response_pair_chunks,
     build_window_chunks,
 )
 from xuwen.ingestion.cleaner import Cleaner
-from xuwen.ingestion.embedder import EmbeddingClient
+from xuwen.ingestion.embedder import EmbeddingClient, TolerantEmbedResult
 from xuwen.ingestion.parser import load_qq_json
 from xuwen.ingestion.plugins import InspectableImportPlugin, select_plugin
 from xuwen.ingestion.splitter import build_windows, split_sessions
@@ -51,6 +53,28 @@ from xuwen.memory.store import MemoryStore
 # task。LanceDB 写锁让真正在执行的始终只有 1 个，剩下的排队，主要影响内存中暂存
 # 的 embeddings 数量。4 × 100 条 × 4096 维 ≈ 6 MB / track，整体可控。
 _UPSERT_INFLIGHT_LIMIT = 4
+
+
+class _EmbeddingCircuitBreaker:
+    """一次导入内由三路 embedding 流水线共享的连续失败计数。"""
+
+    def __init__(self, max_consecutive_failures: int) -> None:
+        self._failure_limit = max(1, max_consecutive_failures)
+        self._consecutive_failed = 0
+
+    def record(self, result: TolerantEmbedResult) -> None:
+        if result.failed_batches < result.total_batches:
+            # 任一路有成功请求都说明 API 仍可用，重置导入级连续失败计数。
+            self._consecutive_failed = 0
+            return
+
+        self._consecutive_failed += result.failed_batches
+        if self._consecutive_failed >= self._failure_limit:
+            raise IngestionError(
+                f"embedding 连续 {self._consecutive_failed} 个请求失败，"
+                f"判定为系统性故障，终止导入（已入库部分重跑时自动跳过）。"
+                f"最后错误：{result.last_error}"
+            ) from result.last_error
 
 
 async def import_history(
@@ -126,6 +150,7 @@ async def import_history(
     adaptive_llm: LLMClient | None = None
     try:
         if settings.chunking_strategy == "adaptive":
+            chunk_cache: AdaptiveChunkCache | None = None
             if settings.adaptive_chunk_model_enabled:
                 _stage(f"正在调用小模型切分话题边界（{len(sessions)} 个会话）")
                 adaptive_llm = LLMClient(
@@ -135,6 +160,8 @@ async def import_history(
                     timeout_seconds=settings.adaptive_chunk_timeout_seconds,
                     include_reasoning_effort=True,
                 )
+                # 模型切分结果缓存：中断重跑 / 重复导入时命中即免调模型
+                chunk_cache = AdaptiveChunkCache(settings.adaptive_chunk_cache_path)
             else:
                 _stage(f"正在用启发式 adaptive 切分窗口（{len(sessions)} 个会话）")
 
@@ -159,7 +186,13 @@ async def import_history(
                 model=settings.resolved_adaptive_chunk_model,
                 progress_cb=_on_split_progress,
                 max_concurrency=settings.resolved_adaptive_chunk_max_concurrency,
+                cache=chunk_cache,
             )
+            if chunk_cache is not None and (chunk_cache.hits or chunk_cache.misses):
+                _stage(
+                    f"话题切分完成（缓存命中 {chunk_cache.hits}/"
+                    f"{chunk_cache.hits + chunk_cache.misses} 批）"
+                )
         else:
             _stage(f"正在切分窗口（{len(sessions)} 个会话）")
             windows = build_windows(sessions, settings)
@@ -244,38 +277,61 @@ async def import_history(
 
             return _cb
 
-        friend_stats, window_stats, pair_stats = await asyncio.gather(
-            _embed_and_upsert_track(
-                embedder=embedder,
-                store=store,
-                chunks=bundle.friend_chunks,
-                text_of=lambda c: c.dialogue_snippet or c.text,
-                table=TABLE_FRIEND_MESSAGES,
-                upsert_fn=store.upsert_friend_chunks,
-                batch_size=upsert_batch,
-                progress_cb=_make_track_cb(0),
-            ),
-            _embed_and_upsert_track(
-                embedder=embedder,
-                store=store,
-                chunks=bundle.window_chunks,
-                text_of=lambda c: c.text,
-                table=TABLE_DIALOGUE_WINDOWS,
-                upsert_fn=store.upsert_window_chunks,
-                batch_size=upsert_batch,
-                progress_cb=_make_track_cb(1),
-            ),
-            _embed_and_upsert_track(
-                embedder=embedder,
-                store=store,
-                chunks=bundle.response_pair_chunks,
-                text_of=lambda c: c.user_text,
-                table=TABLE_RESPONSE_PAIRS,
-                upsert_fn=store.upsert_response_pair_chunks,
-                batch_size=upsert_batch,
-                progress_cb=_make_track_cb(2),
-            ),
+        circuit_breaker = _EmbeddingCircuitBreaker(
+            settings.embedding_max_consecutive_failures
         )
+        track_tasks = [
+            asyncio.create_task(
+                _embed_and_upsert_track(
+                    embedder=embedder,
+                    store=store,
+                    chunks=bundle.friend_chunks,
+                    text_of=lambda c: c.dialogue_snippet or c.text,
+                    table=TABLE_FRIEND_MESSAGES,
+                    upsert_fn=store.upsert_friend_chunks,
+                    batch_size=upsert_batch,
+                    max_consecutive_failures=settings.embedding_max_consecutive_failures,
+                    circuit_breaker=circuit_breaker,
+                    progress_cb=_make_track_cb(0),
+                )
+            ),
+            asyncio.create_task(
+                _embed_and_upsert_track(
+                    embedder=embedder,
+                    store=store,
+                    chunks=bundle.window_chunks,
+                    text_of=lambda c: c.text,
+                    table=TABLE_DIALOGUE_WINDOWS,
+                    upsert_fn=store.upsert_window_chunks,
+                    batch_size=upsert_batch,
+                    max_consecutive_failures=settings.embedding_max_consecutive_failures,
+                    circuit_breaker=circuit_breaker,
+                    progress_cb=_make_track_cb(1),
+                )
+            ),
+            asyncio.create_task(
+                _embed_and_upsert_track(
+                    embedder=embedder,
+                    store=store,
+                    chunks=bundle.response_pair_chunks,
+                    text_of=lambda c: c.user_text,
+                    table=TABLE_RESPONSE_PAIRS,
+                    upsert_fn=store.upsert_response_pair_chunks,
+                    batch_size=upsert_batch,
+                    max_consecutive_failures=settings.embedding_max_consecutive_failures,
+                    circuit_breaker=circuit_breaker,
+                    progress_cb=_make_track_cb(2),
+                )
+            ),
+        ]
+        try:
+            friend_stats, window_stats, pair_stats = await asyncio.gather(*track_tasks)
+        except BaseException:
+            for task in track_tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*track_tasks, return_exceptions=True)
+            raise
     finally:
         if owns_embedder:
             await embedder.aclose()
@@ -294,6 +350,15 @@ async def import_history(
         notes.append(
             f"续跑跳过已入库的 chunk："
             f"friend {skipped_friend} / window {skipped_window} / pair {skipped_pair}"
+        )
+    failed_friend = friend_stats["failed"]
+    failed_window = window_stats["failed"]
+    failed_pair = pair_stats["failed"]
+    if failed_friend or failed_window or failed_pair:
+        notes.append(
+            f"向量化失败已跳过 {failed_friend + failed_window + failed_pair} 个 chunk"
+            f"（friend {failed_friend} / window {failed_window} / pair {failed_pair}）。"
+            "重新导入同一文件会自动只补这些失败条目。"
         )
 
     # 生成 / 更新作息画像 circadian_profile.json
@@ -398,8 +463,10 @@ async def _embed_and_upsert_track(
     chunks: list[FriendMessageChunk] | list[DialogueWindowChunk] | list[ResponsePairChunk],
     text_of: Callable[[Any], str],
     table: str,
-    upsert_fn: Callable[[list[Any], dict[str, list[float]]], Any],
+    upsert_fn: Callable[[list[Any], dict[str, list[float]]], Awaitable[int]],
     batch_size: int,
+    max_consecutive_failures: int,
+    circuit_breaker: _EmbeddingCircuitBreaker | None = None,
     progress_cb: Callable[[int, int], None] | None = None,
 ) -> dict[str, int]:
     """一路 chunk 的"查库去重 → 分批 embed → 异步 upsert"流程。
@@ -412,16 +479,21 @@ async def _embed_and_upsert_track(
     progress_cb(done, total)：每批 embed 完成后回调一次，让上层显示细化进度。
     done = 跳过（已存）+ 已 embed 的数量；total = chunks 总数。
 
-    返回 {total, skipped, embedded, upserted}：
+    返回 {total, skipped, embedded, upserted, failed}：
     - total：本次 chunker 产出的 chunk 总数
     - skipped：因 chunk_id 已存在库中而被跳过的（续跑场景）
-    - embedded：实际发送给 embedding API 的 chunk 数
+    - embedded：实际拿到向量的 chunk 数
     - upserted：成功写入 LanceDB 的 chunk 数（理论上 == embedded）
+    - failed：embedding 重试耗尽后被跳过的 chunk 数（重跑同一文件可补齐）
 
-    单批 embedding 失败时，已 spawn 的 upsert task 会被等到完成（让已 embed
-    的批落库）后再向上抛出 embed 错误；下次重跑通过 chunk_id 跳过这些。
+    容错策略：单个 HTTP 批次重试耗尽只跳过该批的 chunk，导入继续；
+    一个外层批次的请求全部失败时累计连续失败数。import_history 会为三路传入
+    同一个 circuit_breaker，让阈值在本次导入内共享；直接调用本函数时则创建
+    单路状态。达到 max_consecutive_failures（最小按 1 处理）后抛
+    `IngestionError` 终止（先等已 spawn 的 upsert 落库）。任何成功请求都会
+    清零连续计数。
     """
-    stats = {"total": len(chunks), "skipped": 0, "embedded": 0, "upserted": 0}
+    stats = {"total": len(chunks), "skipped": 0, "embedded": 0, "upserted": 0, "failed": 0}
     if not chunks:
         if progress_cb is not None:
             progress_cb(0, 0)
@@ -441,6 +513,7 @@ async def _embed_and_upsert_track(
     bs = max(1, batch_size)
     sem = asyncio.Semaphore(_UPSERT_INFLIGHT_LIMIT)
     upsert_tasks: list[asyncio.Task[int]] = []
+    breaker = circuit_breaker or _EmbeddingCircuitBreaker(max_consecutive_failures)
 
     async def _upsert_one(
         batch_: list[Any], embeddings_: dict[str, list[float]]
@@ -456,19 +529,27 @@ async def _embed_and_upsert_track(
             if not batch:
                 continue
             texts = [text_of(c) for c in batch]
-            vectors = await embedder.embed_texts(texts)
-            if len(vectors) != len(batch):
-                raise IngestionError("embedding 返回向量数与 chunk 数不一致")
-            embeddings = {
-                c.chunk_id: vec for c, vec in zip(batch, vectors, strict=True)
-            }
-            stats["embedded"] += len(embeddings)
+            result = await embedder.embed_texts_tolerant(texts)
+            breaker.record(result)
+            ok_pairs = [
+                (c, vec)
+                for c, vec in zip(batch, result.vectors, strict=True)
+                if vec is not None
+            ]
+            stats["failed"] += len(batch) - len(ok_pairs)
+            stats["embedded"] += len(ok_pairs)
             if progress_cb is not None:
-                progress_cb(stats["skipped"] + stats["embedded"], total_unique)
+                progress_cb(
+                    stats["skipped"] + stats["embedded"] + stats["failed"],
+                    total_unique,
+                )
+            if not ok_pairs:
+                continue
+            embeddings = {c.chunk_id: vec for c, vec in ok_pairs}
             # 拿一个 slot；slot 满时阻塞 embed loop，防止 task 堆积爆内存
             await sem.acquire()
             upsert_tasks.append(
-                asyncio.create_task(_upsert_one(batch, embeddings))
+                asyncio.create_task(_upsert_one([c for c, _ in ok_pairs], embeddings))
             )
     except BaseException:
         # embed 阶段抛错：等所有已 spawn 的 upsert 完成（给已 embed 的批落库机会），

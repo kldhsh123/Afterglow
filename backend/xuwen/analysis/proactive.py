@@ -7,11 +7,13 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from statistics import median
+from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from xuwen.analysis.models import (
     ProactiveAnalysisReport,
     ProactiveOpeningRecord,
+    ProactiveOpeningType,
     ProactivePeriodCount,
 )
 from xuwen.core.models import NormalizedMessage, Session
@@ -44,7 +46,7 @@ def analyze_proactive_openings(
             unknown_started += 1
             continue
 
-        initiator = "friend" if first.is_friend else "self"
+        initiator: Literal["friend", "self"] = "friend" if first.is_friend else "self"
         if initiator == "self":
             self_started += 1
         opening_messages = _opening_messages(
@@ -98,7 +100,7 @@ def analyze_proactive_openings(
     hour_counts = [0] * 24
     weekday_counts = [0] * 7
     month_counts: Counter[str] = Counter()
-    type_counts: Counter[str] = Counter()
+    type_counts: Counter[ProactiveOpeningType] = Counter()
     active_dates: set[str] = set()
     known_gaps: list[int] = []
     for opening in friend_openings:

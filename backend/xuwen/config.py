@@ -227,6 +227,9 @@ class Settings(BaseSettings):
     embedding_retry_attempts: int = 8
     # 重试单次等待上限（秒）。指数退避从 1s 起步，翻倍但不超过此值
     embedding_retry_max_wait_seconds: float = 10.0
+    # 导入时 embedding 请求连续失败多少次判定为系统性故障并终止（最小按 1 处理）。
+    # 偶发失败（内容审查/超长输入/单批异常）只跳过该批继续，任何成功请求都清零计数。
+    embedding_max_consecutive_failures: int = 3
 
     # ----- 存储路径 -----
     lance_db_path: Path = Path(".data/lancedb")
@@ -292,6 +295,9 @@ class Settings(BaseSettings):
     #   - 否则用默认 4
     # >0 时强制使用该值，覆盖 fallback。
     adaptive_chunk_max_concurrency: int = 0
+    # 模型切分结果缓存（JSONL）。中断重跑 / 重复导入时命中即跳过小模型调用；
+    # key 含模型名与切分参数，换配置自然失效。删除该文件即重置缓存。
+    adaptive_chunk_cache_path: Path = Path(".data/ingestion/adaptive_chunk_cache.jsonl")
 
     # ----- 关系分析（显式离线任务；留空复用主聊天模型）-----
     analysis_api_url: str = ""

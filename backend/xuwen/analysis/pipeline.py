@@ -542,14 +542,14 @@ def _resolve_analysis_targets(
             raise ValueError("experimental 分析需要 ANALYSIS_EXPERIMENTAL_ENABLED=true")
         return selected
 
-    selected: set[AnalysisTarget] = {"life"}
+    defaults: set[AnalysisTarget] = {"life"}
     if timeline:
-        selected.add("timeline")
+        defaults.add("timeline")
     if personality:
-        selected.add("personality")
+        defaults.add("personality")
     if settings.analysis_experimental_enabled:
-        selected.add("experimental")
-    return frozenset(selected)
+        defaults.add("experimental")
+    return frozenset(defaults)
 
 
 async def _hierarchical_results(

@@ -9,7 +9,7 @@ import asyncio
 import secrets
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
@@ -50,7 +50,7 @@ def _settings_dep(request: Request) -> Settings:
     """从子 app state 取 Settings（在 create_config_app 中注入）。"""
     settings = getattr(request.app.state, "settings", None)
     if settings is not None:
-        return settings
+        return cast(Settings, settings)
     from xuwen.config import get_settings
 
     return get_settings()
@@ -222,8 +222,12 @@ def put_values(
             continue
         doc.set(key, value)
 
-    # 用合并后的 dict 试构造 Settings
-    merged: dict[str, Any] = {ln.key: ln.value for ln in doc.lines if ln.kind == "assign"}
+    # 用合并后的 dict 试构造 Settings（assign 行必有 key，条件里排除 None 让类型收窄）
+    merged: dict[str, Any] = {
+        ln.key: ln.value
+        for ln in doc.lines
+        if ln.kind == "assign" and ln.key is not None
+    }
     try:
         Settings(**{k.lower(): v for k, v in merged.items()})
     except ValidationError as e:
