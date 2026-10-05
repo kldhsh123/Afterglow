@@ -14,7 +14,7 @@ import logging
 import math
 import time
 from collections import deque
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
@@ -62,6 +62,15 @@ _INDEXABLE_VECTOR_TABLES = (
     TABLE_RESPONSE_PAIRS,
     TABLE_HISTORY_IMAGES,
     TABLE_LIVE_MESSAGES,
+)
+
+_TABLE_SCHEMAS: tuple[tuple[str, Callable[[int], pa.Schema]], ...] = (
+    (TABLE_FRIEND_MESSAGES, friend_messages_schema),
+    (TABLE_DIALOGUE_WINDOWS, dialogue_windows_schema),
+    (TABLE_RESPONSE_PAIRS, response_pairs_schema),
+    (TABLE_HISTORY_IMAGES, history_images_schema),
+    (TABLE_LIVE_MESSAGES, live_messages_schema),
+    (TABLE_RELATIONSHIP_MEMORIES, relationship_memories_schema),
 )
 
 
@@ -156,25 +165,50 @@ class MemoryStore:
 
         设计上 schema 只增不改：新增可空字段时，旧库读到 null 等价于"未填"，
         不会破坏向量召回；如果哪天真要做破坏性 schema 变更，再单独写迁移命令。
+
+        例外是向量维度。首次配置模式启动时会先按默认 EMBEDDING_DIM 建表，用户随后
+        在向导里换成其它维度的 Embedding 模型，旧表就再也写不进去。维度不一致的
+        空表直接按当前维度重建，不丢任何数据；有数据的表保持原样，只记录警告，
+        写入前的维度检查会给出处理建议。
         """
         db = self._require_db()
         dim = self.settings.embedding_dim
         existing = set(_list_table_names(db))
-        if TABLE_FRIEND_MESSAGES not in existing:
-            db.create_table(TABLE_FRIEND_MESSAGES, schema=friend_messages_schema(dim))
-        if TABLE_DIALOGUE_WINDOWS not in existing:
-            db.create_table(TABLE_DIALOGUE_WINDOWS, schema=dialogue_windows_schema(dim))
-        if TABLE_RESPONSE_PAIRS not in existing:
-            db.create_table(TABLE_RESPONSE_PAIRS, schema=response_pairs_schema(dim))
-        if TABLE_HISTORY_IMAGES not in existing:
-            db.create_table(TABLE_HISTORY_IMAGES, schema=history_images_schema(dim))
-        if TABLE_LIVE_MESSAGES not in existing:
-            db.create_table(TABLE_LIVE_MESSAGES, schema=live_messages_schema(dim))
-        if TABLE_RELATIONSHIP_MEMORIES not in existing:
-            db.create_table(
-                TABLE_RELATIONSHIP_MEMORIES,
-                schema=relationship_memories_schema(dim),
+        for name, schema_of in _TABLE_SCHEMAS:
+            if name not in existing:
+                db.create_table(name, schema=schema_of(dim))
+                continue
+            tbl = db.open_table(name)
+            table_dim = _vector_dim(tbl)
+            if table_dim is None or table_dim == dim:
+                continue
+            if tbl.count_rows() > 0:
+                logger.warning(
+                    "%s",
+                    _vector_dim_mismatch_message(
+                        name, table_dim, dim, self.settings.lance_db_path
+                    ),
+                )
+                continue
+            # overwrite 只写入新版本，不删除表目录：drop_table 在部分本地文件系统上会阻塞。
+            db.create_table(name, schema=schema_of(dim), mode="overwrite")
+            self._table_handles.pop(name, None)
+            self._non_vector_cols.pop(name, None)
+            self._nprobes_cache.pop(name, None)
+            logger.info(
+                "向量库表 %s 为空，已按 EMBEDDING_DIM=%d 重建（原维度 %d）",
+                name,
+                dim,
+                table_dim,
             )
+
+    def check_vector_dims(self, tables: Iterable[str]) -> None:
+        """确认这些表的向量维度与 EMBEDDING_DIM 一致，不一致时抛出带处理建议的 StoreError。
+
+        导入流程在调用 embedding / 视觉模型之前检查，避免先花掉 API 调用才在写库时失败。
+        """
+        for name in tables:
+            self._ensure_table_vector_dim(name, self._table(name))
 
     async def ensure_vector_indices(
         self,
@@ -1002,6 +1036,7 @@ class MemoryStore:
             # 分批写入，避免 1w 条 × 4096 维向量一次性进内存 / spill
             total = 0
             try:
+                self._ensure_table_vector_dim(table, tbl)
                 batch_size = self._upsert_batch_size()
                 for offset in range(0, len(rows), batch_size):
                     chunk = rows[offset : offset + batch_size]
@@ -1200,6 +1235,41 @@ class MemoryStore:
             raise StoreError(
                 f"向量维度不匹配：期望 {self.settings.embedding_dim}，实际 {len(vec)}"
             )
+
+    def _ensure_table_vector_dim(self, name: str, tbl: Table) -> None:
+        # 维度不一致时 LanceDB merge_insert 只会报 "Spill has sent an error"，
+        # 看起来像磁盘问题，这里提前说明真实原因。
+        table_dim = _vector_dim(tbl)
+        dim = self.settings.embedding_dim
+        if table_dim is not None and table_dim != dim:
+            raise StoreError(
+                _vector_dim_mismatch_message(name, table_dim, dim, self.settings.lance_db_path)
+            )
+
+
+def _vector_dim(tbl: Table) -> int | None:
+    """读取表 vector 列的定长维度；不是定长向量列时返回 None，交给 LanceDB 自行处理。"""
+    try:
+        vector_type = tbl.schema.field("vector").type
+    except KeyError:
+        return None
+    if not pa.types.is_fixed_size_list(vector_type):
+        return None
+    return int(vector_type.list_size)
+
+
+def _vector_dim_mismatch_message(
+    table: str,
+    table_dim: int,
+    expected_dim: int,
+    db_path: Path,
+) -> str:
+    return (
+        f"向量库表 {table} 的向量维度是 {table_dim}，与当前 EMBEDDING_DIM={expected_dim} 不一致。"
+        "通常是更换了 Embedding 模型或向量维度，而向量库仍是按旧维度建的表；"
+        "不同模型的向量不能混用。请改回原来的 Embedding 模型和 EMBEDDING_DIM；"
+        f"或者先停止后端，备份并删除向量库目录（{db_path}），再启动并重新导入。"
+    )
 
 
 def _has_vector_index(tbl: Table) -> bool:

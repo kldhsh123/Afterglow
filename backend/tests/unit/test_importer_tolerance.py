@@ -24,6 +24,9 @@ class _Chunk:
 
 
 class _FakeStore:
+    def check_vector_dims(self, tables) -> None:
+        return None
+
     async def existing_ids(self, table: str, ids: list[str]) -> set[str]:
         return set()
 

@@ -291,6 +291,70 @@ async def test_dimension_mismatch_raises(store: MemoryStore):
 
 
 @pytest.mark.asyncio
+async def test_ensure_tables_rebuilds_empty_tables_after_dim_change(settings: Settings):
+    """首次配置模式先按默认维度建了空表，向导里换模型后应按新维度重建（#41）。"""
+    from xuwen.memory.store import _TABLE_SCHEMAS, _vector_dim
+
+    first_boot = MemoryStore(settings)
+    await first_boot.connect()
+    first_boot.ensure_tables()
+
+    store = MemoryStore(settings.model_copy(update={"embedding_dim": 4}))
+    await store.connect()
+    store.ensure_tables()
+
+    for name, _schema_of in _TABLE_SCHEMAS:
+        assert _vector_dim(store._table(name)) == 4, name
+    written = await store.upsert_friend_chunks(
+        [_friend_chunk("c1", "你好")], {"c1": _vec(0.1, dim=4)}
+    )
+    assert written == 1
+
+
+@pytest.mark.asyncio
+async def test_dim_change_keeps_existing_data_and_explains_write_error(
+    store: MemoryStore, settings: Settings
+):
+    """有数据的表不能被静默重建；写入时要说明维度不一致，而不是抛 LanceDB 的 Spill 错误。"""
+    from xuwen.core.errors import StoreError
+    from xuwen.memory.store import _vector_dim
+
+    await store.upsert_friend_chunks([_friend_chunk("c1", "你好")], {"c1": _vec(0.1)})
+
+    changed = MemoryStore(settings.model_copy(update={"embedding_dim": 4}))
+    await changed.connect()
+    changed.ensure_tables()
+
+    assert _vector_dim(changed._table(TABLE_FRIEND_MESSAGES)) == 8
+    assert (await changed.stats()).friend_messages == 1
+    with pytest.raises(StoreError, match="friend_messages.*EMBEDDING_DIM=4"):
+        changed.check_vector_dims([TABLE_FRIEND_MESSAGES])
+    with pytest.raises(StoreError, match="EMBEDDING_DIM=4"):
+        await changed.upsert_friend_chunks(
+            [_friend_chunk("c2", "晚安")], {"c2": _vec(0.2, dim=4)}
+        )
+
+
+@pytest.mark.asyncio
+async def test_ensure_tables_leaves_matching_tables_untouched(
+    store: MemoryStore, settings: Settings
+):
+    await store.upsert_friend_chunks([_friend_chunk("c1", "你好")], {"c1": _vec(0.1)})
+    db = store._require_db()
+    versions = {
+        name: db.open_table(name).version
+        for name in (TABLE_FRIEND_MESSAGES, TABLE_LIVE_MESSAGES)
+    }
+
+    again = MemoryStore(settings)
+    await again.connect()
+    again.ensure_tables()
+
+    assert {name: db.open_table(name).version for name in versions} == versions
+    assert (await again.stats()).friend_messages == 1
+
+
+@pytest.mark.asyncio
 async def test_stats(store: MemoryStore):
     s0 = await store.stats()
     assert s0.friend_messages == 0
