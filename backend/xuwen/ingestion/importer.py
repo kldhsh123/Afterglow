@@ -247,6 +247,10 @@ async def import_history(
         await store.connect()
         store.ensure_tables()
     try:
+        # 维度与已有表不一致时，在发出任何 embedding 请求之前失败。
+        store.check_vector_dims(
+            (TABLE_FRIEND_MESSAGES, TABLE_DIALOGUE_WINDOWS, TABLE_RESPONSE_PAIRS)
+        )
         # 三路独立处理：每路先查库去重，再分批 embed + 立刻 upsert。
         # 三路之间并行；同一路内的 batch 之间是串行的，确保 upsert 顺序与 embed 完成顺序一致。
         # 外层 batch_size = embedding_batch_size * embedding_max_concurrency，
