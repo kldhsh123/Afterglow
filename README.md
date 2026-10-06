@@ -28,12 +28,10 @@
 
 ---
 
-> [!IMPORTANT]
-> **我们需要你的回音** 💌  
+> [!NOTE]
+> **我们需要你的回音 💌**  
 > 无论你是遇到了部署报错、发现了 Bug，还是 Afterglow 帮你在某个瞬间找回了熟悉的温度，我都非常想听听你的体验。  
-> *（我们会将您的故事以您所要求的匿名，或者显示名称展示在项目的[官方网站](https://afterglow.kldhsh.top/#testimonials)上。）*
->
-> 👉 **[点击这里，前往 Discussions 留下你的反馈与故事](https://github.com/kldhsh123/Afterglow/discussions/new?category=general)**
+> 欢迎加入 [QQ 群 `330316577`](https://qm.qq.com/cgi-bin/qm/qr?k=7rvmrvR100Is9aAp0ZsjmfiG7e0Cv6ZB&jump_from=webapi&authKey=mEN/epjvPHcT+Sb61/XO0Mi5egs2xJBhZm9Wm5MmgEWrpNa0ZOY3fzUf+pvqfijD) 私聊群主反馈使用感受；经你同意后，你的故事可以选择署名或完全匿名展示在项目的[官方网站](https://afterglow.kldhsh.top/#testimonials)上。
 
 > [!IMPORTANT]
 > Afterglow 生成的是 **AI 续写**，不是原型人物本人。请在取得必要授权、理解隐私外发范围，并能清楚区分 AI 与现实人物的前提下使用。严禁冒名顶替、骚扰、诈骗、公开传播私人聊天，或把生成内容伪装成本人的话。
@@ -161,6 +159,9 @@ flowchart LR
 
 ## 快速开始
 
+> [!TIP]
+> **开发者备注**：我个人非常推荐源码部署，这方便调整配置，并且高级功能以及试验功能在源码部署的情况下将非常方便配置以及使用。
+
 ### Docker
 
 ```bash
@@ -198,7 +199,7 @@ uv run uvicorn xuwen.chat_api.app:create_app --factory --reload
 | 来源 | 格式 | 说明 |
 |---|---|---|
 | [QQChatExporter](https://github.com/shuakami/qq-chat-exporter) | JSON、chunked JSONL | 推荐的 QQ 导入方式 |
-| [WeFlow Releases](https://github.com/hicccc77/weflow-releases/) | arkme-json、ChatLab JSONL | 微信导入；当前发布版非开源，请评估隐私与安全风险 |
+| [WeFlow](https://github.com/hicccc77/weflow) | arkme-json、ChatLab JSONL | 推荐的微信导入方式 |
 | [Douyin Chat Export](https://github.com/TeamBreakerr/douyin-chat-export) | ChatLab JSON、JSONL | 抖音私信导入；图片仅保留占位符 |
 | Afterglow Chat v1 | JSON、typed / bare JSONL | 稳定、平台无关的专用中间格式 |
 
