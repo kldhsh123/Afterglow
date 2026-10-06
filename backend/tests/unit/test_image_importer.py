@@ -8,7 +8,10 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from xuwen.config import Settings
+from xuwen.core.errors import StoreError
 from xuwen.ingestion.image_importer import import_history_images
 
 
@@ -18,6 +21,7 @@ class FakeStore:
         *,
         rows_by_id: dict[str, dict[str, Any]] | None = None,
         rows_by_sha: dict[str, list[dict[str, Any]]] | None = None,
+        dim_error: StoreError | None = None,
     ) -> None:
         self.rows = []
         self.rows_by_id = rows_by_id or {}
@@ -25,6 +29,11 @@ class FakeStore:
         self.soft_deleted: list[str] = []
         self.list_by_ids_calls = 0
         self.list_by_sha_calls = 0
+        self.dim_error = dim_error
+
+    def check_vector_dims(self, _tables) -> None:
+        if self.dim_error is not None:
+            raise self.dim_error
 
     async def existing_ids(self, _table: str, _ids: list[str]) -> set[str]:
         return set()
@@ -441,3 +450,49 @@ def test_import_history_images_batches_existing_row_classification(tmp_path: Pat
     assert report.skipped_existing_rows == 1
     assert report.upserted_rows == 1
     assert store.rows[0][0].chunk_id == failed_chunk_id
+
+
+def test_import_history_images_checks_vector_dim_before_vision(tmp_path: Path) -> None:
+    """表维度与 EMBEDDING_DIM 不一致时，应在调用视觉模型之前失败。"""
+    export_dir = tmp_path / "export"
+    media_dir = export_dir / "media" / "images"
+    media_dir.mkdir(parents=True)
+    (media_dir / "photo.jpg").write_bytes(b"weflow-image")
+    (export_dir / "chat.jsonl").write_text(
+        "\n".join(
+            [
+                '{"_type":"header","chatlab":{"generator":"WeFlow"},"meta":{"name":"Friend","platform":"wechat","type":"private"}}',
+                '{"_type":"member","platformId":"wxid_me","accountName":"Me"}',
+                '{"_type":"member","platformId":"wxid_friend","accountName":"Friend"}',
+                '{"_type":"message","sender":"wxid_friend","accountName":"Friend","timestamp":1700000000,"type":7,"content":"media/images/photo.jpg","platformMessageId":"m1"}',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    store = FakeStore(dim_error=StoreError("向量库表 history_images 的向量维度不一致"))
+    vision = FakeVision()
+    settings = Settings(
+        self_uid="wxid_me",
+        friend_uid="wxid_friend",
+        self_name="Me",
+        friend_name="Friend",
+        vision_enabled=True,
+        vision_api_url="https://vision.test/v1",
+        vision_api_key="sk-test",
+        embedding_dim=3,
+        image_data_dir=tmp_path / "cache",
+    )
+
+    with pytest.raises(StoreError, match="history_images"):
+        asyncio.run(
+            import_history_images(
+                export_dir,
+                settings,
+                store=store,  # type: ignore[arg-type]
+                embedder=FakeEmbedder(),  # type: ignore[arg-type]
+                vision_client=vision,  # type: ignore[arg-type]
+            )
+        )
+
+    assert vision.calls == 0
+    assert store.rows == []

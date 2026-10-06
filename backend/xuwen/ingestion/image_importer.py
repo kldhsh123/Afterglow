@@ -142,6 +142,8 @@ async def import_history_images(
         store = MemoryStore(settings)
         await store.connect()
         store.ensure_tables()
+    # 视觉模型调用最贵，维度与已有表不一致时在描述图片之前失败。
+    store.check_vector_dims((TABLE_HISTORY_IMAGES,))
 
     owns_embedder = embedder is None
     if embedder is None:

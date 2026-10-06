@@ -233,7 +233,8 @@ class Settings(BaseSettings):
 
     # ----- 存储路径 -----
     lance_db_path: Path = Path(".data/lancedb")
-    # LanceDB merge_insert 单批写入行数。导入大库时如果出现 spill IO 错误，可降到 64 / 32。
+    # LanceDB merge_insert 单批写入行数。值越小单批占用内存越少，但写库更慢。
+    # "Spill has sent an error" 一般是表维度与 EMBEDDING_DIM 不一致，调小本项无效。
     lance_upsert_batch_size: int = 128
     # 表行数低于此值时不建向量索引（暴力扫描更快）；导入完成后会调 ensure_vector_indices
     # 检测每张表是否过了阈值。0 = 永远不自动建索引（只能手动 cli index 触发）。
