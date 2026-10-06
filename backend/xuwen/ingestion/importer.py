@@ -28,6 +28,7 @@ from xuwen.core.models import (
     DialogueWindowChunk,
     FriendMessageChunk,
     ImportReport,
+    MessageKind,
     ResponsePairChunk,
 )
 from xuwen.ingestion.adaptive_chunker import build_adaptive_windows
@@ -147,6 +148,25 @@ async def import_history(
     # 3）切分
     _stage("正在切分会话")
     sessions = split_sessions(cleaned, settings)
+    has_processable_sessions = any(
+        any(message.kind != MessageKind.SYSTEM for message in session.messages)
+        for session in sessions
+    )
+    # adaptive 小模型切分也可能产生 API 费用。若向量表维度已经不匹配，
+    # 在调用切分模型前失败；没有可处理消息或未配置模型时保留原有早退路径。
+    if (
+        settings.chunking_strategy == "adaptive"
+        and settings.adaptive_chunk_model_enabled
+        and settings.resolved_adaptive_chunk_model
+        and has_processable_sessions
+    ):
+        if store is None:
+            store = MemoryStore(settings)
+            await store.connect()
+            store.ensure_tables()
+        store.check_vector_dims(
+            (TABLE_FRIEND_MESSAGES, TABLE_DIALOGUE_WINDOWS, TABLE_RESPONSE_PAIRS)
+        )
     adaptive_llm: LLMClient | None = None
     try:
         if settings.chunking_strategy == "adaptive":
