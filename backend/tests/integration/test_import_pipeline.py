@@ -12,6 +12,8 @@ import pytest
 import respx
 
 from xuwen.config import Settings
+from xuwen.core.errors import StoreError
+from xuwen.core.models import FriendMessageChunk
 from xuwen.ingestion.embedder import EmbeddingClient
 from xuwen.ingestion.importer import import_history
 from xuwen.memory.store import MemoryStore
@@ -203,3 +205,81 @@ async def test_import_yields_no_friend_chunks_when_friend_uid_wrong(settings: Se
     assert report.upserted_friend == 0
     assert report.window_chunks > 0
     assert report.response_pairs == 0
+
+
+@pytest.mark.asyncio
+async def test_import_after_embedding_dim_change_rebuilds_empty_tables(
+    settings: Settings,
+) -> None:
+    """复现 #41：首次配置模式按默认 4096 维建了空表，向导里换成 8 维模型后导入应成功。"""
+    first_boot = MemoryStore(settings.model_copy(update={"embedding_dim": 4096}))
+    await first_boot.connect()
+    first_boot.ensure_tables()
+    sample_path = Path(__file__).resolve().parent.parent / "fixtures" / "sample_chat.json"
+
+    async with httpx.AsyncClient() as raw:
+        embedder = EmbeddingClient(settings, client=raw)
+        with respx.mock(base_url="https://embedding.test/v1") as router:
+            router.post("/embeddings").mock(
+                side_effect=lambda request: _fake_embedding_response(request, settings)
+            )
+            # 不传 store：与配置向导一致，由 import_history 自建 store 并调用 ensure_tables
+            report = await import_history(
+                sample_path,
+                settings,
+                embedder=embedder,
+                update_circadian=False,
+                update_proactive=False,
+            )
+
+    assert report.friend_chunks > 0
+    assert report.upserted_friend == report.friend_chunks
+    assert report.upserted_window == report.window_chunks
+    assert report.upserted_response_pairs == report.response_pairs
+
+
+@pytest.mark.asyncio
+async def test_import_with_existing_data_of_other_dim_fails_before_embedding(
+    settings: Settings,
+) -> None:
+    """已有数据的表维度不一致：导入应直接说明原因，且不发出任何 embedding 请求。"""
+    old_store = MemoryStore(settings.model_copy(update={"embedding_dim": 16}))
+    await old_store.connect()
+    old_store.ensure_tables()
+    await old_store.upsert_friend_chunks(
+        [
+            FriendMessageChunk(
+                chunk_id="old-1",
+                message_id="m-old-1",
+                session_id="s-old",
+                seq=1,
+                timestamp_ms=1000,
+                text="旧模型写入的消息",
+                dialogue_snippet="TestFriend: 旧模型写入的消息",
+                context_before="",
+                context_after="",
+            )
+        ],
+        {"old-1": [0.1] * 16},
+    )
+    sample_path = Path(__file__).resolve().parent.parent / "fixtures" / "sample_chat.json"
+
+    async with httpx.AsyncClient() as raw:
+        embedder = EmbeddingClient(settings, client=raw)
+        with respx.mock(
+            base_url="https://embedding.test/v1",
+            assert_all_called=False,
+        ) as router:
+            route = router.post("/embeddings").mock(
+                side_effect=lambda request: _fake_embedding_response(request, settings)
+            )
+            with pytest.raises(StoreError, match="friend_messages.*EMBEDDING_DIM=8"):
+                await import_history(
+                    sample_path,
+                    settings,
+                    embedder=embedder,
+                    update_circadian=False,
+                    update_proactive=False,
+                )
+
+    assert route.call_count == 0
