@@ -204,7 +204,7 @@ uv run uvicorn xuwen.chat_api.app:create_app --factory --reload
 | Afterglow Chat v1 | JSON、typed / bare JSONL | 稳定、平台无关的专用中间格式 |
 | WhatsApp | TXT、Markdown | 自动识别发送者；缺失媒体保留占位符 |
 | Telegram Desktop | HTML | 保留文本、引用、媒体占位符；支持本地图片引用 |
-| DiscordChatExporter | JSON | 完整频道聊天，支持身份识别、引用回复和媒体占位符 |
+| [DiscordChatExporter](https://github.com/Tyrrrz/DiscordChatExporter) | JSON | 完整频道聊天，支持身份识别、引用回复和媒体占位符 |
 
 其它来源可以转换为 [Afterglow Chat v1](https://github.com/kldhsh123/Afterglow/wiki/Afterglow专用导入格式) 快速接入。长期维护或公开分发时，仍建议实现独立 ingestion plugin 并提交 PR。
 
