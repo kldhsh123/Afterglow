@@ -1159,7 +1159,7 @@ onMounted(async () => {
                 <div class="flex-1">
                   <div class="text-sm font-medium">从聊天文件自动识别（推荐）</div>
                   <div class="text-xs text-ink-soft dark:text-night-text-soft mt-0.5 leading-relaxed">
-                    选择一个或多个 Afterglow Chat、QQChatExporter 或 WeFlow 导出的 JSON / JSONL，
+                    选择 Afterglow Chat、QQ、微信、抖音的 JSON / JSONL，DiscordChatExporter 的 JSON，WhatsApp 的 TXT / Markdown，或 Telegram 的 HTML 聊天文件，
                     文件会直接上传至本机后端并解析双方身份。
                     跨平台或多账号场景可一次选多个文件，UID 自动累加为逗号列表。
                   </div>
@@ -1168,7 +1168,7 @@ onMounted(async () => {
               <label class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs
                             bg-accent text-paper-soft cursor-pointer hover:bg-accent/90
                             disabled:opacity-50">
-                <input type="file" accept="application/json,application/x-ndjson,.json,.jsonl,.ndjson" multiple class="hidden"
+                <input type="file" accept="application/json,application/x-ndjson,.json,.jsonl,.ndjson,.txt,.md,.html,.htm" multiple class="hidden"
                   @change="onIdentifyFilesPicked" :disabled="inspecting" />
                 <Loader2 v-if="inspecting" :size="12" class="animate-spin" />
                 <Upload v-else :size="12" />

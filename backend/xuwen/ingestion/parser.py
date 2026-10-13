@@ -12,27 +12,45 @@ from xuwen.core.errors import ParseError
 from xuwen.core.models import NormalizedMessage
 from xuwen.ingestion.plugins import (
     JSONL_RECORDS_KEY,
+    TEXT_CONTENT_KEY,
+    TEXT_SUFFIX_KEY,
     ImportPlugin,
     list_plugins,
     register_plugin,
     select_plugin,
 )
 from xuwen.ingestion.plugins.afterglow_v1 import AfterglowV1Plugin
+from xuwen.ingestion.plugins.discord_chat_exporter import DiscordChatExporterPlugin
 from xuwen.ingestion.plugins.douyin_chat_export import DouyinChatExportPlugin
 from xuwen.ingestion.plugins.qqexporter_v5 import QQExporterV5Plugin
+from xuwen.ingestion.plugins.telegram_html import TelegramHTMLPlugin
 from xuwen.ingestion.plugins.wechat_weflow import WeChatWeFlowPlugin
+from xuwen.ingestion.plugins.whatsapp import WhatsAppPlugin
 
 register_plugin(AfterglowV1Plugin())
 register_plugin(QQExporterV5Plugin())
 register_plugin(WeChatWeFlowPlugin())
 register_plugin(DouyinChatExportPlugin())
+register_plugin(WhatsAppPlugin())
+register_plugin(TelegramHTMLPlugin())
+register_plugin(DiscordChatExporterPlugin())
 
 
 def load_qq_json(path: str | Path) -> dict[str, Any]:
-    """读取 JSON 或 JSONL；格式解释完全交给 plugin。"""
+    """解码聊天文件；JSON、JSONL 和文本格式的解释完全交给 plugin。"""
     p = Path(path)
     if not p.exists():
         raise ParseError(f"找不到聊天记录文件：{p}")
+    if not p.is_file():
+        raise ParseError(f"请选择导出目录内的聊天文件：{p}")
+    if p.suffix.lower() in {".txt", ".md", ".html", ".htm"}:
+        try:
+            return {
+                TEXT_CONTENT_KEY: p.read_text(encoding="utf-8-sig"),
+                TEXT_SUFFIX_KEY: p.suffix.lower(),
+            }
+        except (OSError, UnicodeDecodeError) as e:
+            raise ParseError(f"无法读取 UTF-8 聊天文件：{p.name}") from e
     if p.suffix.lower() in {".jsonl", ".ndjson"}:
         return _load_jsonl_records(p)
     try:

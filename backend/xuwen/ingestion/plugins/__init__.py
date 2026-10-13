@@ -9,7 +9,7 @@
     3. 在 parser.py 注册（或外部应用调用 `register_plugin()` 注册）
     4. 提交 PR :)
 
-importer 读取 JSON/JSONL 后会按注册顺序遍历 plugins，第一个 `match()` 返回 True 的负责 parse。
+importer 解码 JSON/JSONL/TXT/Markdown/HTML 后会按注册顺序遍历 plugins，第一个 `match()` 返回 True 的负责 parse。
 用户也可以 `--plugin <name>` 强制指定。
 """
 
@@ -23,6 +23,9 @@ from xuwen.core.errors import ParseError
 from xuwen.core.models import NormalizedMessage
 
 JSONL_RECORDS_KEY = "_afterglowJsonlRecords"
+TEXT_CONTENT_KEY = "_afterglowTextContent"
+TEXT_SUFFIX_KEY = "_afterglowTextSuffix"
+CHAT_FILE_SUFFIXES = frozenset({".json", ".jsonl", ".ndjson", ".txt", ".md", ".html", ".htm"})
 
 
 def jsonl_records(payload: dict[str, Any]) -> list[dict[str, Any]] | None:
@@ -75,7 +78,7 @@ class ImportPlugin(Protocol):
     """人类可读的展示名，比如 'QQChatExporter' / 'WeFlow'。"""
 
     def match(self, payload: dict[str, Any]) -> bool:
-        """判断这个 JSON 或中性 JSONL records 是否能由本插件解析。
+        """判断 JSON、中性 JSONL records 或带后缀的文本 payload 是否能由本插件解析。
 
         例如：QQ 插件检查 `metadata.name` 是否含 "QQChatExporter"。
         """
@@ -151,7 +154,7 @@ def select_plugin(
             continue
 
     raise ParseError(
-        "没有 plugin 能识别这份 JSON / JSONL。"
+        "没有 plugin 能识别这份聊天文件。"
         f"可用 plugins：{[p.name for p in _REGISTRY]}。"
         "如果是新平台导出格式，欢迎在 xuwen/ingestion/plugins/ 下添加新 plugin。",
     )

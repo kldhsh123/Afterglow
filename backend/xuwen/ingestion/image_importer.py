@@ -26,9 +26,9 @@ from xuwen.ingestion.cleaner import Cleaner
 from xuwen.ingestion.embedder import EmbeddingClient
 from xuwen.ingestion.parser import detect_plugin, load_qq_json
 from xuwen.ingestion.plugins import (
+    CHAT_FILE_SUFFIXES,
     ImageReferenceImportPlugin,
     ImportImageRef,
-    jsonl_records,
     select_plugin,
 )
 from xuwen.ingestion.splitter import split_sessions
@@ -210,7 +210,7 @@ def _load_chat_payloads(root: Path) -> list[dict[str, Any]]:
     candidates = sorted(
         path
         for path in root.rglob("*")
-        if path.is_file() and path.suffix.lower() in {".json", ".jsonl", ".ndjson"}
+        if path.is_file() and path.suffix.lower() in CHAT_FILE_SUFFIXES
     )
     payloads: list[dict[str, Any]] = []
     errors: list[str] = []
@@ -221,11 +221,7 @@ def _load_chat_payloads(root: Path) -> list[dict[str, Any]]:
             if path.suffix.lower() in {".jsonl", ".ndjson"}:
                 errors.append(f"{path.relative_to(root)}：{e}")
             continue
-        has_message_records = (
-            jsonl_records(payload) is not None
-            or isinstance(payload.get("messages"), list)
-        )
-        if has_message_records and detect_plugin(payload) is not None:
+        if detect_plugin(payload) is not None:
             payloads.append(payload)
     if errors and payloads:
         logger.warning(
@@ -236,7 +232,7 @@ def _load_chat_payloads(root: Path) -> list[dict[str, Any]]:
     elif errors:
         raise IngestionError("目录中存在无法解析的 JSONL：" + "；".join(errors[:5]))
     if not payloads:
-        raise IngestionError("图片导入目录中没有可识别的聊天 JSON / JSONL")
+        raise IngestionError("图片导入目录中没有可识别的聊天文件")
     return payloads
 
 

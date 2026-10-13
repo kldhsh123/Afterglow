@@ -99,11 +99,7 @@ async def test_import_douyin_chatlab_end_to_end(settings: Settings) -> None:
 @pytest.mark.asyncio
 async def test_import_history_end_to_end(settings: Settings, tmp_path):
     """端到端跑通：fixtures/sample_chat.json → LanceDB。"""
-    sample_path = (
-        tmp_path.parent.parent.parent
-        / "fixtures"
-        / "sample_chat.json"
-    )
+    sample_path = tmp_path.parent.parent.parent / "fixtures" / "sample_chat.json"
     # 上面的相对路径不稳，直接用绝对路径
     from pathlib import Path as _P
 
@@ -273,7 +269,7 @@ async def test_import_with_existing_data_of_other_dim_fails_before_embedding(
             route = router.post("/embeddings").mock(
                 side_effect=lambda request: _fake_embedding_response(request, settings)
             )
-            with pytest.raises(StoreError, match="friend_messages.*EMBEDDING_DIM=8"):
+            with pytest.raises(StoreError, match=r"friend_messages.*EMBEDDING_DIM=8"):
                 await import_history(
                     sample_path,
                     settings,
@@ -283,3 +279,84 @@ async def test_import_with_existing_data_of_other_dim_fails_before_embedding(
                 )
 
     assert route.call_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("platform", ["whatsapp", "telegram", "discord"])
+async def test_import_text_exports_end_to_end(
+    settings: Settings,
+    tmp_path: Path,
+    platform: str,
+) -> None:
+    settings.self_uid = f"{platform}:Me"
+    settings.friend_uid = f"{platform}:TestFriend"
+    if platform == "whatsapp":
+        path = tmp_path / "chat.txt"
+        content = (
+            "[10/13/26, 4:25:24 PM] Me: 今天过得怎么样？\n"
+            "[10/13/26, 4:25:25 PM] TestFriend: 今天过得挺好的，刚刚在听音乐。\n"
+        )
+    elif platform == "telegram":
+        path = tmp_path / "messages.html"
+        content = (
+            '<div class="page_header"><div class="text">Test Chat</div></div><div class="history">'
+        )
+        for mid, sender, text in [
+            (1, "Me", "今天过得怎么样？"),
+            (2, "TestFriend", "今天过得挺好的，刚刚在听音乐。"),
+        ]:
+            content += (
+                f'<div class="message default" id="message{mid}"><div class="body">'
+                f'<div class="date" title="13.10.2026 16:25:2{mid} UTC+08:00"></div>'
+                f'<div class="from_name">{sender}</div><div class="text">{text}</div></div></div>'
+            )
+        content += "</div>"
+    else:
+        import json
+
+        path = tmp_path / "discord.json"
+        content = json.dumps(
+            {
+                "guild": {"name": "Direct Messages"},
+                "channel": {"id": "123", "type": "DirectTextChat"},
+                "exportedAt": "2026-10-13T16:00:00+08:00",
+                "messages": [
+                    {
+                        "id": "1",
+                        "type": "Default",
+                        "timestamp": "2026-10-13T16:25:24+08:00",
+                        "author": {"id": "discord:Me", "name": "Me"},
+                        "content": "今天过得怎么样？",
+                    },
+                    {
+                        "id": "2",
+                        "type": "Default",
+                        "timestamp": "2026-10-13T16:25:25+08:00",
+                        "author": {"id": "discord:TestFriend", "name": "TestFriend"},
+                        "content": "今天过得挺好的，刚刚在听音乐。",
+                    },
+                ],
+            }
+        )
+    path.write_text(content, encoding="utf-8")
+    async with httpx.AsyncClient() as raw:
+        embedder = EmbeddingClient(settings, client=raw)
+        store = MemoryStore(settings)
+        await store.connect()
+        store.ensure_tables()
+        with respx.mock(base_url="https://embedding.test/v1") as router:
+            router.post("/embeddings").mock(
+                side_effect=lambda request: _fake_embedding_response(request, settings)
+            )
+            report = await import_history(
+                path,
+                settings,
+                store=store,
+                embedder=embedder,
+                update_circadian=False,
+                update_proactive=False,
+            )
+    assert report.total_raw_messages == report.parsed_messages == 2
+    assert report.friend_chunks == report.upserted_friend == 1
+    assert report.response_pairs == report.upserted_response_pairs == 1
+    assert report.window_chunks == report.upserted_window > 0

@@ -17,6 +17,7 @@ from xuwen.analysis.tasks import (
     run_analysis_task,
 )
 from xuwen.chat_api.state import AppState, get_state
+from xuwen.ingestion.plugins import CHAT_FILE_SUFFIXES
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
 
@@ -127,11 +128,11 @@ def _resolve_upload_files(names: list[str], uploads_dir: Path) -> list[Path]:
     if names:
         candidates = [root / name for name in names]
     else:
-        candidates = list(root.glob("*.json")) + list(root.glob("*.jsonl"))
+        candidates = [path for path in root.glob("*") if path.suffix.lower() in CHAT_FILE_SUFFIXES]
     output: list[Path] = []
     for candidate in candidates:
         resolved = candidate.resolve()
-        if root not in resolved.parents or resolved.suffix.lower() not in {".json", ".jsonl"}:
+        if root not in resolved.parents or resolved.suffix.lower() not in CHAT_FILE_SUFFIXES:
             raise HTTPException(status_code=400, detail="文件必须位于 uploads 目录内")
         if not resolved.is_file():
             raise HTTPException(status_code=404, detail=f"未找到上传文件：{candidate.name}")

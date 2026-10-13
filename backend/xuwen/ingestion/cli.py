@@ -52,12 +52,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    p_import = sub.add_parser("import", help="把导出的 JSON / JSONL 导入向量库")
+    p_import = sub.add_parser("import", help="把导出的 JSON / JSONL / TXT / Markdown / HTML 聊天文件导入向量库")
     p_import.add_argument(
         "json_paths",
         type=Path,
         nargs="+",
-        help="一个或多个导出 JSON / JSONL 文件路径（自动识别格式，可混合 QQ 和微信）",
+        help="一个或多个聊天导出文件路径（自动识别格式，可混合平台）",
     )
     p_import.add_argument("--env-file", type=Path, default=None, help="可选：.env 文件路径")
     p_import.add_argument(
