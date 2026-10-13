@@ -8,6 +8,7 @@ import { FileText, ImagePlus, Send, StickyNote, StopCircle, X } from 'lucide-vue
 import { useChatStore } from '@/stores/chat'
 import { extractImagesFromClipboard, fileToDataUrl } from '@/composables/imageUpload'
 import { extractDocument, listStickers, type Sticker } from '@/api/extra'
+import { useLocale } from '@/composables/useLocale'
 
 const emit = defineEmits<{
   (e: 'send', text: string, images: string[]): void
@@ -15,6 +16,7 @@ const emit = defineEmits<{
 }>()
 
 const chat = useChatStore()
+const { t } = useLocale()
 const text = ref('')
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const imageInputRef = ref<HTMLInputElement | null>(null)
@@ -190,7 +192,7 @@ function stop() {
              bg-accent-soft/20 dark:bg-night-accent-soft/20 border-2 border-dashed
              border-accent dark:border-night-accent rounded-lg m-2"
     >
-      <span class="text-accent dark:text-night-accent">松开放到对话里（图片或文档）</span>
+      <span class="text-accent dark:text-night-accent">{{ t('chat.dropFiles') }}</span>
     </div>
 
     <div class="max-w-3xl mx-auto">
@@ -201,7 +203,7 @@ function stop() {
                border border-ink/10 dark:border-night-text/10 shadow-letter"
       >
         <div v-if="myStickers.length === 0" class="text-sm text-ink-soft dark:text-night-text-soft p-2">
-          你还没添加表情包。请到「设置 → 表情包」上传。
+          {{ t('chat.stickersEmpty') }}
         </div>
         <div v-else class="flex flex-wrap gap-2 max-h-[160px] overflow-y-auto">
           <button
@@ -233,7 +235,7 @@ function stop() {
             class="absolute top-1 right-1 p-0.5 rounded-full bg-ink/60 text-paper-soft
                    opacity-0 group-hover:opacity-100 transition-opacity"
             @click="removeImage(i)"
-            aria-label="删除图片"
+            :aria-label="t('chat.removeImage')"
           >
             <X :size="12" />
           </button>
@@ -264,7 +266,7 @@ function stop() {
         <button
           class="p-2 rounded-full text-ink-soft dark:text-night-text-soft
                  hover:text-ink dark:hover:text-night-text transition-colors"
-          title="添加图片（也可粘贴或拖拽）"
+          :title="t('chat.addImage')"
           @click="pickImage"
         >
           <ImagePlus :size="20" />
@@ -273,7 +275,7 @@ function stop() {
           class="p-2 rounded-full text-ink-soft dark:text-night-text-soft
                  hover:text-ink dark:hover:text-night-text transition-colors disabled:opacity-50"
           :disabled="docUploading"
-          :title="docUploading ? '提取中...' : '上传文档（txt/md/pdf/docx/xlsx 等）'"
+          :title="docUploading ? t('chat.extractDocument') : t('chat.uploadDocument')"
           @click="pickDoc"
         >
           <FileText :size="20" />
@@ -281,7 +283,7 @@ function stop() {
         <button
           class="p-2 rounded-full text-ink-soft dark:text-night-text-soft
                  hover:text-ink dark:hover:text-night-text transition-colors"
-          title="发送表情包"
+          :title="t('chat.sendSticker')"
           @click="openStickers"
         >
           <StickyNote :size="20" />
@@ -290,7 +292,7 @@ function stop() {
           ref="textareaRef"
           v-model="text"
           rows="1"
-          placeholder="写点什么...（可粘贴/拖拽图片或文档）"
+          :placeholder="t('chat.writeMessage')"
           class="flex-1 resize-none bg-transparent outline-none px-2 py-2 text-chat
                  text-ink dark:text-night-text placeholder:text-ink-soft/60
                  dark:placeholder:text-night-text-soft/50 leading-relaxed max-h-[200px]"
@@ -301,7 +303,7 @@ function stop() {
         <button
           v-if="chat.isGenerating"
           class="p-2 rounded-full text-warning hover:bg-warning/10 transition-colors"
-          title="停止生成"
+          :title="t('chat.stopGenerating')"
           @click="stop"
         >
           <StopCircle :size="22" />
@@ -314,14 +316,14 @@ function stop() {
               : 'text-ink-soft/40 dark:text-night-text-soft/40 cursor-not-allowed'
           "
           :disabled="!canSend"
-          title="发送（Enter）"
+          :title="t('chat.send')"
           @click="submit"
         >
           <Send :size="22" />
         </button>
       </div>
       <p class="text-[11px] text-center text-ink-soft/60 dark:text-night-text-soft/60 mt-2 no-select">
-        Enter 发送 · Shift+Enter 换行 · 支持粘贴/拖拽图片或文档
+        {{ t('chat.shortcuts') }}
       </p>
     </div>
   </div>

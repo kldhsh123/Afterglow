@@ -3,6 +3,9 @@
 import { onMounted, ref } from 'vue'
 import { getDebugConfig, getDebugStats, resetMetrics } from '@/api/extra'
 import { RefreshCw, RotateCcw } from 'lucide-vue-next'
+import { useLocale } from '@/composables/useLocale'
+
+const { t } = useLocale()
 
 const stats = ref<Record<string, unknown> | null>(null)
 const config = ref<Record<string, unknown> | null>(null)
@@ -25,7 +28,7 @@ async function refresh() {
 }
 
 async function clearMetrics() {
-  if (!confirm('清空所有调用统计？（不影响向量库数据）')) return
+  if (!confirm(t('diagnostics.clearConfirm'))) return
   try {
     await resetMetrics()
     await refresh()
@@ -55,9 +58,9 @@ onMounted(() => {
       class="w-full text-left flex items-center justify-between"
       @click="toggle"
     >
-      <h2 class="text-base font-medium">诊断</h2>
+      <h2 class="text-base font-medium">{{ t('diagnostics.title') }}</h2>
       <span class="text-xs text-ink-soft dark:text-night-text-soft">
-        {{ open ? '收起' : '展开' }}
+        {{ open ? t('diagnostics.collapse') : t('diagnostics.expand') }}
       </span>
     </button>
 
@@ -67,14 +70,14 @@ onMounted(() => {
           :disabled="loading"
           class="p-2 rounded-lg text-ink-soft hover:text-ink dark:text-night-text-soft
                  dark:hover:text-night-text disabled:opacity-50"
-          title="刷新"
+          :title="t('diagnostics.refresh')"
           @click="refresh"
         >
           <RefreshCw :size="16" :class="loading ? 'animate-spin' : ''" />
         </button>
         <button
           class="p-2 rounded-lg text-ink-soft hover:text-warning"
-          title="清空调用统计"
+          :title="t('diagnostics.clear')"
           @click="clearMetrics"
         >
           <RotateCcw :size="16" />
@@ -85,36 +88,36 @@ onMounted(() => {
 
       <div v-if="stats" class="space-y-3 text-sm">
         <div>
-          <div class="font-medium mb-1">向量库</div>
+          <div class="font-medium mb-1">{{ t('diagnostics.vectorStore') }}</div>
           <div class="grid grid-cols-3 gap-2 text-center">
             <div class="rounded-lg bg-paper dark:bg-night-bg p-2">
               <div class="text-xl font-medium">{{ ((stats.memory as Record<string, number>)?.friend_messages ?? 0) }}</div>
-              <div class="text-xs text-ink-soft dark:text-night-text-soft">朋友单条</div>
+              <div class="text-xs text-ink-soft dark:text-night-text-soft">{{ t('diagnostics.friendMessages') }}</div>
             </div>
             <div class="rounded-lg bg-paper dark:bg-night-bg p-2">
               <div class="text-xl font-medium">{{ ((stats.memory as Record<string, number>)?.dialogue_windows ?? 0) }}</div>
-              <div class="text-xs text-ink-soft dark:text-night-text-soft">对话窗口</div>
+              <div class="text-xs text-ink-soft dark:text-night-text-soft">{{ t('diagnostics.dialogueWindows') }}</div>
             </div>
             <div class="rounded-lg bg-paper dark:bg-night-bg p-2">
               <div class="text-xl font-medium">{{ ((stats.memory as Record<string, number>)?.live_messages ?? 0) }}</div>
-              <div class="text-xs text-ink-soft dark:text-night-text-soft">新对话</div>
+              <div class="text-xs text-ink-soft dark:text-night-text-soft">{{ t('diagnostics.newMessages') }}</div>
             </div>
           </div>
         </div>
 
         <div>
-          <div class="font-medium mb-1">回写</div>
+          <div class="font-medium mb-1">{{ t('diagnostics.writeback') }}</div>
           <pre class="text-xs bg-paper dark:bg-night-bg rounded-lg p-2 overflow-x-auto">{{ JSON.stringify(stats.writeback, null, 2) }}</pre>
         </div>
 
         <div>
-          <div class="font-medium mb-1">调用统计</div>
+          <div class="font-medium mb-1">{{ t('diagnostics.calls') }}</div>
           <pre class="text-xs bg-paper dark:bg-night-bg rounded-lg p-2 overflow-x-auto">{{ JSON.stringify(stats.calls, null, 2) }}</pre>
         </div>
       </div>
 
       <div v-if="config" class="space-y-2 text-sm">
-        <div class="font-medium">配置快照（不含密钥）</div>
+        <div class="font-medium">{{ t('diagnostics.config') }}</div>
         <pre class="text-xs bg-paper dark:bg-night-bg rounded-lg p-2 overflow-x-auto max-h-[300px]">{{ JSON.stringify(config, null, 2) }}</pre>
       </div>
     </div>

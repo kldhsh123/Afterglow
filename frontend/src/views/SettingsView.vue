@@ -23,8 +23,10 @@ import {
   Sticker as StickerIcon,
 } from 'lucide-vue-next'
 import DiagnosticsPanel from '@/components/common/DiagnosticsPanel.vue'
+import { useLocale } from '@/composables/useLocale'
 
 const settings = useSettingsStore()
+const { t, locale } = useLocale()
 const memory = useMemoryStore()
 const router = useRouter()
 const info = ref<AppInfo | null>(null)
@@ -40,7 +42,7 @@ onMounted(async () => {
     info.value = await fetchInfo()
     updateInfo.value = info.value.update
   } catch (e) {
-    backendError.value = `无法连接后端：${(e as Error).message}`
+    backendError.value = t('settings.connectionError', { value: (e as Error).message })
   }
   try {
     memory.setStats(await fetchMemoryStats())
@@ -57,29 +59,29 @@ async function checkForUpdate() {
     const next = await triggerUpdateCheck()
     updateInfo.value = next
     if (next.last_error) {
-      updateCheckHint.value = `检查失败：${next.last_error}`
+      updateCheckHint.value = t('settings.checkFailed', { value: next.last_error })
     } else if (next.is_outdated && next.latest_version) {
-      updateCheckHint.value = `发现新版本 ${next.latest_version}`
+      updateCheckHint.value = t('settings.newVersion', { value: next.latest_version })
     } else if (next.latest_version) {
-      updateCheckHint.value = '已是最新版'
+      updateCheckHint.value = t('settings.latest')
     } else {
-      updateCheckHint.value = '检查完成'
+      updateCheckHint.value = t('settings.checkComplete')
     }
     // 3 秒后清掉一次性提示，留下面板里的静态字段
     setTimeout(() => {
       updateCheckHint.value = null
     }, 3000)
   } catch (e) {
-    updateCheckHint.value = `检查出错：${(e as Error).message}`
+    updateCheckHint.value = t('settings.checkError', { value: (e as Error).message })
   } finally {
     checkingUpdate.value = false
   }
 }
 
 function formatTimestamp(ms: number | null): string {
-  if (!ms) return '尚未检查'
+  if (!ms) return t('settings.notChecked')
   const d = new Date(ms)
-  return d.toLocaleString()
+  return d.toLocaleString(locale.value)
 }
 
 async function togglePause() {
@@ -89,7 +91,7 @@ async function togglePause() {
     else await pauseWriteback()
     memory.setStats(await fetchMemoryStats())
   } catch (e) {
-    backendError.value = `操作失败：${(e as Error).message}`
+    backendError.value = t('settings.operationError', { value: (e as Error).message })
   } finally {
     busy.value = false
   }
@@ -111,18 +113,18 @@ function back() {
         >
           <ChevronLeft :size="20" />
         </button>
-        <h1 class="text-xl font-medium">设置</h1>
+        <h1 class="text-xl font-medium">{{ t('settings.title') }}</h1>
       </header>
 
       <!-- 后端连接 -->
       <section class="space-y-3 rounded-2xl p-4 bg-paper-soft dark:bg-night-bg-soft
                       shadow-letter border border-ink/5 dark:border-night-text/10">
-        <h2 class="text-base font-medium">后端连接</h2>
+        <h2 class="text-base font-medium">{{ t('settings.backend') }}</h2>
         <label class="block">
-          <span class="text-sm text-ink-soft dark:text-night-text-soft">后端 API 地址</span>
+          <span class="text-sm text-ink-soft dark:text-night-text-soft">{{ t('settings.backendUrl') }}</span>
           <input
             v-model="settings.backendBaseUrl"
-            placeholder="留空使用 Vite 代理（dev）；生产填如 http://127.0.0.1:8000"
+            :placeholder="t('settings.backendUrlPlaceholder')"
             class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                    border border-ink/10 dark:border-night-text/10 outline-none
                    focus:ring-2 focus:ring-accent-soft"
@@ -130,7 +132,7 @@ function back() {
         </label>
         <label class="block">
           <span class="text-sm text-ink-soft dark:text-night-text-soft">
-            本地 API key（后端默认需要 XUWEN_API_KEY）
+            {{ t('settings.apiKey') }}
           </span>
           <input
             v-model="settings.localApiKey"
@@ -142,11 +144,11 @@ function back() {
         </label>
         <p v-if="backendError" class="text-sm text-warning">{{ backendError }}</p>
         <div v-if="info" class="text-xs text-ink-soft dark:text-night-text-soft space-y-1">
-          <div>后端版本：{{ info.version }}</div>
-          <div>对话模型：{{ info.chat_model }}</div>
-          <div>向量模型：{{ info.embedding_model }}</div>
-          <div>人格模板：{{ info.persona_template }} · {{ info.relationship_type }}</div>
-          <div>persona 卡片：{{ info.has_persona_card ? '已生成' : '尚未生成（运行 analyze_persona.py）' }}</div>
+          <div>{{ t('settings.backendVersion', { value: info.version }) }}</div>
+          <div>{{ t('settings.chatModel', { value: info.chat_model }) }}</div>
+          <div>{{ t('settings.embeddingModel', { value: info.embedding_model }) }}</div>
+          <div>{{ t('settings.persona', { template: info.persona_template, relationship: info.relationship_type }) }}</div>
+          <div>{{ info.has_persona_card ? t('settings.personaReady') : t('settings.personaMissing') }}</div>
         </div>
       </section>
 
@@ -154,7 +156,7 @@ function back() {
       <section class="space-y-3 rounded-2xl p-4 bg-paper-soft dark:bg-night-bg-soft
                       shadow-letter border border-ink/5 dark:border-night-text/10">
         <div class="flex items-center justify-between">
-          <h2 class="text-base font-medium">版本与更新</h2>
+          <h2 class="text-base font-medium">{{ t('settings.updates') }}</h2>
           <button
             class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs
                    text-ink-soft dark:text-night-text-soft
@@ -165,33 +167,33 @@ function back() {
             @click="checkForUpdate"
           >
             <RefreshCw :size="12" :class="checkingUpdate ? 'animate-spin' : ''" />
-            <span>{{ checkingUpdate ? '检查中…' : '立即检查' }}</span>
+            <span>{{ checkingUpdate ? t('settings.checking') : t('settings.checkNow') }}</span>
           </button>
         </div>
 
         <div class="text-xs text-ink-soft dark:text-night-text-soft space-y-1">
           <div>
-            当前版本：<span class="font-mono text-ink dark:text-night-text">v{{ updateInfo?.current_version ?? info?.version ?? '?' }}</span>
+            {{ t('settings.currentVersion') }}<span class="font-mono text-ink dark:text-night-text">v{{ updateInfo?.current_version ?? info?.version ?? '?' }}</span>
           </div>
           <div v-if="updateInfo?.latest_version">
-            最新发布：
+            {{ t('settings.latestVersion') }}
             <span
               class="font-mono"
               :class="updateInfo.is_outdated
                 ? 'text-accent dark:text-night-accent font-medium'
                 : 'text-ink dark:text-night-text'"
             >v{{ updateInfo.latest_version }}</span>
-            <span v-if="!updateInfo.is_outdated" class="ml-2 text-success">已是最新版 ✓</span>
-            <span v-else class="ml-2 text-accent dark:text-night-accent">有新版本可用</span>
+            <span v-if="!updateInfo.is_outdated" class="ml-2 text-success">{{ t('settings.upToDate') }}</span>
+            <span v-else class="ml-2 text-accent dark:text-night-accent">{{ t('settings.updateAvailable') }}</span>
           </div>
           <div v-if="updateInfo?.last_checked_at_ms">
-            最后检查：{{ formatTimestamp(updateInfo.last_checked_at_ms) }}
+            {{ t('settings.lastChecked', { value: formatTimestamp(updateInfo.last_checked_at_ms) }) }}
           </div>
           <div v-if="updateInfo?.check_enabled === false" class="text-warning">
-            自动检查已关闭（UPDATE_CHECK_ENABLED=false）；手动检查仍可用
+            {{ t('settings.updateDisabled') }}
           </div>
           <div v-if="updateInfo?.last_error" class="text-warning">
-            上次检查失败：{{ updateInfo.last_error }}
+            {{ t('settings.lastCheckFailed', { value: updateInfo.last_error }) }}
           </div>
         </div>
 
@@ -200,7 +202,7 @@ function back() {
           class="text-xs text-ink-soft dark:text-night-text-soft p-2 rounded-lg
                  bg-paper/60 dark:bg-night-bg/60 border border-ink/5 dark:border-night-text/10"
         >
-          <div class="font-medium text-ink dark:text-night-text mb-1">变更预览</div>
+          <div class="font-medium text-ink dark:text-night-text mb-1">{{ t('settings.releasePreview') }}</div>
           <p class="line-clamp-4">{{ updateInfo.release_notes_preview }}</p>
         </div>
 
@@ -210,7 +212,7 @@ function back() {
             target="_blank"
             rel="noopener noreferrer"
             class="text-accent dark:text-night-accent hover:underline"
-          >查看完整变更日志 →</a>
+          >{{ t('settings.viewReleaseNotes') }}</a>
         </div>
 
         <Transition
@@ -223,6 +225,7 @@ function back() {
             v-if="updateCheckHint"
             class="text-xs"
             :class="updateCheckHint.includes('失败') || updateCheckHint.includes('出错')
+              || updateCheckHint.toLowerCase().includes('failed') || updateCheckHint.toLowerCase().includes('error')
               ? 'text-warning'
               : 'text-ink-soft dark:text-night-text-soft'"
           >
@@ -234,10 +237,10 @@ function back() {
       <!-- 身份与人格 -->
       <section class="space-y-3 rounded-2xl p-4 bg-paper-soft dark:bg-night-bg-soft
                       shadow-letter border border-ink/5 dark:border-night-text/10">
-        <h2 class="text-base font-medium">身份</h2>
+        <h2 class="text-base font-medium">{{ t('settings.identity') }}</h2>
         <div class="grid grid-cols-2 gap-3">
           <label class="block">
-            <span class="text-sm">你的名字</span>
+            <span class="text-sm">{{ t('settings.yourName') }}</span>
             <input
               v-model="settings.selfName"
               class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
@@ -245,7 +248,7 @@ function back() {
             />
           </label>
           <label class="block">
-            <span class="text-sm">ta 的名字</span>
+            <span class="text-sm">{{ t('settings.theirName') }}</span>
             <input
               v-model="settings.friendName"
               class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
@@ -254,7 +257,7 @@ function back() {
           </label>
         </div>
         <label class="block">
-          <span class="text-sm">关系</span>
+          <span class="text-sm">{{ t('settings.relationship') }}</span>
           <input
             v-model="settings.relationshipDescription"
             class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
@@ -262,31 +265,31 @@ function back() {
           />
         </label>
         <p class="text-xs text-ink-soft dark:text-night-text-soft">
-          这些值仅控制前端文案。要真正切换 persona 模板请改 backend/.env 的 PERSONA_TEMPLATE。
+          {{ t('settings.identityHint') }}
         </p>
       </section>
 
       <!-- 外观 -->
       <section class="space-y-3 rounded-2xl p-4 bg-paper-soft dark:bg-night-bg-soft
                       shadow-letter border border-ink/5 dark:border-night-text/10">
-        <h2 class="text-base font-medium">外观</h2>
+        <h2 class="text-base font-medium">{{ t('settings.appearance') }}</h2>
         <div class="flex gap-2">
           <button
-            v-for="t in (['light','dark','system'] as const)"
-            :key="t"
+            v-for="themeMode in (['light','dark','system'] as const)"
+            :key="themeMode"
             class="flex-1 py-2 rounded-lg border text-sm transition-colors"
             :class="
-              settings.theme === t
+              settings.theme === themeMode
                 ? 'border-accent bg-accent/10 text-accent dark:border-night-accent dark:text-night-accent dark:bg-night-accent/10'
                 : 'border-ink/10 dark:border-night-text/10 text-ink-soft dark:text-night-text-soft hover:text-ink dark:hover:text-night-text'
             "
-            @click="settings.theme = t"
+            @click="settings.theme = themeMode"
           >
-            {{ t === 'light' ? '明色' : t === 'dark' ? '暗色' : '跟随系统' }}
+            {{ themeMode === 'light' ? t('settings.light') : themeMode === 'dark' ? t('settings.dark') : t('settings.system') }}
           </button>
         </div>
         <label class="block">
-          <span class="text-sm">字号缩放：{{ Math.round(settings.fontScale * 100) }}%</span>
+          <span class="text-sm">{{ t('settings.fontScale', { value: Math.round(settings.fontScale * 100) }) }}</span>
           <input
             v-model.number="settings.fontScale"
             type="range"
@@ -301,19 +304,19 @@ function back() {
       <!-- 记忆 -->
       <section v-if="memory.stats" class="space-y-3 rounded-2xl p-4 bg-paper-soft dark:bg-night-bg-soft
                                           shadow-letter border border-ink/5 dark:border-night-text/10">
-        <h2 class="text-base font-medium">记忆</h2>
+        <h2 class="text-base font-medium">{{ t('settings.memory') }}</h2>
         <div class="grid grid-cols-3 gap-3 text-center">
           <div>
             <div class="text-2xl font-medium">{{ memory.stats.friend_messages }}</div>
-            <div class="text-xs text-ink-soft dark:text-night-text-soft">朋友的话</div>
+            <div class="text-xs text-ink-soft dark:text-night-text-soft">{{ t('settings.friendMessages') }}</div>
           </div>
           <div>
             <div class="text-2xl font-medium">{{ memory.stats.dialogue_windows }}</div>
-            <div class="text-xs text-ink-soft dark:text-night-text-soft">对话片段</div>
+            <div class="text-xs text-ink-soft dark:text-night-text-soft">{{ t('settings.dialogueWindows') }}</div>
           </div>
           <div>
             <div class="text-2xl font-medium">{{ memory.stats.live_messages }}</div>
-            <div class="text-xs text-ink-soft dark:text-night-text-soft">新对话回写</div>
+            <div class="text-xs text-ink-soft dark:text-night-text-soft">{{ t('settings.liveMessages') }}</div>
           </div>
         </div>
         <button
@@ -322,7 +325,7 @@ function back() {
                  hover:bg-paper dark:hover:bg-night-bg disabled:opacity-50"
           @click="togglePause"
         >
-          {{ memory.stats.writeback_paused ? '恢复回写' : '暂停回写（不再把新对话写入记忆）' }}
+          {{ memory.stats.writeback_paused ? t('settings.resumeWriteback') : t('settings.pauseWriteback') }}
         </button>
       </section>
       <!-- 关系分析结果 -->
@@ -333,9 +336,9 @@ function back() {
       >
         <div class="p-4 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 class="font-medium">关系分析结果</h2>
+            <h2 class="font-medium">{{ t('settings.analysis') }}</h2>
             <p class="mt-1 text-xs text-ink-soft dark:text-night-text-soft">
-              时间线和报告由高级功能生成
+              {{ t('settings.analysisHint') }}
             </p>
           </div>
           <a
@@ -344,7 +347,7 @@ function back() {
             rel="noopener"
             class="inline-flex items-center gap-1.5 text-xs text-accent dark:text-night-accent hover:underline"
           >
-            查看生成教程 <ExternalLink :size="13" />
+            {{ t('settings.guide') }} <ExternalLink :size="13" />
           </a>
         </div>
         <button
@@ -354,9 +357,9 @@ function back() {
           <span class="flex items-center gap-3">
             <Route :size="18" />
             <span>
-              <span class="block font-medium">关系时间线</span>
+              <span class="block font-medium">{{ t('settings.timeline') }}</span>
               <span class="block mt-0.5 text-xs text-ink-soft dark:text-night-text-soft">
-                按阶段查看重要节点与原文证据
+                {{ t('settings.timelineHint') }}
               </span>
             </span>
           </span>
@@ -369,9 +372,9 @@ function back() {
           <span class="flex items-center gap-3">
             <BookOpenText :size="18" />
             <span>
-              <span class="block font-medium">关系与性格报告</span>
+              <span class="block font-medium">{{ t('settings.report') }}</span>
               <span class="block mt-0.5 text-xs text-ink-soft dark:text-night-text-soft">
-                查看沟通模式、相处方式和证据
+                {{ t('settings.reportHint') }}
               </span>
             </span>
           </span>
@@ -384,9 +387,9 @@ function back() {
           <span class="flex items-center gap-3">
             <Clock3 :size="18" />
             <span>
-              <span class="block font-medium">主动开聊分析</span>
+              <span class="block font-medium">{{ t('settings.proactive') }}</span>
               <span class="block mt-0.5 text-xs text-ink-soft dark:text-night-text-soft">
-                查看双方为什么开聊，以及对方主动的频率与时间
+                {{ t('settings.proactiveHint') }}
               </span>
             </span>
           </span>
@@ -404,7 +407,7 @@ function back() {
         >
           <span class="flex items-center gap-2">
             <StickerIcon :size="18" />
-            <span class="font-medium">表情包管理</span>
+            <span class="font-medium">{{ t('settings.stickers') }}</span>
           </span>
           <ChevronRight :size="17" class="text-ink-soft dark:text-night-text-soft" />
         </button>

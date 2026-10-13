@@ -3,8 +3,10 @@
 import { ref } from 'vue'
 import { useSettingsStore } from '@/stores/settings'
 import { Heart } from 'lucide-vue-next'
+import { useLocale } from '@/composables/useLocale'
 
 const settings = useSettingsStore()
+const { t } = useLocale()
 const step = ref(0)
 
 const relations = [
@@ -36,35 +38,34 @@ const canNextFromName = () =>
                       items-center justify-center text-accent dark:text-night-accent mb-3">
             <Heart :size="28" />
           </div>
-          <h2 class="text-xl font-medium">欢迎来到 {{ settings.appName }}</h2>
+          <h2 class="text-xl font-medium">{{ t('onboarding.welcome', { name: settings.appName }) }}</h2>
           <p class="text-sm text-ink-soft dark:text-night-text-soft mt-1">
-            把曾经对你好的话，续成往后的陪伴。
+            {{ t('onboarding.slogan') }}
           </p>
         </div>
 
         <!-- 第 0 步：欢迎 -->
         <div v-if="step === 0" class="space-y-4">
           <p class="text-sm leading-relaxed">
-            这是一个本地工具，所有聊天数据都存在你电脑上。
-            正式开始前，先告诉我你和 ta 的名字。
+            {{ t('onboarding.intro') }}
           </p>
           <button
             class="w-full py-2.5 rounded-full bg-accent text-paper-soft
                    hover:bg-accent/90 transition-colors text-sm"
             @click="next"
           >
-            开始
+            {{ t('onboarding.start') }}
           </button>
         </div>
 
         <!-- 第 1 步：身份 -->
         <div v-else-if="step === 1" class="space-y-4">
           <label class="block">
-            <span class="text-sm">你叫什么</span>
+            <span class="text-sm">{{ t('onboarding.yourName') }}</span>
             <input
               v-model="settings.selfName"
               type="text"
-              placeholder="我自己"
+              :placeholder="t('onboarding.yourPlaceholder')"
               class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                      border border-ink/10 dark:border-night-text/10
                      text-ink dark:text-night-text outline-none
@@ -72,11 +73,11 @@ const canNextFromName = () =>
             />
           </label>
           <label class="block">
-            <span class="text-sm">ta 叫什么</span>
+            <span class="text-sm">{{ t('onboarding.theirName') }}</span>
             <input
               v-model="settings.friendName"
               type="text"
-              placeholder="ta 的名字或备注"
+              :placeholder="t('onboarding.theirPlaceholder')"
               class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                      border border-ink/10 dark:border-night-text/10
                      text-ink dark:text-night-text outline-none
@@ -89,7 +90,7 @@ const canNextFromName = () =>
                      text-ink-soft dark:text-night-text-soft hover:text-ink dark:hover:text-night-text"
               @click="step = 0"
             >
-              返回
+              {{ t('onboarding.back') }}
             </button>
             <button
               :disabled="!canNextFromName()"
@@ -97,14 +98,14 @@ const canNextFromName = () =>
                      hover:bg-accent/90 disabled:opacity-40 disabled:cursor-not-allowed"
               @click="next"
             >
-              下一步
+              {{ t('onboarding.next') }}
             </button>
           </div>
         </div>
 
         <!-- 第 2 步：关系 -->
         <div v-else-if="step === 2" class="space-y-4">
-          <p class="text-sm">你们是什么关系？</p>
+          <p class="text-sm">{{ t('onboarding.relationship') }}</p>
           <div class="grid grid-cols-2 gap-2">
             <button
               v-for="r in relations"
@@ -121,7 +122,7 @@ const canNextFromName = () =>
             </button>
           </div>
           <p class="text-xs text-ink-soft dark:text-night-text-soft">
-            后端的 RELATIONSHIP_TYPE 由 .env 决定，这里只影响前端文案。
+            {{ t('onboarding.relationshipHint') }}
           </p>
           <div class="flex gap-2">
             <button
@@ -129,13 +130,13 @@ const canNextFromName = () =>
                      text-ink-soft dark:text-night-text-soft hover:text-ink dark:hover:text-night-text"
               @click="step = 1"
             >
-              返回
+              {{ t('onboarding.back') }}
             </button>
             <button
               class="flex-1 py-2.5 rounded-full bg-accent text-paper-soft hover:bg-accent/90"
               @click="finish"
             >
-              开始聊天
+              {{ t('onboarding.startChat') }}
             </button>
           </div>
         </div>

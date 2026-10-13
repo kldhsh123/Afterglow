@@ -17,10 +17,12 @@ import {
   updateSticker,
 } from '@/api/extra'
 import { fileToDataUrl } from '@/composables/imageUpload'
+import { useLocale } from '@/composables/useLocale'
 
 type Owner = 'ai' | 'self' | 'shared'
 
 const router = useRouter()
+const { t } = useLocale()
 const stickers = ref<Sticker[]>([])
 const loading = ref(false)
 const errorMsg = ref<string | null>(null)
@@ -81,11 +83,11 @@ async function onFileInput(e: Event) {
 
 async function submitNew() {
   if (!newDataUrl.value) {
-    errorMsg.value = '请选择图片'
+    errorMsg.value = t('stickers.chooseImage')
     return
   }
   if (!newName.value.trim() || !newDescription.value.trim()) {
-    errorMsg.value = '名字和说明都必填'
+    errorMsg.value = t('stickers.required')
     return
   }
   saving.value = true
@@ -143,7 +145,7 @@ async function saveEdit() {
 }
 
 async function remove(name: string) {
-  if (!confirm(`删除表情包「${name}」？`)) return
+  if (!confirm(t('stickers.removeConfirm', { name }))) return
   try {
     await deleteSticker(name)
     await load()
@@ -164,7 +166,7 @@ async function remove(name: string) {
         >
           <ChevronLeft :size="20" />
         </button>
-        <h1 class="text-xl font-medium">表情包</h1>
+        <h1 class="text-xl font-medium">{{ t('stickers.title') }}</h1>
       </header>
 
       <p v-if="errorMsg" class="text-sm text-warning bg-warning/10 px-3 py-2 rounded-lg">
@@ -176,7 +178,7 @@ async function remove(name: string) {
         class="rounded-2xl p-4 bg-paper-soft dark:bg-night-bg-soft shadow-letter
                border border-ink/5 dark:border-night-text/10 space-y-3"
       >
-        <h2 class="text-base font-medium">添加表情包</h2>
+        <h2 class="text-base font-medium">{{ t('stickers.add') }}</h2>
         <div class="flex items-start gap-4">
           <div
             class="w-24 h-24 shrink-0 rounded-lg border border-dashed border-ink/20 dark:border-night-text/20
@@ -184,7 +186,7 @@ async function remove(name: string) {
                    hover:border-accent dark:hover:border-night-accent transition-colors"
             @click="pickFile"
           >
-            <img v-if="newDataUrl" :src="newDataUrl" class="max-w-full max-h-full" alt="预览" />
+            <img v-if="newDataUrl" :src="newDataUrl" class="max-w-full max-h-full" :alt="t('stickers.preview')" />
             <ImagePlus v-else :size="28" class="text-ink-soft dark:text-night-text-soft" />
           </div>
           <input
@@ -197,7 +199,7 @@ async function remove(name: string) {
           <div class="flex-1 space-y-2">
             <input
               v-model="newName"
-              placeholder="名字（如：嘿嘿）"
+              :placeholder="t('stickers.namePlaceholder')"
               maxlength="32"
               class="w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                      border border-ink/10 dark:border-night-text/10 outline-none
@@ -205,7 +207,7 @@ async function remove(name: string) {
             />
             <input
               v-model="newDescription"
-              placeholder="说明（让 AI 知道什么时候发，比如：开心打趣 / 安慰）"
+              :placeholder="t('stickers.descriptionPlaceholder')"
               maxlength="200"
               class="w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                      border border-ink/10 dark:border-night-text/10 outline-none
@@ -217,13 +219,13 @@ async function remove(name: string) {
                 class="px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                        border border-ink/10 dark:border-night-text/10 outline-none"
               >
-                <option value="shared">共用（AI 和我都能发）</option>
-                <option value="ai">只给 AI 用</option>
-                <option value="self">只给我用</option>
+                <option value="shared">{{ t('stickers.shared') }}</option>
+                <option value="ai">{{ t('stickers.aiOnly') }}</option>
+                <option value="self">{{ t('stickers.selfOnly') }}</option>
               </select>
               <input
                 v-model="newTags"
-                placeholder="标签（可选，空格或逗号分隔）"
+                :placeholder="t('stickers.tagsPlaceholder')"
                 class="flex-1 px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                        border border-ink/10 dark:border-night-text/10 outline-none
                        focus:ring-2 focus:ring-accent-soft"
@@ -237,7 +239,7 @@ async function remove(name: string) {
                  hover:bg-accent/90 transition-colors disabled:opacity-50 text-sm"
           @click="submitNew"
         >
-          {{ saving ? '上传中...' : '保存表情包' }}
+          {{ saving ? t('stickers.uploading') : t('stickers.save') }}
         </button>
       </section>
 
@@ -247,23 +249,23 @@ async function remove(name: string) {
                border border-ink/5 dark:border-night-text/10"
       >
         <div class="flex items-center justify-between mb-3">
-          <h2 class="text-base font-medium">现有表情包（{{ stickers.length }}）</h2>
+          <h2 class="text-base font-medium">{{ t('stickers.existing', { count: stickers.length }) }}</h2>
           <select
             v-model="ownerFilter"
             class="text-xs px-2 py-1 rounded-lg bg-paper dark:bg-night-bg
                    border border-ink/10 dark:border-night-text/10 outline-none"
           >
-            <option value="all">全部</option>
-            <option value="shared">共用</option>
-            <option value="ai">仅 AI</option>
-            <option value="self">仅我</option>
+            <option value="all">{{ t('stickers.all') }}</option>
+            <option value="shared">{{ t('stickers.sharedShort') }}</option>
+            <option value="ai">{{ t('stickers.aiShort') }}</option>
+            <option value="self">{{ t('stickers.selfShort') }}</option>
           </select>
         </div>
         <div v-if="loading" class="text-center text-ink-soft dark:text-night-text-soft py-6">
-          加载中...
+          {{ t('stickers.loading') }}
         </div>
         <div v-else-if="filtered.length === 0" class="text-center text-ink-soft dark:text-night-text-soft py-6">
-          还没有表情包
+          {{ t('stickers.empty') }}
         </div>
         <div v-else class="grid grid-cols-2 sm:grid-cols-3 gap-3">
           <div
@@ -280,18 +282,18 @@ async function remove(name: string) {
               </div>
               <div class="flex items-center gap-2 mt-1">
                 <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-accent-soft/30 dark:bg-night-accent-soft/30 text-accent dark:text-night-accent">
-                  {{ s.owner === 'shared' ? '共用' : s.owner === 'ai' ? '仅 AI' : '仅我' }}
+                  {{ s.owner === 'shared' ? t('stickers.sharedShort') : s.owner === 'ai' ? t('stickers.aiShort') : t('stickers.selfShort') }}
                 </span>
                 <button
                   class="ml-auto p-1 rounded hover:bg-paper-shade dark:hover:bg-night-bubble-user"
-                  title="编辑"
+                  :title="t('stickers.edit')"
                   @click="startEdit(s)"
                 >
                   <Save :size="14" />
                 </button>
                 <button
                   class="p-1 rounded text-warning hover:bg-warning/10"
-                  title="删除"
+                  :title="t('stickers.remove')"
                   @click="remove(s.name)"
                 >
                   <Trash2 :size="14" />
@@ -315,11 +317,11 @@ async function remove(name: string) {
                  p-5 space-y-3"
         >
           <header class="flex items-center justify-between">
-            <h3 class="text-base font-medium">编辑：{{ editing.name }}</h3>
+            <h3 class="text-base font-medium">{{ t('stickers.editTitle', { name: editing.name }) }}</h3>
             <button class="p-1 rounded-full" @click="editing = null"><X :size="18" /></button>
           </header>
           <label class="block">
-            <span class="text-sm">说明</span>
+            <span class="text-sm">{{ t('stickers.description') }}</span>
             <input
               v-model="editing.description"
               maxlength="200"
@@ -328,19 +330,19 @@ async function remove(name: string) {
             />
           </label>
           <label class="block">
-            <span class="text-sm">归属</span>
+            <span class="text-sm">{{ t('stickers.owner') }}</span>
             <select
               v-model="editing.owner"
               class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                      border border-ink/10 dark:border-night-text/10 outline-none"
             >
-              <option value="shared">共用</option>
-              <option value="ai">仅 AI</option>
-              <option value="self">仅我</option>
+              <option value="shared">{{ t('stickers.sharedShort') }}</option>
+              <option value="ai">{{ t('stickers.aiShort') }}</option>
+              <option value="self">{{ t('stickers.selfShort') }}</option>
             </select>
           </label>
           <label class="block">
-            <span class="text-sm">标签（空格或逗号分隔）</span>
+            <span class="text-sm">{{ t('stickers.tags') }}</span>
             <input
               v-model="editing.tags"
               class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
@@ -351,7 +353,7 @@ async function remove(name: string) {
             class="w-full py-2.5 rounded-full bg-accent text-paper-soft hover:bg-accent/90"
             @click="saveEdit"
           >
-            保存
+            {{ t('common.save') }}
           </button>
         </div>
       </div>

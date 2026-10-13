@@ -12,6 +12,9 @@ import {
   type Preset, type TestResult, type ImportTaskState, type UploadedFile,
   type IdentityCandidate, type SetupStatus,
 } from './api'
+import { useLocale } from './useLocale'
+
+const { isChinese, t, locale, setLocale } = useLocale()
 
 const step = ref(0)
 const totalSteps = 8
@@ -186,11 +189,11 @@ const finished = ref(false)
 const backupPath = ref<string | null>(null)
 
 const relationships = [
-  { value: 'friend', label: '朋友' },
-  { value: 'lover', label: '恋人' },
-  { value: 'family', label: '亲人' },
-  { value: 'colleague', label: '同事' },
-  { value: 'custom', label: '其他' },
+  { value: 'friend', label: t('friend') },
+  { value: 'lover', label: t('partner') },
+  { value: 'family', label: t('family') },
+  { value: 'colleague', label: t('colleague') },
+  { value: 'custom', label: t('other') },
 ]
 
 const progress = computed(() => Math.round(((step.value) / (totalSteps)) * 100))
@@ -205,14 +208,14 @@ function hasValueOrConfigured(key: keyof typeof form): boolean {
 }
 
 const stepItems = computed(() => [
-  { id: 1, label: '身份', complete: setupStatus.value?.identity_ok ?? false, optional: false },
-  { id: 2, label: '关系', complete: hasConfigured('RELATIONSHIP_TYPE'), optional: false },
-  { id: 3, label: '聊天 AI', complete: setupStatus.value?.chat_ok ?? false, optional: false },
-  { id: 4, label: '向量与打标', complete: setupStatus.value?.embedding_ok ?? false, optional: false },
-  { id: 5, label: '可选能力', complete: true, optional: true },
-  { id: 6, label: '检索增强', complete: true, optional: true },
-  { id: 7, label: '导入记录', complete: importTask.value?.status === 'done', optional: true },
-  { id: 8, label: '访问密码', complete: setupStatus.value?.auth_ok ?? false, optional: false },
+  { id: 1, label: t('identity'), complete: setupStatus.value?.identity_ok ?? false, optional: false },
+  { id: 2, label: t('relationship'), complete: hasConfigured('RELATIONSHIP_TYPE'), optional: false },
+  { id: 3, label: t('chatAI'), complete: setupStatus.value?.chat_ok ?? false, optional: false },
+  { id: 4, label: t('embeddingsLabeling'), complete: setupStatus.value?.embedding_ok ?? false, optional: false },
+  { id: 5, label: t('optionalFeatures176'), complete: true, optional: true },
+  { id: 6, label: t('retrievalEnhancements'), complete: true, optional: true },
+  { id: 7, label: t('importHistory'), complete: importTask.value?.status === 'done', optional: true },
+  { id: 8, label: t('accessPassword'), complete: setupStatus.value?.auth_ok ?? false, optional: false },
 ])
 
 function firstIncompleteStep(status: SetupStatus): number {
@@ -234,7 +237,7 @@ async function goToStep(target: number) {
 // ---- 访问令牌校验 ----
 async function checkToken() {
   if (!tokenInput.value.trim()) {
-    tokenError.value = '请粘贴后端控制台打印的 setup token'
+    tokenError.value = t('pasteTheSetupTokenPrintedInThe')
     return
   }
   tokenChecking.value = true
@@ -264,7 +267,7 @@ async function checkToken() {
     // 否则用旧令牌调用 /import/* 会返回 401，且用户没机会更新令牌。
     await tryResumeUnfinishedImport()
   } catch (e) {
-    tokenError.value = (e as Error).message || '校验失败'
+    tokenError.value = (e as Error).message || t('validationFailed')
   } finally {
     tokenChecking.value = false
   }
@@ -290,9 +293,9 @@ async function tryResumeUnfinishedImport() {
     if (uploadedFiles.value.length) {
       step.value = 7
       resumeHint.value = (
-        '检测到上次有未完成的导入任务，后端可能已被重启。'
-        + '已处理的聊天记录都保留在了向量库中，'
-        + '点击"开始导入"会自动跳过已存部分继续未完成的工作。'
+        t('anUnfinishedImportWasFoundTheBackend')
+        + t('processedRecordsArePreservedInTheVector')
+        + t('clickStartImportToSkipStoredRecords')
       )
     }
   }
@@ -626,7 +629,7 @@ async function startImport() {
     if (msg.includes('文件不存在') || msg.includes('not exist') || msg.includes('404')) {
       uploadedFiles.value = []
       persistUploadedFiles([])
-      saveError.value = '已上传的文件在后端找不到（可能被清理或后端重启过）。请返回步骤 1 重新选择文件。'
+      saveError.value = t('uploadedFilesAreMissingFromTheBackend')
     }
   } finally {
     importStarting.value = false
@@ -639,7 +642,7 @@ function subscribeTask(taskId: string) {
   let consecutiveErrors = 0
   es.onopen = () => {
     consecutiveErrors = 0
-    if (saveError.value.startsWith('导入进度连接暂时中断')) {
+    if (saveError.value.startsWith(t('importProgressConnectionInterrupted'))) {
       saveError.value = ''
     }
   }
@@ -660,12 +663,12 @@ function subscribeTask(taskId: string) {
   es.onerror = () => {
     consecutiveErrors += 1
     if (es.readyState === EventSource.CLOSED) {
-      saveError.value = '导入进度连接已关闭，请刷新页面恢复任务状态。'
+      saveError.value = t('theProgressConnectionIsClosedRefreshThe')
       importSse = null
       return
     }
     if (consecutiveErrors >= 2) {
-      saveError.value = '导入进度连接暂时中断，浏览器正在自动重连…'
+      saveError.value = t('theProgressConnectionWasInterruptedYourBrowser')
     }
     // 不主动关闭：EventSource 会按浏览器原生策略自动重连。
   }
@@ -808,7 +811,7 @@ async function saveConfig(opts: { silent?: boolean } = {}): Promise<boolean> {
     if (Object.keys(values).length === 0) return true
     const result = await api.putValues(values)
     if (!result.ok) {
-      const errs = result.errors?.map(e => `${e.field}: ${e.message}`).join('；') || '校验失败'
+      const errs = result.errors?.map(e => `${e.field}: ${e.message}`).join('；') || t('validationFailed')
       throw new Error(errs)
     }
     if (result.backup) backupPath.value = result.backup
@@ -979,12 +982,12 @@ const importStageElapsed = computed(() => {
 const importStatusTitle = computed(() => {
   const st = importTask.value?.status
   switch (st) {
-    case 'done': return importTask.value?.error ? '导入完成（有警告）' : '导入完成'
-    case 'failed': return '导入失败'
-    case 'cancelled': return '已取消'
-    case 'persona': return '生成人格画像中'
-    case 'importing': return '正在向量化入库'
-    default: return '准备中'
+    case 'done': return importTask.value?.error ? t('importCompleteWithWarnings') : t('importComplete')
+    case 'failed': return t('importFailed')
+    case 'cancelled': return t('cancelled')
+    case 'persona': return t('generatingPersonaProfile')
+    case 'importing': return t('embeddingAndStoringRecords')
+    default: return t('preparing195')
   }
 })
 
@@ -1008,39 +1011,47 @@ onMounted(async () => {
                     dark:bg-night-accent/15 dark:text-night-accent items-center justify-center">
           <CheckCircle2 :size="36" />
         </div>
-        <h1 class="text-2xl font-medium">配置已保存</h1>
+        <h1 class="text-2xl font-medium">{{ t('configurationSaved') }}</h1>
         <p class="text-sm text-ink-soft dark:text-night-text-soft max-w-md mx-auto leading-relaxed">
-          所有更改已写入 backend/.env。请重启后端进程以应用新配置：<br />
+          {{ t('allChangesWereWrittenToBackendEnv') }}<br />
           <code class="font-mono text-xs px-2 py-0.5 rounded bg-paper-shade dark:bg-night-bg-soft">
-            Ctrl+C 后重新运行启动命令
+            {{ t('pressCtrlCThenRunTheStart') }}
           </code>
         </p>
         <p v-if="backupPath" class="text-xs text-ink-soft dark:text-night-text-soft">
-          原 .env 已备份到 <code class="font-mono">{{ backupPath }}</code>
+          {{ t('previousEnvBackedUpTo') }} <code class="font-mono">{{ backupPath }}</code>
         </p>
         <p class="text-xs text-ink-soft dark:text-night-text-soft pt-4">
-          现在您可以安全的关闭此页面。
+          {{ t('youCanNowCloseThisPage') }}
         </p>
         <button type="button"
           class="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm
                  border border-ink/10 dark:border-night-text/10 hover:bg-paper dark:hover:bg-night-bg"
           @click="goToStep(-1)">
-          <Settings2 :size="14" /> 返回配置总览
+          <Settings2 :size="14" /> {{ t('backToOverview') }}
         </button>
       </div>
 
       <template v-else>
         <header class="mb-8 text-center">
-          <h1 class="text-2xl font-medium tracking-wide">Afterglow 配置向导</h1>
+          <div class="flex justify-end mb-3">
+            <label class="sr-only" for="config-language-switcher">{{ t('language') }}</label>
+            <select id="config-language-switcher" v-model="locale" @change="setLocale(locale)"
+              class="rounded-lg bg-paper-soft dark:bg-night-bg-soft border border-ink/10 dark:border-night-text/10 px-2 py-1 text-xs">
+              <option value="zh-CN">{{ t('chinese') }}</option>
+              <option value="en">{{ t('english') }}</option>
+            </select>
+          </div>
+          <h1 class="text-2xl font-medium tracking-wide">{{ t('title') }}</h1>
           <p class="mt-1 text-sm text-ink-soft dark:text-night-text-soft">
-            {{ step === -1 ? '查看现有配置，直接进入需要调整的分区。' : '配置会自动保存，也可以随时切换分区。' }}
+            {{ step === -1 ? t('reviewYourConfigurationAndOpenTheSection') : t('configurationSavesAutomaticallyYouCanSwitchSections') }}
           </p>
         </header>
 
         <!-- 进度条 -->
         <div v-if="step > 0" class="mb-8">
           <div class="flex items-center justify-between text-xs text-ink-soft dark:text-night-text-soft mb-2">
-            <span>第 {{ step }} / {{ totalSteps }} 步</span>
+            <span>{{ t('step') }} {{ step }} / {{ totalSteps }} {{ t('of') }}</span>
             <span>{{ progress }}%</span>
           </div>
           <div class="h-1 rounded-full bg-ink/5 dark:bg-night-text/10 overflow-hidden">
@@ -1056,7 +1067,7 @@ onMounted(async () => {
             class="inline-flex items-center gap-1.5 text-xs text-ink-soft dark:text-night-text-soft
                    hover:text-ink dark:hover:text-night-text"
             @click="goToStep(-1)">
-            <Settings2 :size="13" /> 配置总览
+            <Settings2 :size="13" /> {{ t('configurationOverview') }}
           </button>
           <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
             <button v-for="item in stepItems" :key="item.id" type="button"
@@ -1067,7 +1078,7 @@ onMounted(async () => {
               @click="goToStep(item.id)">
               <span class="block font-medium">{{ item.id }}. {{ item.label }}</span>
               <span class="mt-0.5 block text-[11px] text-ink-soft dark:text-night-text-soft">
-                {{ item.optional ? '可选' : item.complete ? '已配置' : '待配置' }}
+                {{ item.optional ? t('optional') : item.complete ? t('configured') : t('notConfigured') }}
               </span>
             </button>
           </div>
@@ -1080,10 +1091,10 @@ onMounted(async () => {
           <div v-if="step === -1" class="space-y-5">
             <div class="flex items-center gap-2 text-accent dark:text-night-accent">
               <Settings2 :size="18" />
-              <h2 class="text-lg font-medium">配置总览</h2>
+              <h2 class="text-lg font-medium">{{ t('configurationOverview') }}</h2>
             </div>
             <p class="text-sm leading-relaxed text-ink-soft dark:text-night-text-soft">
-              已有配置会保留。进入任意分区只修改需要调整的字段，密钥留空表示继续使用现有值。
+              {{ t('existingSettingsArePreservedChangeOnlyThe') }}
             </p>
             <div class="divide-y divide-ink/5 dark:divide-night-text/10 border-y border-ink/5 dark:border-night-text/10">
               <button v-for="item in stepItems" :key="item.id" type="button"
@@ -1094,7 +1105,7 @@ onMounted(async () => {
                 <span class="text-xs" :class="item.complete || item.optional
                   ? 'text-accent dark:text-night-accent'
                   : 'text-warning'">
-                  {{ item.optional ? '可选' : item.complete ? '已配置' : '待配置' }}
+                  {{ item.optional ? t('optional') : item.complete ? t('configured') : t('notConfigured') }}
                 </span>
                 <ArrowRight :size="14" />
               </button>
@@ -1105,18 +1116,16 @@ onMounted(async () => {
           <div v-else-if="step === 0" class="space-y-5">
             <div class="flex items-center gap-2 text-accent dark:text-night-accent">
               <KeyRound :size="18" />
-              <h2 class="text-lg font-medium">输入访问 token</h2>
+              <h2 class="text-lg font-medium">{{ t('enterAccessToken') }}</h2>
             </div>
             <p class="text-sm leading-relaxed text-ink-soft dark:text-night-text-soft">
-              首次配置需要从后端控制台获取一次性 token。后端启动后会在终端打印类似下面的内容：
+              {{ t('forInitialSetupCopyTheOneTime') }}
             </p>
             <pre class="text-xs p-3 rounded-lg bg-paper dark:bg-night-bg
                         border border-ink/10 dark:border-night-text/10 overflow-x-auto"
-            >配置 UI 已启用
-路径：/config
-访问 token（generated）：xxxxxxxxxxxx</pre>
+            >{{ t('configurationUIEnabledNPathConfigNAccessToken') }}</pre>
             <label class="block">
-              <span class="text-sm">把那一串 token 粘贴在这里</span>
+              <span class="text-sm">{{ t('pasteTheTokenHere') }}</span>
               <input
                 v-model="tokenInput"
                 type="password"
@@ -1138,16 +1147,16 @@ onMounted(async () => {
               @click="checkToken"
             >
               <Loader2 v-if="tokenChecking" :size="16" class="animate-spin" />
-              <span>{{ tokenChecking ? '校验中…' : '继续' }}</span>
+              <span>{{ tokenChecking ? t('checking') : t('continue') }}</span>
             </button>
           </div>
 
           <!-- 第 1 步：身份 -->
           <div v-else-if="step === 1" class="space-y-5">
             <div>
-              <h2 class="text-lg font-medium">你和朋友是谁</h2>
+              <h2 class="text-lg font-medium">{{ t('yourIdentityAndTheirs') }}</h2>
               <p class="mt-1 text-sm text-ink-soft dark:text-night-text-soft">
-                这些信息用于识别聊天记录里"哪条是你说的、哪条是 ta 说的"。
+                {{ t('theseDetailsIdentifyWhichMessagesAreYours') }}
               </p>
             </div>
 
@@ -1157,11 +1166,9 @@ onMounted(async () => {
               <div class="flex items-start gap-2">
                 <Wand2 :size="16" class="mt-0.5 text-accent dark:text-night-accent flex-shrink-0" />
                 <div class="flex-1">
-                  <div class="text-sm font-medium">从聊天文件自动识别（推荐）</div>
+                  <div class="text-sm font-medium">{{ t('identifyFromChatFilesRecommended') }}</div>
                   <div class="text-xs text-ink-soft dark:text-night-text-soft mt-0.5 leading-relaxed">
-                    选择 Afterglow Chat、QQ、微信、抖音的 JSON / JSONL，DiscordChatExporter 的 JSON，WhatsApp 的 TXT / Markdown，或 Telegram 的 HTML 聊天文件，
-                    文件会直接上传至本机后端并解析双方身份。
-                    跨平台或多账号场景可一次选多个文件，UID 自动累加为逗号列表。
+                    {{ t('chooseAfterglowChatQQWeChatOrDouyin') }}
                   </div>
                 </div>
               </div>
@@ -1172,7 +1179,7 @@ onMounted(async () => {
                   @change="onIdentifyFilesPicked" :disabled="inspecting" />
                 <Loader2 v-if="inspecting" :size="12" class="animate-spin" />
                 <Upload v-else :size="12" />
-                <span>{{ inspecting ? '上传并解析中…' : '选择聊天文件' }}</span>
+                <span>{{ inspecting ? t('uploadingAndParsing') : t('chooseChatFiles') }}</span>
               </label>
               <p v-if="inspectError" class="text-xs text-warning flex items-center gap-1">
                 <AlertCircle :size="12" /> {{ inspectError }}
@@ -1181,9 +1188,9 @@ onMounted(async () => {
               <!-- 已上传文件 -->
               <div v-if="uploadedFiles.length" class="space-y-1.5 pt-1">
                 <div class="text-xs text-ink-soft dark:text-night-text-soft">
-                  已上传 {{ uploadedFiles.length }} 个文件，导入步骤会直接使用。
+                  {{ t('uploaded') }} {{ uploadedFiles.length }} {{ t('filesReadyForTheImportStep') }}
                   <span v-if="uploadedFiles.length > 1">
-                    人格、风格和作息画像将合并全部文件生成，请确保这些记录属于同一个人。
+                    {{ t('allFilesWillBeCombinedToGenerate') }}
                   </span>
                 </div>
                 <div v-for="(f, i) in uploadedFiles" :key="f.saved_as"
@@ -1194,7 +1201,7 @@ onMounted(async () => {
                   <span class="truncate flex-1">{{ f.name }}</span>
                   <span class="text-ink-soft dark:text-night-text-soft whitespace-nowrap">
                     {{ f.format_label || f.format || '?' }}
-                    · {{ f.total_messages || 0 }} 条
+                    · {{ f.total_messages || 0 }} {{ t('messages') }}
                   </span>
                   <button type="button" @click="removeUploaded(i)"
                     class="p-0.5 text-ink-soft dark:text-night-text-soft hover:text-warning">
@@ -1206,9 +1213,8 @@ onMounted(async () => {
               <!-- 候选列表 -->
               <div v-if="inspectCandidates.length" class="space-y-2 pt-1">
                 <div class="text-xs text-ink-soft dark:text-night-text-soft leading-relaxed">
-                  识别到 <b>{{ inspectCandidates.length }}</b> 个候选身份。
-                  <b>跨平台账号</b>（同时导入 QQ 和微信、或多个小号）时，把对方的所有 UID 都点"设为朋友"，
-                  你的所有 UID 都点"设为我"——支持多次累加。<b>未分配的 UID 在导入时会被当作陌生人忽略</b>。
+                  {{ t('found') }} <b>{{ inspectCandidates.length }}</b> {{ t('candidateIdentities') }}
+                  <b>{{ t('multiplePlatformsOrAccounts') }}</b>{{ t('assignEveryUIDBelongingToThemWith') }}<b>{{ t('unassignedUIDsAreTreatedAsStrangersAnd') }}</b>。
                 </div>
                 <div v-for="c in inspectCandidates" :key="c.uid"
                   class="flex items-center gap-3 p-2.5 rounded-lg
@@ -1228,66 +1234,65 @@ onMounted(async () => {
                     :class="isPickedAsSelf(c)
                       ? 'border-accent bg-accent/10 text-accent dark:border-night-accent dark:text-night-accent dark:bg-night-accent/10'
                       : 'border-ink/10 dark:border-night-text/10 hover:bg-paper-shade dark:hover:bg-night-bg-soft'">
-                    设为我
+                    {{ t('assignToMe') }}
                   </button>
                   <button type="button" @click="pickAsFriend(c)"
                     class="text-xs px-2.5 py-1 rounded-full border whitespace-nowrap"
                     :class="isPickedAsFriend(c)
                       ? 'border-accent bg-accent/10 text-accent dark:border-night-accent dark:text-night-accent dark:bg-night-accent/10'
                       : 'border-ink/10 dark:border-night-text/10 hover:bg-paper-shade dark:hover:bg-night-bg-soft'">
-                    设为朋友
+                    {{ t('assignToFriend') }}
                   </button>
                 </div>
                 <div v-if="unassignedCandidates.length > 0"
                   class="rounded-lg px-3.5 py-2.5 text-xs leading-relaxed
                          bg-warning/10 border border-warning/30 text-warning">
-                  ⚠️ 还有 <b>{{ unassignedCandidates.length }}</b> 个候选 UID 未分配：
-                  <span class="font-mono">{{ unassignedCandidates.map(c => c.uid).join('、') }}</span>。
-                  如果是你或对方的另一个账号，记得点"设为我 / 设为朋友"。
+                  {{ t('remaining') }} <b>{{ unassignedCandidates.length }}</b> {{ t('candidateUIDsAreUnassigned') }}
+                  <span class="font-mono">{{ unassignedCandidates.map(c => c.uid).join('、') }}</span>{{ t('ifOneIsAnotherAccountBelongingTo') }}
                 </div>
               </div>
             </div>
 
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <label class="block">
-                <span class="text-sm">你的昵称</span>
+                <span class="text-sm">{{ t('yourNickname') }}</span>
                 <input v-model="form.SELF_NAME"
                   class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                          border border-ink/10 dark:border-night-text/10 outline-none
                          focus:ring-2 focus:ring-accent-soft" />
               </label>
               <label class="block">
-                <span class="text-sm">你的账号 ID</span>
-                <input v-model="form.SELF_UID" placeholder="QQ 为 u_xxx，微信为 wxid_xxx"
+                <span class="text-sm">{{ t('yourAccountID') }}</span>
+                <input v-model="form.SELF_UID" :placeholder="t('qqUXxxWeChatWxidXxx')"
                   class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                          border border-ink/10 dark:border-night-text/10 outline-none
                          focus:ring-2 focus:ring-accent-soft font-mono text-sm" />
               </label>
               <label class="block">
-                <span class="text-sm">朋友的昵称</span>
+                <span class="text-sm">{{ t('theirNickname') }}</span>
                 <input v-model="form.FRIEND_NAME"
                   class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                          border border-ink/10 dark:border-night-text/10 outline-none
                          focus:ring-2 focus:ring-accent-soft" />
               </label>
               <label class="block">
-                <span class="text-sm">朋友的账号 ID</span>
-                <input v-model="form.FRIEND_UID" placeholder="多账号用逗号分隔"
+                <span class="text-sm">{{ t('theirAccountID') }}</span>
+                <input v-model="form.FRIEND_UID" :placeholder="t('separateMultipleAccountsWithCommas')"
                   class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                          border border-ink/10 dark:border-night-text/10 outline-none
                          focus:ring-2 focus:ring-accent-soft font-mono text-sm" />
               </label>
             </div>
             <p class="text-xs text-ink-soft dark:text-night-text-soft">
-              如果不用上面的自动识别，可手动填写。QQ 见 chatInfo.selfUid，微信见 senders 数组的 wxid。
+              {{ t('youCanEnterDetailsManuallyInsteadFor') }}
             </p>
           </div>
 
           <!-- 第 2 步：关系 -->
           <div v-else-if="step === 2" class="space-y-5">
             <div>
-              <h2 class="text-lg font-medium">你们是什么关系</h2>
-              <p class="mt-1 text-sm text-ink-soft dark:text-night-text-soft">用于挑选合适的语气模板。</p>
+              <h2 class="text-lg font-medium">{{ t('yourRelationship') }}</h2>
+              <p class="mt-1 text-sm text-ink-soft dark:text-night-text-soft">{{ t('usedToSelectASuitableToneTemplate') }}</p>
             </div>
             <div class="grid grid-cols-2 gap-3">
               <button v-for="r in relationships" :key="r.value"
@@ -1300,9 +1305,9 @@ onMounted(async () => {
               </button>
             </div>
             <label v-if="form.RELATIONSHIP_TYPE === 'custom'" class="block">
-              <span class="text-sm">填一句描述这段关系</span>
+              <span class="text-sm">{{ t('describeTheRelationship') }}</span>
               <input v-model="form.RELATIONSHIP_DESCRIPTION"
-                placeholder="例如：高中同桌、一起长大的发小"
+                :placeholder="t('forExampleSchoolFriendsOrChildhoodFriends')"
                 class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                        border border-ink/10 dark:border-night-text/10 outline-none
                        focus:ring-2 focus:ring-accent-soft" />
@@ -1312,9 +1317,9 @@ onMounted(async () => {
           <!-- 第 3 步：聊天 AI -->
           <div v-else-if="step === 3" class="space-y-5">
             <div>
-              <h2 class="text-lg font-medium">选一个聊天 AI</h2>
+              <h2 class="text-lg font-medium">{{ t('chooseAChatAI') }}</h2>
               <p class="mt-1 text-sm text-ink-soft dark:text-night-text-soft">
-                负责最终的对话生成。挑一个服务商，填密钥后点测试。
+                {{ t('generatesConversationRepliesEnterYourProviderDetails') }}
               </p>
             </div>
 
@@ -1322,11 +1327,10 @@ onMounted(async () => {
                         bg-accent/5 dark:bg-night-accent/10
                         border border-accent/20 dark:border-night-accent/25
                         text-ink-soft dark:text-night-text-soft">
-              建议优先选择 DeepSeek、Gemini 等参数量较大、表达自然的模型。
-              模型本身的表达力会直接决定最终对话的质感。
+              {{ t('considerLargerExpressiveModelsSuchAsDeepSeek') }}
             </div>
 
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <div v-if="isChinese" class="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <button v-for="p in chatPresets" :key="p.id"
                 class="text-left p-3 rounded-lg border text-sm transition-colors"
                 :class="currentChatPresetId === p.id
@@ -1339,7 +1343,7 @@ onMounted(async () => {
             </div>
             <div class="space-y-3 pt-2">
               <label class="block">
-                <span class="text-sm">接口地址</span>
+                <span class="text-sm">{{ t('apiURL') }}</span>
                 <input v-model="form.OPENAI_BASE_URL"
                   class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                          border border-ink/10 dark:border-night-text/10 outline-none
@@ -1347,31 +1351,31 @@ onMounted(async () => {
               </label>
               <label class="block">
                 <div class="flex items-baseline justify-between">
-                  <span class="text-sm">密钥</span>
+                  <span class="text-sm">{{ t('apiKey') }}</span>
                   <a v-if="currentPresetApplyUrl" :href="currentPresetApplyUrl"
                     target="_blank" rel="noopener"
                     class="text-xs text-accent dark:text-night-accent hover:underline inline-flex items-center gap-1">
-                    去申请密钥<ExternalLink :size="11" />
+                    {{ t('getAnAPIKey') }}<ExternalLink :size="11" />
                   </a>
                 </div>
                 <input v-model="form.OPENAI_API_KEY" type="password"
-                  :placeholder="hasConfigured('OPENAI_API_KEY') ? '已配置，留空保持不变' : ''"
+                  :placeholder="hasConfigured('OPENAI_API_KEY') ? t('alreadyConfiguredLeaveBlankToKeepIt') : ''"
                   class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                          border border-ink/10 dark:border-night-text/10 outline-none
                          focus:ring-2 focus:ring-accent-soft font-mono text-sm" />
               </label>
               <label class="block">
-                <span class="text-sm">API 协议</span>
+                <span class="text-sm">{{ t('apiProtocol') }}</span>
                 <select v-model="form.CHAT_API_PROTOCOL"
                   class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                          border border-ink/10 dark:border-night-text/10 outline-none
                          focus:ring-2 focus:ring-accent-soft font-mono text-sm">
-                  <option value="chat_completions">Chat Completions（兼容性最好）</option>
-                  <option value="responses">Responses（适配仅支持该端点的服务）</option>
+                  <option value="chat_completions">{{ t('chatCompletionsWidestCompatibility') }}</option>
+                  <option value="responses">{{ t('responsesForProvidersRequiringThisEndpoint') }}</option>
                 </select>
               </label>
               <label class="block">
-                <span class="text-sm">模型名</span>
+                <span class="text-sm">{{ t('modelName') }}</span>
                 <input v-model="form.CHAT_MODEL"
                   class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                          border border-ink/10 dark:border-night-text/10 outline-none
@@ -1388,32 +1392,32 @@ onMounted(async () => {
                 @click="testChat">
                 <Loader2 v-if="chatTesting" :size="14" class="animate-spin" />
                 <RefreshCw v-else :size="14" />
-                <span>{{ chatTesting ? '测试中…' : '测试连通' }}</span>
+                <span>{{ chatTesting ? t('testing') : t('testConnection') }}</span>
               </button>
               <div v-if="chatTest" class="text-sm flex items-center gap-1.5"
                 :class="chatTest.ok ? 'text-accent dark:text-night-accent' : 'text-warning'">
                 <CheckCircle2 v-if="chatTest.ok" :size="14" />
                 <AlertCircle v-else :size="14" />
-                <span>{{ chatTest.message?.trim() || '未知错误，请检查网络、代理或接口地址后重试' }}</span>
+                <span>{{ chatTest.message?.trim() || t('unknownErrorCheckYourNetworkProxyAnd') }}</span>
               </div>
             </div>
             <!-- 允许跳过：连通测试失败时给一个"确认无误强制继续"的出口 -->
             <label v-if="chatTest && !chatTest.ok"
               class="flex items-center gap-2 mt-1 cursor-pointer text-xs text-warning/90">
               <input v-model="skipChatCheck" type="checkbox" class="w-3.5 h-3.5 accent-warning" />
-              <span>校验未通过，但我确认配置无误，允许跳过并继续</span>
+              <span>{{ t('theTestFailedButIHaveChecked') }}</span>
             </label>
           </div>
 
           <!-- 第 4 步：向量服务 + 打标 -->
           <div v-else-if="step === 4" class="space-y-5">
             <div>
-              <h2 class="text-lg font-medium">选一个向量服务</h2>
+              <h2 class="text-lg font-medium">{{ t('chooseAnEmbeddingService') }}</h2>
               <p class="mt-1 text-sm text-ink-soft dark:text-night-text-soft">
-                用于把聊天记录转成向量。建议挑有免费额度的服务。
+                {{ t('convertsChatHistoryIntoVectorsConsiderA') }}
               </p>
             </div>
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <div v-if="isChinese" class="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <button v-for="p in embPresets" :key="p.id"
                 class="text-left p-3 rounded-lg border text-sm transition-colors"
                 :class="currentEmbPresetId === p.id
@@ -1426,7 +1430,7 @@ onMounted(async () => {
             </div>
             <div class="space-y-3 pt-2">
               <label class="block">
-                <span class="text-sm">接口地址</span>
+                <span class="text-sm">{{ t('apiURL') }}</span>
                 <input v-model="form.EMBEDDING_API_URL"
                   class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                          border border-ink/10 dark:border-night-text/10 outline-none
@@ -1434,29 +1438,29 @@ onMounted(async () => {
               </label>
               <label class="block">
                 <div class="flex items-baseline justify-between">
-                  <span class="text-sm">密钥</span>
+                  <span class="text-sm">{{ t('apiKey') }}</span>
                   <a v-if="currentEmbPresetApplyUrl" :href="currentEmbPresetApplyUrl"
                     target="_blank" rel="noopener"
                     class="text-xs text-accent dark:text-night-accent hover:underline inline-flex items-center gap-1">
-                    去申请密钥<ExternalLink :size="11" />
+                    {{ t('getAnAPIKey') }}<ExternalLink :size="11" />
                   </a>
                 </div>
                 <input v-model="form.EMBEDDING_API_KEY" type="password"
-                  :placeholder="hasConfigured('EMBEDDING_API_KEY') ? '已配置，留空保持不变' : ''"
+                  :placeholder="hasConfigured('EMBEDDING_API_KEY') ? t('alreadyConfiguredLeaveBlankToKeepIt') : ''"
                   class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                          border border-ink/10 dark:border-night-text/10 outline-none
                          focus:ring-2 focus:ring-accent-soft font-mono text-sm" />
               </label>
               <div class="grid grid-cols-3 gap-3">
                 <label class="block col-span-2">
-                  <span class="text-sm">模型名</span>
+                  <span class="text-sm">{{ t('modelName') }}</span>
                   <input v-model="form.EMBEDDING_MODEL"
                     class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                            border border-ink/10 dark:border-night-text/10 outline-none
                            focus:ring-2 focus:ring-accent-soft font-mono text-sm" />
                 </label>
                 <label class="block">
-                  <span class="text-sm">向量维度</span>
+                  <span class="text-sm">{{ t('vectorDimensions') }}</span>
                   <input v-model.number="form.EMBEDDING_DIM" type="number"
                     class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                            border border-ink/10 dark:border-night-text/10 outline-none
@@ -1474,19 +1478,19 @@ onMounted(async () => {
                 @click="testEmbedding">
                 <Loader2 v-if="embTesting" :size="14" class="animate-spin" />
                 <RefreshCw v-else :size="14" />
-                <span>{{ embTesting ? '测试中…' : '测试连通' }}</span>
+                <span>{{ embTesting ? t('testing') : t('testConnection') }}</span>
               </button>
               <div v-if="embTest" class="text-sm flex items-center gap-1.5"
                 :class="embTest.ok ? 'text-accent dark:text-night-accent' : 'text-warning'">
                 <CheckCircle2 v-if="embTest.ok" :size="14" />
                 <AlertCircle v-else :size="14" />
-                <span>{{ embTest.message?.trim() || '未知错误，请检查网络、代理或接口地址后重试' }}</span>
+                <span>{{ embTest.message?.trim() || t('unknownErrorCheckYourNetworkProxyAnd') }}</span>
               </div>
               <button v-if="embTest && !embTest.ok && embTest.extra?.actual_dim"
                 class="text-xs px-3 py-1 rounded-full border border-accent/40 text-accent
                        dark:text-night-accent hover:bg-accent/10"
                 @click="acceptActualDim">
-                使用实际维度 {{ embTest.extra.actual_dim }}
+                {{ t('useActualDimensions') }} {{ embTest.extra.actual_dim }}
               </button>
             </div>
 
@@ -1497,18 +1501,17 @@ onMounted(async () => {
                   class="mt-1 w-4 h-4 accent-accent dark:accent-night-accent" />
                 <div>
                   <div class="text-sm font-medium">
-                    启用语义打标
-                    <span class="text-xs text-accent dark:text-night-accent ml-1">（推荐）</span>
+                    {{ t('enableSemanticLabeling') }}
+                    <span class="text-xs text-accent dark:text-night-accent ml-1">{{ t('recommended') }}</span>
                   </div>
                   <div class="text-xs text-ink-soft dark:text-night-text-soft mt-0.5 leading-relaxed">
-                    让小模型给每条聊天打上情绪、话题、重要程度标签，显著提升 AI 找回忆的精准度。
-                    首次导入会多花一些时间。建议用智谱 GLM-4-Flash（免费额度）。
+                    {{ t('aSmallModelLabelsEachMessageWith') }}
                   </div>
                 </div>
               </label>
               <div v-if="form.LABELING_ENABLED" class="ml-7 space-y-3">
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <button v-for="p in labelPresets" :key="p.id"
+                <div v-if="isChinese" class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <button v-for="p in labelPresets" :key="p.id"
                     class="text-left p-3 rounded-lg border text-xs transition-colors"
                     :class="currentLabelPresetId === p.id
                       ? 'border-accent bg-accent/10 dark:border-night-accent dark:bg-night-accent/10'
@@ -1519,7 +1522,7 @@ onMounted(async () => {
                   </button>
                 </div>
                 <label class="block">
-                  <span class="text-sm">接口地址</span>
+                  <span class="text-sm">{{ t('apiURL') }}</span>
                   <input v-model="form.LABEL_API_URL"
                     class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                            border border-ink/10 dark:border-night-text/10 outline-none
@@ -1527,28 +1530,28 @@ onMounted(async () => {
                 </label>
                 <label class="block">
                   <div class="flex items-baseline justify-between">
-                    <span class="text-sm">密钥</span>
+                    <span class="text-sm">{{ t('apiKey') }}</span>
                     <a v-if="currentLabelPresetApplyUrl" :href="currentLabelPresetApplyUrl"
                       target="_blank" rel="noopener"
                       class="text-xs text-accent dark:text-night-accent hover:underline inline-flex items-center gap-1">
-                      去申请密钥<ExternalLink :size="11" />
+                      {{ t('getAnAPIKey') }}<ExternalLink :size="11" />
                     </a>
                   </div>
                   <input v-model="form.LABEL_API_KEY" type="password"
-                    :placeholder="hasConfigured('LABEL_API_KEY') ? '已配置，留空保持不变' : ''"
+                    :placeholder="hasConfigured('LABEL_API_KEY') ? t('alreadyConfiguredLeaveBlankToKeepIt') : ''"
                     class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                            border border-ink/10 dark:border-night-text/10 outline-none
                            focus:ring-2 focus:ring-accent-soft font-mono text-sm" />
                 </label>
                 <label class="block">
-                  <span class="text-sm">模型名</span>
+                  <span class="text-sm">{{ t('modelName') }}</span>
                   <input v-model="form.LABEL_MODEL"
                     class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                            border border-ink/10 dark:border-night-text/10 outline-none
                            focus:ring-2 focus:ring-accent-soft font-mono text-sm" />
                 </label>
                 <label class="block">
-                  <span class="text-sm">打标并发数</span>
+                  <span class="text-sm">{{ t('labelingConcurrency') }}</span>
                   <div class="mt-1 flex items-center gap-3">
                     <input v-model.number="form.LABEL_MAX_CONCURRENCY"
                       type="number" min="1" max="50"
@@ -1556,8 +1559,7 @@ onMounted(async () => {
                              border border-ink/10 dark:border-night-text/10 outline-none
                              focus:ring-2 focus:ring-accent-soft font-mono text-sm text-center" />
                     <span class="text-xs text-ink-soft dark:text-night-text-soft leading-snug">
-                      智谱 GLM-4-Flash 免费账号上限 20，默认 19 留 1 余量。
-                      其它服务按各自账号上限设置；遇到限流降一两档。
+                      {{ t('theFreeGLM4FlashLimitIs') }}
                     </span>
                   </div>
                 </label>
@@ -1570,20 +1572,20 @@ onMounted(async () => {
                     @click="testLabel">
                     <Loader2 v-if="labelTesting" :size="12" class="animate-spin" />
                     <RefreshCw v-else :size="12" />
-                    <span>{{ labelTesting ? '测试中…' : '测试打标服务' }}</span>
+                    <span>{{ labelTesting ? t('testing') : t('testLabelingService') }}</span>
                   </button>
                   <div v-if="labelTest" class="text-xs flex items-center gap-1"
                     :class="labelTest.ok ? 'text-accent dark:text-night-accent' : 'text-warning'">
                     <CheckCircle2 v-if="labelTest.ok" :size="12" />
                     <AlertCircle v-else :size="12" />
-                    <span>{{ labelTest.message?.trim() || '未知错误，请检查网络、代理或接口地址后重试' }}</span>
+                    <span>{{ labelTest.message?.trim() || t('unknownErrorCheckYourNetworkProxyAnd') }}</span>
                   </div>
                 </div>
                 <!-- 打标服务独立的跳过开关；仅在启用打标且校验失败时出现 -->
                 <label v-if="form.LABELING_ENABLED && labelTest && !labelTest.ok"
                   class="flex items-center gap-2 mt-1 cursor-pointer text-xs text-warning/90">
                   <input v-model="skipLabelCheck" type="checkbox" class="w-3.5 h-3.5 accent-warning" />
-                  <span>打标服务校验未通过，但我确认配置无误，允许跳过并继续</span>
+                  <span>{{ t('theLabelingTestFailedButIHave') }}</span>
                 </label>
               </div>
             </div>
@@ -1591,16 +1593,16 @@ onMounted(async () => {
             <label v-if="embTest && !embTest.ok"
               class="flex items-center gap-2 mt-1 cursor-pointer text-xs text-warning/90">
               <input v-model="skipEmbeddingCheck" type="checkbox" class="w-3.5 h-3.5 accent-warning" />
-              <span>向量服务校验未通过，但我确认配置无误，允许跳过并继续</span>
+              <span>{{ t('theEmbeddingTestFailedButIHave') }}</span>
             </label>
           </div>
 
           <!-- 第 5 步：可选功能 -->
           <div v-else-if="step === 5" class="space-y-5">
             <div>
-              <h2 class="text-lg font-medium">可选功能</h2>
+              <h2 class="text-lg font-medium">{{ t('optionalFeatures') }}</h2>
               <p class="mt-1 text-sm text-ink-soft dark:text-night-text-soft">
-                以下能力让对话更立体，可以全部跳过稍后再来。
+                {{ t('theseFeaturesAddContextToConversationsYou') }}
               </p>
             </div>
 
@@ -1609,19 +1611,16 @@ onMounted(async () => {
                         bg-accent/5 dark:bg-night-accent/10
                         border border-accent/20 dark:border-night-accent/25
                         text-ink-soft dark:text-night-text-soft">
-              <span class="font-medium text-ink dark:text-night-text">关于速度的重要建议：</span>
-              生活时间线、互动决策这些"幕后小功能"强烈建议复用打标模型（如 GLM-4-Flash）。
-              如果让它们复用主聊天模型，每轮对话都会用大模型跑多次决策，
-              返回速度会显著变慢。下面的卡片默认已经勾选了"复用打标模型"。
+              <span class="font-medium text-ink dark:text-night-text">{{ t('speedRecommendation') }}</span>
+              {{ t('reuseTheLabelingModelSuchAsGLM') }}
             </div>
 
             <!-- 生活时间线（必备，但可选复用方式） -->
             <div class="rounded-xl border border-ink/10 dark:border-night-text/10 p-4 space-y-3">
               <div>
-                <div class="text-sm font-medium">生活时间线</div>
+                <div class="text-sm font-medium">{{ t('lifeTimeline') }}</div>
                 <div class="text-xs text-ink-soft dark:text-night-text-soft mt-0.5 leading-relaxed">
-                  让 AI 拥有"作息感"：清晨醒来、工作、午休、晚上犯困……
-                  会以小模型周期性维护当前状态。
+                  {{ t('givesTheAIADailyRoutineWaking') }}
                 </div>
               </div>
               <div class="flex gap-2">
@@ -1632,7 +1631,7 @@ onMounted(async () => {
                     ? 'border-accent bg-accent/10 text-accent dark:border-night-accent dark:text-night-accent dark:bg-night-accent/10'
                     : 'border-ink/10 dark:border-night-text/10 hover:bg-paper dark:hover:bg-night-bg'"
                   @click="form.LIFE_REUSE_LABEL = true">
-                  复用打标模型（推荐）
+                  {{ t('reuseLabelingModelRecommended') }}
                 </button>
                 <button type="button"
                   class="flex-1 py-2 rounded-lg border text-sm transition-colors"
@@ -1640,39 +1639,39 @@ onMounted(async () => {
                     ? 'border-accent bg-accent/10 text-accent dark:border-night-accent dark:text-night-accent dark:bg-night-accent/10'
                     : 'border-ink/10 dark:border-night-text/10 hover:bg-paper dark:hover:bg-night-bg'"
                   @click="form.LIFE_REUSE_LABEL = false">
-                  自定义模型
+                  {{ t('customModel') }}
                 </button>
               </div>
               <div v-if="form.LIFE_REUSE_LABEL && form.LABELING_ENABLED"
                 class="text-xs text-ink-soft dark:text-night-text-soft px-1">
-                将使用 <code class="font-mono">{{ form.LABEL_MODEL || '打标模型' }}</code>
-                （来自上一步的打标配置）。
+                {{ t('willUse') }} <code class="font-mono">{{ form.LABEL_MODEL || t('labelingModel') }}</code>
+                {{ t('fromTheLabelingSettingsInThePrevious') }}
               </div>
               <div v-else-if="form.LIFE_REUSE_LABEL && !form.LABELING_ENABLED"
                 class="text-xs text-warning px-1">
-                你尚未启用打标，无法复用。请返回上一步启用，或下方切换为"自定义"。
+                {{ t('labelingIsDisabledSoItsModelCannot') }}
               </div>
               <div v-if="!form.LIFE_REUSE_LABEL || !form.LABELING_ENABLED" class="space-y-3">
                 <div class="text-xs text-ink-soft dark:text-night-text-soft px-1">
-                  全部留空时会 fallback 到主聊天模型（不推荐，慢）。
+                  {{ t('ifAllFieldsAreBlankTheMain') }}
                 </div>
                 <label class="block">
-                  <span class="text-sm">接口地址</span>
-                  <input v-model="form.LIFE_API_URL" placeholder="例如 https://open.bigmodel.cn/api/paas/v4"
+                  <span class="text-sm">{{ t('apiURL') }}</span>
+                  <input v-model="form.LIFE_API_URL" :placeholder="t('eGHttpsOpenBigmodelCnApi')"
                     class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                            border border-ink/10 dark:border-night-text/10 outline-none
                            focus:ring-2 focus:ring-accent-soft font-mono text-sm" />
                 </label>
                 <label class="block">
-                  <span class="text-sm">密钥</span>
+                  <span class="text-sm">{{ t('apiKey') }}</span>
                   <input v-model="form.LIFE_API_KEY" type="password"
                     class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                            border border-ink/10 dark:border-night-text/10 outline-none
                            focus:ring-2 focus:ring-accent-soft font-mono text-sm" />
                 </label>
                 <label class="block">
-                  <span class="text-sm">模型名</span>
-                  <input v-model="form.LIFE_MODEL" placeholder="例如 glm-4-flash"
+                  <span class="text-sm">{{ t('modelName') }}</span>
+                  <input v-model="form.LIFE_MODEL" :placeholder="t('eGGlm4Flash')"
                     class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                            border border-ink/10 dark:border-night-text/10 outline-none
                            focus:ring-2 focus:ring-accent-soft font-mono text-sm" />
@@ -1686,10 +1685,9 @@ onMounted(async () => {
                 <input v-model="form.RESPONSE_POLICY_MODEL_ENABLED" type="checkbox"
                   class="mt-1 w-4 h-4 accent-accent dark:accent-night-accent" />
                 <div class="flex-1">
-                  <div class="text-sm font-medium">互动决策小模型</div>
+                  <div class="text-sm font-medium">{{ t('interactionDecisionModel') }}</div>
                   <div class="text-xs text-ink-soft dark:text-night-text-soft mt-0.5 leading-relaxed">
-                    规则引擎会先判断本轮该用哪种语气（撒娇/接梗/认真/沉默…），
-                    开启此项会让小模型在规则之上做有界微调，让回复意图更贴合上下文。
+                    {{ t('theRuleEngineSelectsAResponseStyle') }}
                   </div>
                 </div>
               </label>
@@ -1702,7 +1700,7 @@ onMounted(async () => {
                       ? 'border-accent bg-accent/10 text-accent dark:border-night-accent dark:text-night-accent dark:bg-night-accent/10'
                       : 'border-ink/10 dark:border-night-text/10 hover:bg-paper dark:hover:bg-night-bg'"
                     @click="form.RESPONSE_POLICY_REUSE_LABEL = true">
-                    复用打标模型（推荐）
+                    {{ t('reuseLabelingModelRecommended') }}
                   </button>
                   <button type="button"
                     class="flex-1 py-2 rounded-lg border text-sm transition-colors"
@@ -1710,30 +1708,30 @@ onMounted(async () => {
                       ? 'border-accent bg-accent/10 text-accent dark:border-night-accent dark:text-night-accent dark:bg-night-accent/10'
                       : 'border-ink/10 dark:border-night-text/10 hover:bg-paper dark:hover:bg-night-bg'"
                     @click="form.RESPONSE_POLICY_REUSE_LABEL = false">
-                    自定义模型
+                    {{ t('customModel') }}
                   </button>
                 </div>
                 <div v-if="form.RESPONSE_POLICY_REUSE_LABEL && form.LABELING_ENABLED"
                   class="text-xs text-ink-soft dark:text-night-text-soft px-1">
-                  将使用 <code class="font-mono">{{ form.LABEL_MODEL || '打标模型' }}</code>。
+                  {{ t('willUse') }} <code class="font-mono">{{ form.LABEL_MODEL || t('labelingModel') }}</code>。
                 </div>
                 <div v-if="!form.RESPONSE_POLICY_REUSE_LABEL || !form.LABELING_ENABLED" class="space-y-3">
                   <label class="block">
-                    <span class="text-sm">接口地址</span>
+                    <span class="text-sm">{{ t('apiURL') }}</span>
                     <input v-model="form.RESPONSE_POLICY_API_URL"
                       class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                              border border-ink/10 dark:border-night-text/10 outline-none
                              focus:ring-2 focus:ring-accent-soft font-mono text-sm" />
                   </label>
                   <label class="block">
-                    <span class="text-sm">密钥</span>
+                    <span class="text-sm">{{ t('apiKey') }}</span>
                     <input v-model="form.RESPONSE_POLICY_API_KEY" type="password"
                       class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                              border border-ink/10 dark:border-night-text/10 outline-none
                              focus:ring-2 focus:ring-accent-soft font-mono text-sm" />
                   </label>
                   <label class="block">
-                    <span class="text-sm">模型名</span>
+                    <span class="text-sm">{{ t('modelName') }}</span>
                     <input v-model="form.RESPONSE_POLICY_MODEL"
                       class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                              border border-ink/10 dark:border-night-text/10 outline-none
@@ -1749,10 +1747,9 @@ onMounted(async () => {
                 <input v-model="form.VISION_ENABLED" type="checkbox"
                   class="mt-1 w-4 h-4 accent-accent dark:accent-night-accent" />
                 <div class="flex-1">
-                  <div class="text-sm font-medium">视觉理解</div>
+                  <div class="text-sm font-medium">{{ t('imageUnderstanding') }}</div>
                   <div class="text-xs text-ink-soft dark:text-night-text-soft mt-0.5 leading-relaxed">
-                    开启后可以向 AI 发图片。若主聊天 AI 已是多模态模型（如 GPT-4o / Gemini / Qwen-VL），
-                    勾选下面的"主模型支持视觉"即可；否则需要单独配一个视觉模型。
+                    {{ t('enablesImageMessagesIfTheMainChat') }}
                   </div>
                 </div>
               </label>
@@ -1760,27 +1757,27 @@ onMounted(async () => {
                 <label class="flex items-center gap-2 cursor-pointer">
                   <input v-model="form.CHAT_MODEL_SUPPORTS_VISION" type="checkbox"
                     class="w-4 h-4 accent-accent dark:accent-night-accent" />
-                  <span class="text-sm">主聊天 AI 已支持视觉（如 GPT-4o / Gemini / Qwen-VL）</span>
+                  <span class="text-sm">{{ t('theMainChatModelSupportsVisionE') }}</span>
                 </label>
                 <div v-if="!form.CHAT_MODEL_SUPPORTS_VISION" class="space-y-3">
                   <label class="block">
-                    <span class="text-sm">视觉模型接口地址</span>
+                    <span class="text-sm">{{ t('visionAPIURL') }}</span>
                     <input v-model="form.VISION_API_URL"
-                      placeholder="例如 https://dashscope.aliyuncs.com/compatible-mode/v1"
+                      :placeholder="t('eGHttpsDashscopeAliyuncsComCompatible')"
                       class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                              border border-ink/10 dark:border-night-text/10 outline-none
                              focus:ring-2 focus:ring-accent-soft font-mono text-sm" />
                   </label>
                   <label class="block">
-                    <span class="text-sm">密钥</span>
+                    <span class="text-sm">{{ t('apiKey') }}</span>
                     <input v-model="form.VISION_API_KEY" type="password"
                       class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                              border border-ink/10 dark:border-night-text/10 outline-none
                              focus:ring-2 focus:ring-accent-soft font-mono text-sm" />
                   </label>
                   <label class="block">
-                    <span class="text-sm">模型名</span>
-                    <input v-model="form.VISION_MODEL" placeholder="例如 qwen-vl-plus"
+                    <span class="text-sm">{{ t('modelName') }}</span>
+                    <input v-model="form.VISION_MODEL" :placeholder="t('eGQwenVlPlus')"
                       class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                              border border-ink/10 dark:border-night-text/10 outline-none
                              focus:ring-2 focus:ring-accent-soft font-mono text-sm" />
@@ -1795,10 +1792,9 @@ onMounted(async () => {
                 <input v-model="form.WEB_ACCESS_ENABLED" type="checkbox"
                   class="mt-1 w-4 h-4 accent-accent dark:accent-night-accent" />
                 <div class="flex-1">
-                  <div class="text-sm font-medium">联网搜索</div>
+                  <div class="text-sm font-medium">{{ t('webSearch') }}</div>
                   <div class="text-xs text-ink-soft dark:text-night-text-soft mt-0.5 leading-relaxed">
-                    用户明确要求"查一下/搜索/最新"时，后端会先去搜索引擎拿摘要再交给 AI。
-                    会把本轮查询发给搜索服务，普通聊天不联网。
+                    {{ t('whenYouExplicitlyRequestASearchOr') }}
                   </div>
                 </div>
               </label>
@@ -1809,33 +1805,33 @@ onMounted(async () => {
                     :class="form.WEB_SEARCH_PROVIDER === 'tavily'
                       ? 'border-accent bg-accent/10 text-accent dark:border-night-accent dark:text-night-accent dark:bg-night-accent/10'
                       : 'border-ink/10 dark:border-night-text/10 hover:bg-paper dark:hover:bg-night-bg'">
-                    Tavily（月度免费额度）
+                    {{ t('tavilyMonthlyFreeAllowance') }}
                   </button>
                   <button type="button" @click="() => { form.WEB_SEARCH_PROVIDER = 'searxng'; form.WEB_SEARCH_BASE_URL = '' }"
                     class="flex-1 py-2 rounded-lg border text-sm transition-colors"
                     :class="form.WEB_SEARCH_PROVIDER === 'searxng'
                       ? 'border-accent bg-accent/10 text-accent dark:border-night-accent dark:text-night-accent dark:bg-night-accent/10'
                       : 'border-ink/10 dark:border-night-text/10 hover:bg-paper dark:hover:bg-night-bg'">
-                    自建 SearXNG
+                    {{ t('selfHostedSearXNG') }}
                   </button>
                 </div>
                 <label class="block">
                   <div class="flex items-baseline justify-between">
-                    <span class="text-sm">接口地址</span>
+                    <span class="text-sm">{{ t('apiURL') }}</span>
                     <a v-if="form.WEB_SEARCH_PROVIDER === 'tavily'"
                       href="https://app.tavily.com/" target="_blank" rel="noopener"
                       class="text-xs text-accent dark:text-night-accent hover:underline inline-flex items-center gap-1">
-                      去申请密钥<ExternalLink :size="11" />
+                      {{ t('getAnAPIKey') }}<ExternalLink :size="11" />
                     </a>
                   </div>
                   <input v-model="form.WEB_SEARCH_BASE_URL"
-                    :placeholder="form.WEB_SEARCH_PROVIDER === 'tavily' ? 'https://api.tavily.com' : '你的 SearXNG 实例地址'"
+                    :placeholder="form.WEB_SEARCH_PROVIDER === 'tavily' ? 'https://api.tavily.com' : t('yourSearXNGInstanceURL')"
                     class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                            border border-ink/10 dark:border-night-text/10 outline-none
                            focus:ring-2 focus:ring-accent-soft font-mono text-sm" />
                 </label>
                 <label v-if="form.WEB_SEARCH_PROVIDER === 'tavily'" class="block">
-                  <span class="text-sm">Tavily 密钥</span>
+                  <span class="text-sm">{{ t('tavilyAPIKey') }}</span>
                   <input v-model="form.WEB_SEARCH_API_KEY" type="password" placeholder="tvly-..."
                     class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                            border border-ink/10 dark:border-night-text/10 outline-none
@@ -1844,7 +1840,7 @@ onMounted(async () => {
                 <label class="flex items-center gap-2 cursor-pointer">
                   <input v-model="form.WEB_FETCH_ENABLED" type="checkbox"
                     class="w-4 h-4 accent-accent dark:accent-night-accent" />
-                  <span class="text-sm">用户消息含链接时，自动读取网页正文</span>
+                  <span class="text-sm">{{ t('readWebpageContentAutomaticallyWhenAMessage') }}</span>
                 </label>
               </div>
             </div>
@@ -1853,10 +1849,9 @@ onMounted(async () => {
           <!-- 第 6 步：检索增强（可选） -->
           <div v-else-if="step === 6" class="space-y-5">
             <div>
-              <h2 class="text-lg font-medium">检索增强（可选）</h2>
+              <h2 class="text-lg font-medium">{{ t('retrievalEnhancementsOptional') }}</h2>
               <p class="mt-1 text-sm text-ink-soft dark:text-night-text-soft leading-relaxed">
-                让 AI 在调聊天模型之前，先精准找到"相关的历史聊天片段"做参考。两项都可单独开关，
-                也都可以跳过这一步（用默认 RRF 检索）。配置不齐时后端会自动降级，不会让聊天炸掉。
+                {{ t('findsRelevantHistoricalMessagesBeforeGeneratingA') }}
               </p>
             </div>
 
@@ -1866,10 +1861,9 @@ onMounted(async () => {
                 <input v-model="form.QUERY_REWRITE_ENABLED" type="checkbox"
                   class="mt-1 w-4 h-4 accent-accent dark:accent-night-accent" />
                 <div class="flex-1">
-                  <div class="text-sm font-medium">Query 改写</div>
+                  <div class="text-sm font-medium">{{ t('queryRewriting') }}</div>
                   <div class="text-xs text-ink-soft dark:text-night-text-soft mt-0.5 leading-relaxed">
-                    用户输入"在吗 / 想你了 / 好累"这类短句时，让小模型先改写成 1-3 个检索友好的查询。
-                    模型直接复用打标 / 互动决策 / 生活时间线模型，无需额外配置。
+                    {{ t('rewritesShortMessagesSuchAsAreYou') }}
                   </div>
                 </div>
               </label>
@@ -1881,16 +1875,15 @@ onMounted(async () => {
                 <input v-model="form.CROSS_RERANK_ENABLED" type="checkbox"
                   class="mt-1 w-4 h-4 accent-accent dark:accent-night-accent" />
                 <div class="flex-1">
-                  <div class="text-sm font-medium">Cross-encoder 粗排（更精准的召回）</div>
+                  <div class="text-sm font-medium">{{ t('crossEncoderRerankingMorePreciseRetrieval') }}</div>
                   <div class="text-xs text-ink-soft dark:text-night-text-soft mt-0.5 leading-relaxed">
-                    专用 reranker 模型，在 LLM 精排之前先按"相关性"砍掉一半噪声候选。
-                    跟上面的 LLM 精排是<b>互补</b>不是替换：两个都开 = 两阶段质量最高。
+                    {{ t('aDedicatedRerankerRemovesLessRelevantCandidates') }}<b>{{ t('complementary') }}</b>{{ t('enablingBothCombinesTheirBenefits') }}
                   </div>
                 </div>
               </label>
               <div v-if="form.CROSS_RERANK_ENABLED" class="ml-7 space-y-3">
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <button v-for="p in crossRerankerPresets" :key="p.id" type="button"
+                <div v-if="isChinese" class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <button v-for="p in crossRerankerPresets" :key="p.id" type="button"
                     @click="applyCrossRerankerPreset(p)"
                     :class="['text-left px-3 py-2 rounded-lg border text-xs',
                              form.CROSS_RERANK_API_URL === p.base_url
@@ -1902,29 +1895,29 @@ onMounted(async () => {
                 </div>
 
                 <div class="text-xs text-ink-soft dark:text-night-text-soft">
-                  当前协议：<span class="font-mono">{{ form.CROSS_RERANK_PROTOCOL }}</span>
-                  <span v-if="form.CROSS_RERANK_PROTOCOL === 'dashscope'">（阿里 DashScope text-rerank 原生 API）</span>
-                  <span v-else>（Jina / Cohere / 讯飞 / 自建 bge-reranker 兼容协议）</span>
+                  {{ t('currentProtocol') }}<span class="font-mono">{{ form.CROSS_RERANK_PROTOCOL }}</span>
+                  <span v-if="form.CROSS_RERANK_PROTOCOL === 'dashscope'">{{ t('nativeAlibabaDashScopeTextRerankAPI') }}</span>
+                  <span v-else>{{ t('jinaCohereIFlytekSelfHostedBgeReranker') }}</span>
                 </div>
 
                 <label class="block">
-                  <span class="text-sm">接口地址</span>
+                  <span class="text-sm">{{ t('apiURL') }}</span>
                   <input v-model="form.CROSS_RERANK_API_URL"
                     class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                            border border-ink/10 dark:border-night-text/10 outline-none
                            focus:ring-2 focus:ring-accent-soft font-mono text-sm" />
                 </label>
                 <label class="block">
-                  <span class="text-sm">密钥</span>
+                  <span class="text-sm">{{ t('apiKey') }}</span>
                   <input v-model="form.CROSS_RERANK_API_KEY" type="password"
                     class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                            border border-ink/10 dark:border-night-text/10 outline-none
                            focus:ring-2 focus:ring-accent-soft font-mono text-sm" />
                 </label>
                 <label class="block">
-                  <span class="text-sm">模型名</span>
+                  <span class="text-sm">{{ t('modelName') }}</span>
                   <input v-model="form.CROSS_RERANK_MODEL"
-                    placeholder="例如 qwen3-rerank / xop3qwen8breranker"
+                    :placeholder="t('eGQwen3RerankXop3qwen8breranker')"
                     class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                            border border-ink/10 dark:border-night-text/10 outline-none
                            focus:ring-2 focus:ring-accent-soft font-mono text-sm" />
@@ -1936,10 +1929,9 @@ onMounted(async () => {
           <!-- 第 7 步：导入 -->
           <div v-else-if="step === 7" class="space-y-5">
             <div>
-              <h2 class="text-lg font-medium">导入聊天记录</h2>
+              <h2 class="text-lg font-medium">{{ t('importChatHistory') }}</h2>
               <p class="mt-1 text-sm text-ink-soft dark:text-night-text-soft">
-                确认下方文件无误后开始导入。如果暂时不想导入也可以跳过，稍后从设置页再来。
-                若需要增减文件，请返回步骤 1 重新识别身份。
+                {{ t('checkTheFilesBelowBeforeImportingYou') }}
               </p>
             </div>
 
@@ -1948,17 +1940,17 @@ onMounted(async () => {
               :class="{ 'opacity-60 pointer-events-none': chunkingStrategyLocked }">
               <div>
                 <div class="text-sm font-medium flex items-center gap-2">
-                  切分策略
+                  {{ t('chunkingStrategy') }}
                   <span v-if="chunkingStrategyLocked"
                     class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs
                            bg-warning/15 border border-warning/30 text-warning">
-                    🔒 导入进行中，无法修改
+                    {{ t('importInProgressChangesAreLocked') }}
                   </span>
                 </div>
                 <div class="text-xs text-ink-soft dark:text-night-text-soft mt-0.5 leading-relaxed">
-                  决定聊天记录怎么切成片段入库。仅影响<b>下一次导入</b>，对已入库的 chunks 无效。
+                  {{ t('controlsHowChatHistoryIsSplitInto') }}<b>{{ t('nextImport') }}</b>{{ t('notChunksAlreadyStored') }}
                   <span v-if="chunkingStrategyLocked" class="text-warning">
-                    导入开始时设置已写入 .env，更改对本次任务不会生效；等待导入结束后可重新调整。
+                    {{ t('settingsWereSavedToEnvWhenImport') }}
                   </span>
                 </div>
               </div>
@@ -1969,9 +1961,9 @@ onMounted(async () => {
                            form.CHUNKING_STRATEGY === 'fixed'
                              ? 'border-accent bg-accent/5 dark:border-night-accent dark:bg-night-accent/10'
                              : 'border-ink/10 dark:border-night-text/10 hover:border-ink/30']">
-                  <div class="font-medium">固定窗口（默认）</div>
+                  <div class="font-medium">{{ t('fixedWindowsDefault') }}</div>
                   <div class="text-ink-soft dark:text-night-text-soft mt-0.5">
-                    每 12 条消息一窗，3 条重叠。简单稳定。
+                    {{ t('12MessagesPerWindowWith3Overlapping') }}
                   </div>
                 </button>
                 <button type="button" :disabled="chunkingStrategyLocked"
@@ -1980,9 +1972,9 @@ onMounted(async () => {
                            form.CHUNKING_STRATEGY === 'adaptive' && !form.ADAPTIVE_CHUNK_MODEL_ENABLED
                              ? 'border-accent bg-accent/5 dark:border-night-accent dark:bg-night-accent/10'
                              : 'border-ink/10 dark:border-night-text/10 hover:border-ink/30']">
-                  <div class="font-medium">启发式 adaptive</div>
+                  <div class="font-medium">{{ t('heuristicAdaptive') }}</div>
                   <div class="text-ink-soft dark:text-night-text-soft mt-0.5">
-                    按字符预算 + 时间间隔 + 话题转折词切分。不调模型，免费。
+                    {{ t('usesCharacterBudgetTimeGapsAndTopic') }}
                   </div>
                 </button>
                 <button type="button" :disabled="chunkingStrategyLocked"
@@ -1991,9 +1983,9 @@ onMounted(async () => {
                            form.CHUNKING_STRATEGY === 'adaptive' && form.ADAPTIVE_CHUNK_MODEL_ENABLED
                              ? 'border-accent bg-accent/5 dark:border-night-accent dark:bg-night-accent/10'
                              : 'border-ink/10 dark:border-night-text/10 hover:border-ink/30']">
-                  <div class="font-medium">模型 adaptive（最准）</div>
+                  <div class="font-medium">{{ t('modelAdaptiveMostPrecise') }}</div>
                   <div class="text-ink-soft dark:text-night-text-soft mt-0.5">
-                    小模型返回话题边界，启发式做兜底。导入会多花一些 token。
+                    {{ t('aSmallModelFindsTopicBoundariesWith') }}
                   </div>
                 </button>
               </div>
@@ -2001,8 +1993,8 @@ onMounted(async () => {
               <!-- 仅模型 adaptive 展开三件套配置；启发式 / fixed 不需要 -->
               <div v-if="form.CHUNKING_STRATEGY === 'adaptive' && form.ADAPTIVE_CHUNK_MODEL_ENABLED"
                 class="ml-1 space-y-3 pt-2 border-t border-ink/5 dark:border-night-text/5">
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <button v-for="p in rerankerPresets" :key="p.id" type="button"
+                <div v-if="isChinese" class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <button v-for="p in rerankerPresets" :key="p.id" type="button"
                     :disabled="chunkingStrategyLocked"
                     @click="applyAdaptiveChunkPreset(p)"
                     :class="['text-left px-3 py-2 rounded-lg border text-xs disabled:cursor-not-allowed',
@@ -2016,7 +2008,7 @@ onMounted(async () => {
                 </div>
                 <div v-if="!form.ADAPTIVE_CHUNK_REUSE_LABEL" class="space-y-3">
                   <label class="block">
-                    <span class="text-sm">接口地址</span>
+                    <span class="text-sm">{{ t('apiURL') }}</span>
                     <input v-model="form.ADAPTIVE_CHUNK_API_URL" :disabled="chunkingStrategyLocked"
                       class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                              border border-ink/10 dark:border-night-text/10 outline-none
@@ -2024,7 +2016,7 @@ onMounted(async () => {
                              disabled:cursor-not-allowed" />
                   </label>
                   <label class="block">
-                    <span class="text-sm">密钥</span>
+                    <span class="text-sm">{{ t('apiKey') }}</span>
                     <input v-model="form.ADAPTIVE_CHUNK_API_KEY" type="password"
                       :disabled="chunkingStrategyLocked"
                       class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
@@ -2033,7 +2025,7 @@ onMounted(async () => {
                              disabled:cursor-not-allowed" />
                   </label>
                   <label class="block">
-                    <span class="text-sm">模型名</span>
+                    <span class="text-sm">{{ t('modelName') }}</span>
                     <input v-model="form.ADAPTIVE_CHUNK_MODEL" :disabled="chunkingStrategyLocked"
                       class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                              border border-ink/10 dark:border-night-text/10 outline-none
@@ -2045,14 +2037,14 @@ onMounted(async () => {
                 <!-- 会话级并发：影响切分速度的关键。复用打标时留 0 跟随 LABEL_MAX_CONCURRENCY -->
                 <label class="block">
                   <span class="text-sm flex items-center gap-2">
-                    会话级并发上限
+                    {{ t('sessionConcurrencyLimit') }}
                     <span v-if="form.ADAPTIVE_CHUNK_REUSE_LABEL && form.LABELING_ENABLED"
                       class="text-xs text-ink-soft dark:text-night-text-soft">
-                      （留 0 跟随打标并发：{{ form.LABEL_MAX_CONCURRENCY }}）
+                      {{ t('0FollowsLabelingConcurrency') }}{{ form.LABEL_MAX_CONCURRENCY }}）
                     </span>
                     <span v-else
                       class="text-xs text-ink-soft dark:text-night-text-soft">
-                      （留 0 用默认 4）
+                      {{ t('0UsesTheDefaultOf4') }}
                     </span>
                   </span>
                   <input v-model.number="form.ADAPTIVE_CHUNK_MAX_CONCURRENCY"
@@ -2063,8 +2055,7 @@ onMounted(async () => {
                            focus:ring-2 focus:ring-accent-soft font-mono text-sm
                            disabled:cursor-not-allowed" />
                   <span class="text-xs text-ink-soft dark:text-night-text-soft mt-1 block leading-relaxed">
-                    34 个会话 × 串行 3 秒/次 ≈ 100 秒；调到 10 并发 ≈ 10 秒。
-                    超过上游服务的并发额度会触发 429，按账号实际上限调（GLM-4-Flash 免费账号 ~19）。
+                    {{ t('forExample34SessionsAt3Seconds') }}
                   </span>
                 </label>
               </div>
@@ -2090,8 +2081,8 @@ onMounted(async () => {
                     <div class="text-sm truncate">{{ f.name }}</div>
                     <div class="text-xs text-ink-soft dark:text-night-text-soft">
                       {{ (f.size / 1024 / 1024).toFixed(2) }} MB ·
-                      {{ f.format_label || f.format || '未识别' }}
-                      · {{ f.total_messages || 0 }} 条消息
+                      {{ f.format_label || f.format || t('unrecognized') }}
+                      · {{ f.total_messages || 0 }} {{ t('messages141') }}
                     </div>
                   </div>
                 </div>
@@ -2103,7 +2094,7 @@ onMounted(async () => {
                   :disabled="importStarting || !!importTask"
                   @click="startImport">
                   <Loader2 v-if="importStarting" :size="14" class="animate-spin" />
-                  <span>{{ importStarting ? '启动中…' : `开始导入（${uploadedFiles.length} 个文件）` }}</span>
+                  <span>{{ importStarting ? t('starting') : `开始导入（${uploadedFiles.length} 个文件）` }}</span>
                 </button>
               </div>
 
@@ -2111,9 +2102,9 @@ onMounted(async () => {
               <div v-else class="rounded-xl p-6 text-center bg-paper dark:bg-night-bg
                                  border border-dashed border-ink/15 dark:border-night-text/15">
                 <FileText :size="22" class="mx-auto text-ink-soft dark:text-night-text-soft" />
-                <p class="mt-2 text-sm">没有要导入的文件</p>
+                <p class="mt-2 text-sm">{{ t('noFilesToImport') }}</p>
                 <p class="mt-1 text-xs text-ink-soft dark:text-night-text-soft">
-                  返回步骤 1 添加聊天文件，或直接跳过这一步
+                  {{ t('goBackToStep1ToAdd') }}
                 </p>
               </div>
             </template>
@@ -2125,10 +2116,8 @@ onMounted(async () => {
                        bg-accent/5 dark:bg-night-accent/10
                        border border-accent/20 dark:border-night-accent/25
                        text-ink-soft dark:text-night-text-soft">
-                较多的聊天记录会让处理变得比较漫长，请耐心等待。
-                每万条消息一般需要数分钟到十几分钟，取决于服务商响应速度和你的网络。
-                <strong class="text-ink dark:text-night-text">可以最小化网页继续做别的事</strong>，
-                后端会持续在后台跑；下次回来还能看到进度。
+                {{ t('largeHistoriesTakeTimeEach10000') }}
+                <strong class="text-ink dark:text-night-text">{{ t('youCanMinimizeThisPageAndDo') }}</strong>{{ t('importContinuesInTheBackendAndProgress') }}
               </div>
 
               <div class="rounded-xl p-4 bg-paper dark:bg-night-bg border border-ink/10 dark:border-night-text/10">
@@ -2145,7 +2134,7 @@ onMounted(async () => {
                   </span>
                 </div>
                 <div class="text-xs text-ink-soft dark:text-night-text-soft mb-2 pl-6">
-                  {{ importStageMain || '准备中…' }}
+                  {{ importStageMain || t('preparing') }}
                 </div>
                 <div class="h-1.5 rounded-full bg-ink/5 dark:bg-night-text/10 overflow-hidden">
                   <div class="h-full bg-accent dark:bg-night-accent transition-all duration-500"
@@ -2159,7 +2148,7 @@ onMounted(async () => {
               <button v-if="!['done','failed','cancelled'].includes(importTask.status)"
                 class="text-xs text-ink-soft dark:text-night-text-soft hover:text-warning"
                 @click="cancelImport">
-                取消导入（已处理的记录会保留）
+                {{ t('cancelImportProcessedRecordsAreKept') }}
               </button>
               <!-- 失败/取消后允许用户重新开始（chunk_id 去重会自动跳过已入库部分） -->
               <button v-if="['failed', 'cancelled'].includes(importTask.status)"
@@ -2169,7 +2158,7 @@ onMounted(async () => {
                        hover:bg-accent/10 disabled:opacity-40"
                 @click="startImport">
                 <Loader2 v-if="importStarting" :size="14" class="animate-spin inline" />
-                {{ importStarting ? '启动中…' : '重新开始导入（自动跳过已入库部分）' }}
+                {{ importStarting ? t('starting') : t('restartImportRecordsAlreadyStoredAreSkipped') }}
               </button>
             </div>
 
@@ -2178,29 +2167,26 @@ onMounted(async () => {
           <!-- 第 8 步：设置访问密码 -->
           <div v-else-if="step === 8" class="space-y-5">
             <div>
-              <h2 class="text-lg font-medium">设置访问密码（XUWEN_API_KEY）</h2>
+              <h2 class="text-lg font-medium">{{ t('setAccessPasswordXUWENAPIKEY') }}</h2>
               <p class="mt-1 text-sm text-ink-soft dark:text-night-text-soft">
-                这是<strong class="text-ink dark:text-night-text">本地后端服务的访问密码</strong>，
-                对应 <code class="font-mono text-xs">.env</code> 里的
-                <code class="font-mono text-xs">XUWEN_API_KEY</code> 字段。
-                聊天前端、OpenAI 兼容客户端访问后端 API 时都要带这个密码做 Bearer token。
-                建议直接生成长随机串，避免别人借用你的 AI 额度。
+                {{ t('thisIsThe') }}<strong class="text-ink dark:text-night-text">{{ t('accessPasswordForYourLocalBackend') }}</strong>{{ t('storedIn') }} <code class="font-mono text-xs">.env</code> {{ t('as') }}
+                <code class="font-mono text-xs">XUWEN_API_KEY</code> {{ t('chatClientsAndOpenAICompatibleClientsMust') }}
               </p>
             </div>
             <label class="block">
               <span class="text-sm">XUWEN_API_KEY</span>
               <div class="mt-1 flex gap-2">
                 <input v-model="form.XUWEN_API_KEY" type="text"
-                  :placeholder="hasConfigured('XUWEN_API_KEY') ? '已配置，留空保持不变' : '点右侧刷新按钮生成随机密码'"
+                  :placeholder="hasConfigured('XUWEN_API_KEY') ? t('alreadyConfiguredLeaveBlankToKeepIt') : t('useTheRefreshButtonToGenerateA')"
                   class="flex-1 px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                          border border-ink/10 dark:border-night-text/10 outline-none
                          focus:ring-2 focus:ring-accent-soft font-mono text-sm" />
-                <button title="生成随机密码" @click="genApiKey"
+                <button :title="t('generateRandomPassword')" @click="genApiKey"
                   class="px-3 py-2 rounded-lg border border-ink/10 dark:border-night-text/10
                          text-sm hover:bg-paper-shade dark:hover:bg-night-bg-soft">
                   <RefreshCw :size="14" />
                 </button>
-                <button title="复制" @click="copyApiKey"
+                <button :title="t('copy')" @click="copyApiKey"
                   class="px-3 py-2 rounded-lg border border-ink/10 dark:border-night-text/10
                          text-sm hover:bg-paper-shade dark:hover:bg-night-bg-soft">
                   <Copy :size="14" />
@@ -2212,8 +2198,8 @@ onMounted(async () => {
             </p>
             <div class="rounded-lg p-3 bg-paper dark:bg-night-bg border border-ink/5 dark:border-night-text/10
                         text-xs text-ink-soft dark:text-night-text-soft leading-relaxed">
-              保存后会写入 backend/.env，原文件自动备份。
-              <strong class="text-ink dark:text-night-text">配置变更需要重启后端进程才会生效</strong>。
+              {{ t('savingWritesChangesToBackendEnvAnd') }}
+              <strong class="text-ink dark:text-night-text">{{ t('restartTheBackendToApplyConfigurationChanges') }}</strong>。
             </div>
           </div>
         </section>
@@ -2223,19 +2209,19 @@ onMounted(async () => {
                    text-ink-soft dark:text-night-text-soft hover:text-ink dark:hover:text-night-text
                    disabled:opacity-30"
             :disabled="step <= 1" @click="prev">
-            <ArrowLeft :size="14" /> 上一步
+            <ArrowLeft :size="14" /> {{ t('previous') }}
           </button>
           <button v-if="step === 7 && (!importTask || ['failed', 'cancelled'].includes(importTask.status))"
             class="text-xs text-ink-soft dark:text-night-text-soft hover:text-ink dark:hover:text-night-text"
             @click="next">
-            暂时跳过，稍后导入
+            {{ t('skipForNowImportLater') }}
           </button>
           <button v-if="step < totalSteps"
             class="inline-flex items-center gap-1.5 px-5 py-2 rounded-full text-sm
                    bg-accent text-paper-soft hover:bg-accent/90
                    disabled:opacity-40 disabled:cursor-not-allowed"
             :disabled="!canNext" @click="next">
-            下一步 <ArrowRight :size="14" />
+            {{ t('next') }} <ArrowRight :size="14" />
           </button>
           <button v-else
             class="inline-flex items-center gap-1.5 px-5 py-2 rounded-full text-sm
@@ -2244,7 +2230,7 @@ onMounted(async () => {
             :disabled="!hasValueOrConfigured('XUWEN_API_KEY') || saving"
             @click="finishWizard">
             <Loader2 v-if="saving" :size="14" class="animate-spin" />
-            <span>{{ saving ? '保存中…' : '保存并完成' }}</span>
+            <span>{{ saving ? t('saving') : t('saveAndFinish') }}</span>
           </button>
         </nav>
       </template>

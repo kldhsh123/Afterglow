@@ -21,8 +21,10 @@ import {
 } from 'lucide-vue-next'
 import { fetchTimeline } from '@/api/analysis'
 import type { AnalysisEventType, TimelineEvent, TimelinePhase, TimelineReport } from '@/types/api'
+import { useLocale } from '@/composables/useLocale'
 
 const router = useRouter()
+const { t, locale } = useLocale()
 const report = ref<TimelineReport | null>(null)
 const loading = ref(true)
 const error = ref('')
@@ -41,17 +43,17 @@ const iconByType = {
   other: Circle,
 }
 
-const labelByType: Record<AnalysisEventType, string> = {
-  milestone: '里程碑',
-  conflict: '冲突',
-  reconciliation: '和好',
-  intimacy: '亲密时刻',
-  shared_activity: '共同经历',
-  emotional_shift: '情感转折',
-  separation: '疏远与离别',
-  daily: '日常高光',
-  other: '其他',
-}
+const labelByType = computed<Record<AnalysisEventType, string>>(() => ({
+  milestone: t('timeline.types.milestone'),
+  conflict: t('timeline.types.conflict'),
+  reconciliation: t('timeline.types.reconciliation'),
+  intimacy: t('timeline.types.intimacy'),
+  shared_activity: t('timeline.types.shared_activity'),
+  emotional_shift: t('timeline.types.emotional_shift'),
+  separation: t('timeline.types.separation'),
+  daily: t('timeline.types.daily'),
+  other: t('timeline.types.other'),
+}))
 
 const phases = computed(() => {
   if (!report.value) return []
@@ -68,7 +70,7 @@ const phases = computed(() => {
   if (unassigned.length) {
     groups.push({
       phase: {
-        title: '其他节点',
+        title: t('timeline.other'),
         start_date: unassigned[0].date,
         end_date: unassigned[unassigned.length - 1].date,
         summary: '',
@@ -102,7 +104,7 @@ function formatDate(value: string) {
   const parsed = new Date(`${value}T00:00:00`)
   return Number.isNaN(parsed.getTime())
     ? value
-    : new Intl.DateTimeFormat('zh-CN', {
+    : new Intl.DateTimeFormat(locale.value, {
         year: 'numeric',
         month: 'short',
         day: 'numeric',
@@ -119,22 +121,22 @@ onMounted(load)
         <div class="flex items-center gap-2 min-w-0">
           <button
             class="p-2 -ml-2 rounded-full text-ink-soft hover:text-ink dark:text-night-text-soft dark:hover:text-night-text"
-            aria-label="返回设置"
+            :aria-label="t('timeline.back')"
             @click="router.push('/settings')"
           >
             <ChevronLeft :size="20" />
           </button>
           <div>
-            <h1 class="text-xl font-medium">关系时间线</h1>
+            <h1 class="text-xl font-medium">{{ t('timeline.title') }}</h1>
             <p v-if="report" class="text-xs mt-1 text-ink-soft dark:text-night-text-soft">
-              {{ report.source_message_count.toLocaleString() }} 条消息 · {{ report.events.length }} 个节点
+              {{ t('timeline.messageCount', { messages: report.source_message_count.toLocaleString(locale), events: report.events.length }) }}
             </p>
           </div>
         </div>
         <button
           class="p-2 rounded-full text-ink-soft hover:text-ink dark:text-night-text-soft dark:hover:text-night-text"
-          title="刷新"
-          aria-label="刷新时间线"
+          :title="t('timeline.refresh')"
+          :aria-label="t('timeline.refreshLabel')"
           @click="load"
         >
           <RefreshCw :size="18" :class="{ 'animate-spin': loading }" />
@@ -142,11 +144,11 @@ onMounted(load)
       </header>
 
       <div v-if="loading" class="min-h-72 flex items-center justify-center text-ink-soft dark:text-night-text-soft">
-        <RefreshCw :size="20" class="animate-spin mr-2" /> 正在读取时间线
+        <RefreshCw :size="20" class="animate-spin mr-2" /> {{ t('timeline.loading') }}
       </div>
       <div v-else-if="error" class="min-h-72 flex flex-col items-center justify-center text-center">
         <CalendarDays :size="30" class="mb-3 text-ink-soft dark:text-night-text-soft" />
-        <p class="font-medium">时间线尚不可用</p>
+        <p class="font-medium">{{ t('timeline.unavailable') }}</p>
         <p class="text-sm mt-2 max-w-md text-ink-soft dark:text-night-text-soft">{{ error }}</p>
         <a
           :href="analysisGuideUrl"
@@ -154,19 +156,19 @@ onMounted(load)
           rel="noopener"
           class="mt-4 inline-flex items-center gap-1.5 text-sm text-accent dark:text-night-accent hover:underline"
         >
-          查看生成教程 <ExternalLink :size="14" />
+          {{ t('timeline.guide') }} <ExternalLink :size="14" />
         </a>
       </div>
       <div v-else-if="!report?.events.length" class="min-h-72 flex flex-col items-center justify-center text-center">
         <MessageCircle :size="30" class="mb-3 text-ink-soft dark:text-night-text-soft" />
-        <p>当前报告中没有足够明确的关系节点。</p>
+        <p>{{ t('timeline.noEvents') }}</p>
         <a
           :href="analysisGuideUrl"
           target="_blank"
           rel="noopener"
           class="mt-4 inline-flex items-center gap-1.5 text-sm text-accent dark:text-night-accent hover:underline"
         >
-          查看生成教程 <ExternalLink :size="14" />
+          {{ t('timeline.guide') }} <ExternalLink :size="14" />
         </a>
       </div>
 
@@ -175,7 +177,7 @@ onMounted(load)
           <div class="grid sm:grid-cols-[9rem_1fr] gap-3 sm:gap-8 mb-7">
             <p class="font-sans text-sm tabular-nums text-accent dark:text-night-accent">
               {{ group.phase.start_date }}<br class="hidden sm:block" />
-              <span v-if="group.phase.end_date !== group.phase.start_date">至 {{ group.phase.end_date }}</span>
+              <span v-if="group.phase.end_date !== group.phase.start_date">{{ t('timeline.to') }} {{ group.phase.end_date }}</span>
             </p>
             <div>
               <h2 class="text-lg font-medium">{{ group.phase.title }}</h2>
@@ -201,7 +203,7 @@ onMounted(load)
                   </div>
                   <div class="flex items-center gap-2 text-xs text-ink-soft dark:text-night-text-soft">
                     <span>{{ labelByType[event.type] }}</span>
-                    <span class="flex gap-0.5" :title="`重要度 ${event.importance}/5`">
+                    <span class="flex gap-0.5" :title="t('timeline.importance', { value: event.importance })">
                       <i
                         v-for="level in 5"
                         :key="level"
@@ -219,7 +221,7 @@ onMounted(load)
                   class="mt-3 inline-flex items-center gap-1 text-xs text-accent dark:text-night-accent"
                   @click="toggle(event.event_id)"
                 >
-                  {{ expanded.has(event.event_id) ? '收起原文' : `查看原文（${event.evidence.length}）` }}
+                  {{ expanded.has(event.event_id) ? t('timeline.collapse') : t('timeline.viewEvidence', { value: event.evidence.length }) }}
                   <ChevronUp v-if="expanded.has(event.event_id)" :size="14" />
                   <ChevronDown v-else :size="14" />
                 </button>
