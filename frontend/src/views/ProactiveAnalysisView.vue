@@ -29,7 +29,7 @@ const error = ref('')
 const visibleLimit = ref(80)
 const expanded = ref(new Set<string>())
 
-const weekdayLabels = computed(() => locale.value === 'zh-CN' ? ['周一', '周二', '周三', '周四', '周五', '周六', '周日'] : ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'])
+const weekdayLabels = computed(() => [t('remaining.mon'), t('remaining.tue'), t('remaining.wed'), t('remaining.thu'), t('remaining.fri'), t('remaining.sat'), t('remaining.sun')])
 const openingTypeLabels = computed<Record<ProactiveOpeningType, string>>(() => ({
   greeting: t('proactive.openingTypes.greeting'), life_check: t('proactive.openingTypes.life_check'), care: t('proactive.openingTypes.care'), continue_topic: t('proactive.openingTypes.continue_topic'), self_share: t('proactive.openingTypes.self_share'), playful: t('proactive.openingTypes.playful'), affection: t('proactive.openingTypes.affection'), wake_ping: t('proactive.openingTypes.wake_ping'), short_ping: t('proactive.openingTypes.short_ping'), question_probe: t('proactive.openingTypes.question_probe'), night_ping: t('proactive.openingTypes.night_ping'), other: t('proactive.openingTypes.other'),
 }))
@@ -145,7 +145,7 @@ onMounted(load)
         <section class="grid grid-cols-2 lg:grid-cols-4 gap-x-6 gap-y-5 py-7 border-y border-ink/15 dark:border-night-text/15">
           <div>
             <div class="flex items-center gap-2 text-xs text-ink-soft dark:text-night-text-soft"><MessageCircle :size="15" />{{ t('proactive.initiative') }}</div>
-            <div class="mt-2 text-3xl font-medium tabular-nums">{{ report.initiative_count.toLocaleString() }}</div>
+            <div class="mt-2 text-3xl font-medium tabular-nums">{{ report.initiative_count.toLocaleString(locale) }}</div>
             <div class="mt-1 text-xs text-ink-soft dark:text-night-text-soft">{{ t('proactive.times') }}</div>
           </div>
           <div>

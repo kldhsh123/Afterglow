@@ -13,6 +13,7 @@ import {
   type IdentityCandidate, type SetupStatus,
 } from './api'
 import { useLocale } from './useLocale'
+import { applyEnglishDefaults } from './englishDefaults'
 
 const { isChinese, t, locale, setLocale } = useLocale()
 
@@ -20,6 +21,7 @@ const step = ref(0)
 const totalSteps = 8
 const setupStatus = ref<SetupStatus | null>(null)
 const configuredFields = ref(new Set<string>())
+const existingValuesLoaded = ref(false)
 
 // ---- 访问令牌 ----
 const tokenInput = ref(getToken())
@@ -102,6 +104,13 @@ const embPresets = shallowRef<Preset[]>([])
 const labelPresets = shallowRef<Preset[]>([])
 const rerankerPresets = shallowRef<Preset[]>([])
 const crossRerankerPresets = shallowRef<Preset[]>([])
+
+// Load saved values first; changing UI language must not replace an existing provider.
+watch(locale, () => {
+  if (!isChinese.value && existingValuesLoaded.value) {
+    applyEnglishDefaults(form, configuredFields.value, chatPresets.value.find(p => p.id === 'gemini'))
+  }
+})
 
 const chatTest = ref<TestResult | null>(null)
 const chatTesting = ref(false)
@@ -188,13 +197,13 @@ const saveError = ref('')
 const finished = ref(false)
 const backupPath = ref<string | null>(null)
 
-const relationships = [
+const relationships = computed(() => [
   { value: 'friend', label: t('friend') },
   { value: 'lover', label: t('partner') },
   { value: 'family', label: t('family') },
   { value: 'colleague', label: t('colleague') },
   { value: 'custom', label: t('other') },
-]
+])
 
 const progress = computed(() => Math.round(((step.value) / (totalSteps)) * 100))
 
@@ -212,7 +221,7 @@ const stepItems = computed(() => [
   { id: 2, label: t('relationship'), complete: hasConfigured('RELATIONSHIP_TYPE'), optional: false },
   { id: 3, label: t('chatAI'), complete: setupStatus.value?.chat_ok ?? false, optional: false },
   { id: 4, label: t('embeddingsLabeling'), complete: setupStatus.value?.embedding_ok ?? false, optional: false },
-  { id: 5, label: t('optionalFeatures176'), complete: true, optional: true },
+  { id: 5, label: t('optionalFeatures'), complete: true, optional: true },
   { id: 6, label: t('retrievalEnhancements'), complete: true, optional: true },
   { id: 7, label: t('importHistory'), complete: importTask.value?.status === 'done', optional: true },
   { id: 8, label: t('accessPassword'), complete: setupStatus.value?.auth_ok ?? false, optional: false },
@@ -251,7 +260,7 @@ async function checkToken() {
   }
   try {
     await api.ping()
-    const [presetsData, status] = await Promise.all([
+    const [presetsData, status, valuesLoaded] = await Promise.all([
       api.presets(),
       api.status(),
       loadExistingValues(),
@@ -262,6 +271,10 @@ async function checkToken() {
     labelPresets.value = presetsData.label
     rerankerPresets.value = presetsData.reranker
     crossRerankerPresets.value = presetsData.cross_reranker
+    existingValuesLoaded.value = valuesLoaded
+    if (!isChinese.value && existingValuesLoaded.value) {
+      applyEnglishDefaults(form, configuredFields.value, chatPresets.value.find(p => p.id === 'gemini'))
+    }
     step.value = firstIncompleteStep(status)
     // 访问令牌校验成功后才尝试恢复未完成的导入任务，
     // 否则用旧令牌调用 /import/* 会返回 401，且用户没机会更新令牌。
@@ -292,11 +305,11 @@ async function tryResumeUnfinishedImport() {
     persistImportTask(null)
     if (uploadedFiles.value.length) {
       step.value = 7
-      resumeHint.value = (
-        t('anUnfinishedImportWasFoundTheBackend')
-        + t('processedRecordsArePreservedInTheVector')
-        + t('clickStartImportToSkipStoredRecords')
-      )
+      resumeHint.value = [
+        t('anUnfinishedImportWasFoundTheBackend'),
+        t('processedRecordsArePreservedInTheVector'),
+        t('clickStartImportToSkipStoredRecords'),
+      ].join(' ')
     }
   }
 }
@@ -329,7 +342,8 @@ async function loadExistingValues() {
         ;(form as any)[k] = v.value
       }
     }
-  } catch { /* 首次运行时可能还没有 .env */ }
+    return true
+  } catch { return false /* 首次运行时可能还没有 .env */ }
 }
 
 async function next() {
@@ -624,7 +638,7 @@ async function startImport() {
     subscribeTask(res.task_id)
   } catch (e) {
     const msg = (e as Error).message || ''
-    saveError.value = `启动导入失败：${msg}`
+    saveError.value = t('importStartFailed', { error: msg })
     // 已上传的文件路径可能因为后端重启 / 清理而失效，提示用户重新上传
     if (msg.includes('文件不存在') || msg.includes('not exist') || msg.includes('404')) {
       uploadedFiles.value = []
@@ -656,7 +670,7 @@ function subscribeTask(taskId: string) {
       }
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e)
-      saveError.value = `导入进度响应格式错误：${detail}`
+      saveError.value = t('invalidImportProgress', { error: detail })
       es.close()
     }
   }
@@ -977,7 +991,7 @@ const importStageMain = computed(() => {
 const importStageElapsed = computed(() => {
   const s = importTask.value?.stage || ''
   const idx = s.lastIndexOf(' · 已用时 ')
-  return idx >= 0 ? s.slice(idx + 3) : ''   // "已用时 X:YY"
+  return idx >= 0 ? t('elapsed', { time: s.slice(idx + ' · 已用时 '.length) }) : ''
 })
 const importStatusTitle = computed(() => {
   const st = importTask.value?.status
@@ -987,7 +1001,7 @@ const importStatusTitle = computed(() => {
     case 'cancelled': return t('cancelled')
     case 'persona': return t('generatingPersonaProfile')
     case 'importing': return t('embeddingAndStoringRecords')
-    default: return t('preparing195')
+    default: return t('preparing')
   }
 })
 
@@ -1005,6 +1019,14 @@ onMounted(async () => {
 <template>
   <div class="paper-bg min-h-screen">
     <div class="max-w-2xl mx-auto px-4 py-8 sm:py-12">
+      <div class="flex justify-end mb-3">
+        <label class="sr-only" for="config-language-switcher">{{ t('language') }}</label>
+        <select id="config-language-switcher" v-model="locale" @change="setLocale(locale)"
+          class="rounded-lg bg-paper-soft dark:bg-night-bg-soft border border-ink/10 dark:border-night-text/10 px-2 py-1 text-xs">
+          <option value="zh-CN">{{ t('chinese') }}</option>
+          <option value="en">{{ t('english') }}</option>
+        </select>
+      </div>
       <!-- 完成页 -->
       <div v-if="finished" class="text-center py-12 space-y-5">
         <div class="inline-flex w-16 h-16 rounded-full bg-accent/15 text-accent
@@ -1034,14 +1056,6 @@ onMounted(async () => {
 
       <template v-else>
         <header class="mb-8 text-center">
-          <div class="flex justify-end mb-3">
-            <label class="sr-only" for="config-language-switcher">{{ t('language') }}</label>
-            <select id="config-language-switcher" v-model="locale" @change="setLocale(locale)"
-              class="rounded-lg bg-paper-soft dark:bg-night-bg-soft border border-ink/10 dark:border-night-text/10 px-2 py-1 text-xs">
-              <option value="zh-CN">{{ t('chinese') }}</option>
-              <option value="en">{{ t('english') }}</option>
-            </select>
-          </div>
           <h1 class="text-2xl font-medium tracking-wide">{{ t('title') }}</h1>
           <p class="mt-1 text-sm text-ink-soft dark:text-night-text-soft">
             {{ step === -1 ? t('reviewYourConfigurationAndOpenTheSection') : t('configurationSavesAutomaticallyYouCanSwitchSections') }}
@@ -1051,7 +1065,7 @@ onMounted(async () => {
         <!-- 进度条 -->
         <div v-if="step > 0" class="mb-8">
           <div class="flex items-center justify-between text-xs text-ink-soft dark:text-night-text-soft mb-2">
-            <span>{{ t('step') }} {{ step }} / {{ totalSteps }} {{ t('of') }}</span>
+            <span>{{ t('stepProgress', { current: step, total: totalSteps }) }}</span>
             <span>{{ progress }}%</span>
           </div>
           <div class="h-1 rounded-full bg-ink/5 dark:bg-night-text/10 overflow-hidden">
@@ -1213,8 +1227,7 @@ onMounted(async () => {
               <!-- 候选列表 -->
               <div v-if="inspectCandidates.length" class="space-y-2 pt-1">
                 <div class="text-xs text-ink-soft dark:text-night-text-soft leading-relaxed">
-                  {{ t('found') }} <b>{{ inspectCandidates.length }}</b> {{ t('candidateIdentities') }}
-                  <b>{{ t('multiplePlatformsOrAccounts') }}</b>{{ t('assignEveryUIDBelongingToThemWith') }}<b>{{ t('unassignedUIDsAreTreatedAsStrangersAnd') }}</b>。
+                  {{ t('candidateHelp', { count: inspectCandidates.length }) }}
                 </div>
                 <div v-for="c in inspectCandidates" :key="c.uid"
                   class="flex items-center gap-3 p-2.5 rounded-lg
@@ -1247,8 +1260,7 @@ onMounted(async () => {
                 <div v-if="unassignedCandidates.length > 0"
                   class="rounded-lg px-3.5 py-2.5 text-xs leading-relaxed
                          bg-warning/10 border border-warning/30 text-warning">
-                  {{ t('remaining') }} <b>{{ unassignedCandidates.length }}</b> {{ t('candidateUIDsAreUnassigned') }}
-                  <span class="font-mono">{{ unassignedCandidates.map(c => c.uid).join('、') }}</span>{{ t('ifOneIsAnotherAccountBelongingTo') }}
+                  {{ t('unassignedHelp', { count: unassignedCandidates.length, uids: unassignedCandidates.map(c => c.uid).join(', ') }) }}
                 </div>
               </div>
             </div>
@@ -1352,7 +1364,7 @@ onMounted(async () => {
               <label class="block">
                 <div class="flex items-baseline justify-between">
                   <span class="text-sm">{{ t('apiKey') }}</span>
-                  <a v-if="currentPresetApplyUrl" :href="currentPresetApplyUrl"
+                  <a v-if="isChinese && currentPresetApplyUrl" :href="currentPresetApplyUrl"
                     target="_blank" rel="noopener"
                     class="text-xs text-accent dark:text-night-accent hover:underline inline-flex items-center gap-1">
                     {{ t('getAnAPIKey') }}<ExternalLink :size="11" />
@@ -1439,7 +1451,7 @@ onMounted(async () => {
               <label class="block">
                 <div class="flex items-baseline justify-between">
                   <span class="text-sm">{{ t('apiKey') }}</span>
-                  <a v-if="currentEmbPresetApplyUrl" :href="currentEmbPresetApplyUrl"
+                  <a v-if="isChinese && currentEmbPresetApplyUrl" :href="currentEmbPresetApplyUrl"
                     target="_blank" rel="noopener"
                     class="text-xs text-accent dark:text-night-accent hover:underline inline-flex items-center gap-1">
                     {{ t('getAnAPIKey') }}<ExternalLink :size="11" />
@@ -1531,7 +1543,7 @@ onMounted(async () => {
                 <label class="block">
                   <div class="flex items-baseline justify-between">
                     <span class="text-sm">{{ t('apiKey') }}</span>
-                    <a v-if="currentLabelPresetApplyUrl" :href="currentLabelPresetApplyUrl"
+                    <a v-if="isChinese && currentLabelPresetApplyUrl" :href="currentLabelPresetApplyUrl"
                       target="_blank" rel="noopener"
                       class="text-xs text-accent dark:text-night-accent hover:underline inline-flex items-center gap-1">
                       {{ t('getAnAPIKey') }}<ExternalLink :size="11" />
@@ -1713,7 +1725,7 @@ onMounted(async () => {
                 </div>
                 <div v-if="form.RESPONSE_POLICY_REUSE_LABEL && form.LABELING_ENABLED"
                   class="text-xs text-ink-soft dark:text-night-text-soft px-1">
-                  {{ t('willUse') }} <code class="font-mono">{{ form.LABEL_MODEL || t('labelingModel') }}</code>。
+                  {{ t('willUse') }} <code class="font-mono">{{ form.LABEL_MODEL || t('labelingModel') }}</code>
                 </div>
                 <div v-if="!form.RESPONSE_POLICY_REUSE_LABEL || !form.LABELING_ENABLED" class="space-y-3">
                   <label class="block">
@@ -1877,7 +1889,7 @@ onMounted(async () => {
                 <div class="flex-1">
                   <div class="text-sm font-medium">{{ t('crossEncoderRerankingMorePreciseRetrieval') }}</div>
                   <div class="text-xs text-ink-soft dark:text-night-text-soft mt-0.5 leading-relaxed">
-                    {{ t('aDedicatedRerankerRemovesLessRelevantCandidates') }}<b>{{ t('complementary') }}</b>{{ t('enablingBothCombinesTheirBenefits') }}
+                    {{ t('rerankingHelp') }}
                   </div>
                 </div>
               </label>
@@ -1948,7 +1960,7 @@ onMounted(async () => {
                   </span>
                 </div>
                 <div class="text-xs text-ink-soft dark:text-night-text-soft mt-0.5 leading-relaxed">
-                  {{ t('controlsHowChatHistoryIsSplitInto') }}<b>{{ t('nextImport') }}</b>{{ t('notChunksAlreadyStored') }}
+                  {{ t('chunkingHelp') }}
                   <span v-if="chunkingStrategyLocked" class="text-warning">
                     {{ t('settingsWereSavedToEnvWhenImport') }}
                   </span>
@@ -2082,7 +2094,7 @@ onMounted(async () => {
                     <div class="text-xs text-ink-soft dark:text-night-text-soft">
                       {{ (f.size / 1024 / 1024).toFixed(2) }} MB ·
                       {{ f.format_label || f.format || t('unrecognized') }}
-                      · {{ f.total_messages || 0 }} {{ t('messages141') }}
+                      · {{ f.total_messages || 0 }} {{ t('messages') }}
                     </div>
                   </div>
                 </div>
@@ -2094,7 +2106,7 @@ onMounted(async () => {
                   :disabled="importStarting || !!importTask"
                   @click="startImport">
                   <Loader2 v-if="importStarting" :size="14" class="animate-spin" />
-                  <span>{{ importStarting ? t('starting') : `开始导入（${uploadedFiles.length} 个文件）` }}</span>
+                  <span>{{ importStarting ? t('starting') : t('startImport', { count: uploadedFiles.length }) }}</span>
                 </button>
               </div>
 
@@ -2169,8 +2181,7 @@ onMounted(async () => {
             <div>
               <h2 class="text-lg font-medium">{{ t('setAccessPasswordXUWENAPIKEY') }}</h2>
               <p class="mt-1 text-sm text-ink-soft dark:text-night-text-soft">
-                {{ t('thisIsThe') }}<strong class="text-ink dark:text-night-text">{{ t('accessPasswordForYourLocalBackend') }}</strong>{{ t('storedIn') }} <code class="font-mono text-xs">.env</code> {{ t('as') }}
-                <code class="font-mono text-xs">XUWEN_API_KEY</code> {{ t('chatClientsAndOpenAICompatibleClientsMust') }}
+                {{ t('accessPasswordHelp') }}
               </p>
             </div>
             <label class="block">
@@ -2199,7 +2210,7 @@ onMounted(async () => {
             <div class="rounded-lg p-3 bg-paper dark:bg-night-bg border border-ink/5 dark:border-night-text/10
                         text-xs text-ink-soft dark:text-night-text-soft leading-relaxed">
               {{ t('savingWritesChangesToBackendEnvAnd') }}
-              <strong class="text-ink dark:text-night-text">{{ t('restartTheBackendToApplyConfigurationChanges') }}</strong>。
+              <strong class="text-ink dark:text-night-text">{{ t('restartTheBackendToApplyConfigurationChanges') }}</strong>
             </div>
           </div>
         </section>

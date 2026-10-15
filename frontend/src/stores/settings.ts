@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
+import { useLocale } from '@/composables/useLocale'
 
 export type ThemeMode = 'light' | 'dark' | 'system'
 
@@ -71,6 +72,7 @@ function isSystemDark(): boolean {
 
 export const useSettingsStore = defineStore('settings', () => {
   const initial = loadFromStorage()
+  const { t } = useLocale()
 
   const appName = ref(initial.appName)
   const appSlogan = ref(initial.appSlogan)
@@ -97,8 +99,8 @@ export const useSettingsStore = defineStore('settings', () => {
 
   // 派生：浏览器标题
   const documentTitle = computed(() => {
-    const target = friendName.value || '朋友'
-    return `${appName.value} · 与${target}的对话`
+    const target = friendName.value || t('remaining.friend')
+    return `${appName.value} · ${t('chat.title', { name: target })}`
   })
 
   // 把 isDark 同步到 <html class="dark">

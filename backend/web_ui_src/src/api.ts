@@ -1,3 +1,5 @@
+import { useLocale } from './useLocale'
+const { t } = useLocale()
 // 配置 UI 后端 API 客户端
 // 路径前缀从当前 URL 推断（页面挂在 /config/ 就用 /config，挂在 /admin/ 就用 /admin），
 // 这样后端改 CONFIG_UI_PATH_PREFIX 不用重新构建前端。
@@ -47,7 +49,7 @@ export function setToken(token: string): void {
   if (!TOKEN_CHAR_RE.test(cleaned)) {
     // 抛错让 UI 显示明确提示，不要静默存进去再让 fetch 崩溃
     throw new Error(
-      'Token 含有非法字符（仅允许英文/数字/-_=.+/）。请从后端控制台重新复制干净的字符串。',
+      t('invalidToken'),
     )
   }
   localStorage.setItem(TOKEN_KEY, cleaned)

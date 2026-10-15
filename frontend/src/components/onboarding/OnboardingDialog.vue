@@ -1,20 +1,20 @@
 <script setup lang="ts">
 // 首次启动引导：让用户填写名字、关系、后端地址
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useSettingsStore } from '@/stores/settings'
 import { Heart } from 'lucide-vue-next'
-import { useLocale } from '@/composables/useLocale'
+import { setLocale, useLocale } from '@/composables/useLocale'
 
 const settings = useSettingsStore()
-const { t } = useLocale()
+const { t, locale } = useLocale()
 const step = ref(0)
 
-const relations = [
-  { value: '朋友', label: '朋友' },
-  { value: '恋人', label: '恋人' },
-  { value: '亲人', label: '亲人' },
-  { value: '同事', label: '同事' },
-]
+const relations = computed(() => [
+  { value: '朋友', label: t('remaining.friend') },
+  { value: '恋人', label: t('feedback.partner') },
+  { value: '亲人', label: t('feedback.family') },
+  { value: '同事', label: t('feedback.colleague') },
+])
 
 function finish() {
   settings.onboardingDone = true
@@ -33,6 +33,14 @@ const canNextFromName = () =>
     <div class="fixed inset-0 z-40 paper-bg flex items-center justify-center p-6">
       <div class="max-w-md w-full bg-paper-soft dark:bg-night-bg-soft rounded-2xl
                   shadow-letter-strong p-7">
+        <div class="flex justify-end mb-4">
+          <label class="sr-only" for="onboarding-language">{{ t('common.language') }}</label>
+          <select id="onboarding-language" v-model="locale" @change="setLocale(locale)"
+            class="rounded-lg bg-paper dark:bg-night-bg border border-ink/10 dark:border-night-text/10 px-2 py-1 text-xs">
+            <option value="zh-CN">{{ t('common.chinese') }}</option>
+            <option value="en">{{ t('common.english') }}</option>
+          </select>
+        </div>
         <div class="text-center mb-5">
           <div class="inline-flex w-14 h-14 rounded-full bg-accent-soft/30 dark:bg-night-accent-soft/30
                       items-center justify-center text-accent dark:text-night-accent mb-3">

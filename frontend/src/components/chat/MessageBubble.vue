@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useLocale } from '@/composables/useLocale'
+const { t, locale } = useLocale()
 // 单条消息气泡
 // - 用户：右侧，背景 paper-shade（更深一档信笺色），稍硬朗
 // - 朋友：左侧，无明显背景，衬线大字像写在纸上
@@ -24,8 +26,8 @@ const memory = useMemoryStore()
 
 const isUser = computed(() => props.message.role === 'user')
 const speaker = computed(() => {
-  if (isUser.value) return settings.selfName || '我'
-  return settings.friendName || '朋友'
+  if (isUser.value) return settings.selfName || t('remaining.me')
+  return settings.friendName || t('remaining.friend')
 })
 
 const isPurePlaceholder = computed(() => {
@@ -52,7 +54,7 @@ const segmentHtmls = computed(() => {
 
 const time = computed(() => {
   const d = new Date(props.message.createdAt)
-  return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+  return d.toLocaleTimeString(locale.value, { hour: '2-digit', minute: '2-digit' })
 })
 
 function openMemory() {
@@ -103,7 +105,7 @@ function closeLightbox() {
           :src="src"
           class="max-w-[200px] max-h-[200px] rounded-lg shadow-letter cursor-zoom-in
                  hover:scale-[1.02] transition-transform"
-          alt="发送的图片"
+          :alt="t('remaining.sentImage')"
           @click="openLightbox(src)"
         />
       </div>
@@ -121,7 +123,7 @@ function closeLightbox() {
         class="px-4 py-3 text-chat sm:text-chat-lg leading-relaxed italic
                text-ink-soft/70 dark:text-night-text-soft/70 select-none"
       >
-        对方暂时没回复
+        {{ t('remaining.theyHaveNotRepliedYet') }}
       </div>
 
       <!-- 朋友正在打字 -->
@@ -177,14 +179,14 @@ function closeLightbox() {
         class="absolute top-4 right-4 p-2 rounded-full bg-paper-soft/90 dark:bg-night-bg-soft/90
                text-ink dark:text-night-text hover:scale-110 transition-transform"
         @click="closeLightbox"
-        aria-label="关闭"
+        :aria-label="t('remaining.close')"
       >
         <X :size="20" />
       </button>
       <img
         :src="lightboxSrc"
         class="max-w-[90vw] max-h-[90vh] rounded-lg shadow-letter-strong"
-        alt="图片放大"
+        :alt="t('remaining.enlargeImage')"
       />
     </div>
   </Teleport>

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useLocale } from '@/composables/useLocale'
+const { t, locale } = useLocale()
 // 记忆溯源浮窗：展示召回的历史片段。
 // 优先级：fused（最终融合） / friend_examples / dialogue_windows / history_images
 // UI：居中半透明卡片，按 ESC 或点遮罩关闭，含 GSAP 进出动效。
@@ -49,8 +51,8 @@ watch(isOpen, async (val) => {
 })
 
 function fmtTime(ts: number): string {
-  if (!ts) return '时间未知'
-  return new Date(ts).toLocaleString('zh-CN', {
+  if (!ts) return t('remaining.unknownTime')
+  return new Date(ts).toLocaleString(locale.value, {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -60,11 +62,11 @@ function fmtTime(ts: number): string {
 }
 
 function sourceLabel(kind: string): string {
-  if (kind === 'window') return '当时的多轮对话'
-  if (kind === 'friend') return '当时的一句话'
-  if (kind === 'response_pair') return '当时的问答'
-  if (kind === 'history_image') return '历史图片描述'
-  return '最近的对话'
+  if (kind === 'window') return t('remaining.aConversationFromThatTime')
+  if (kind === 'friend') return t('remaining.aMessageFromThatTime')
+  if (kind === 'response_pair') return t('remaining.aQuestionAndReplyFromThat')
+  if (kind === 'history_image') return t('remaining.historicalImageDescription')
+  return t('remaining.recentConversation')
 }
 </script>
 
@@ -87,16 +89,16 @@ function sourceLabel(kind: string): string {
       >
         <header class="px-5 py-4 flex items-center justify-between border-b border-ink/5 dark:border-night-text/10">
           <div>
-            <h2 class="text-base font-medium">来自这段记忆</h2>
+            <h2 class="text-base font-medium">{{ t('remaining.fromThisMemory') }}</h2>
             <p class="text-xs text-ink-soft dark:text-night-text-soft mt-0.5">
-              这条回应的灵感来自以下历史片段
+              {{ t('remaining.thisReplyDrawsOnTheFollowing') }}
             </p>
           </div>
           <button
             class="p-2 rounded-full text-ink-soft hover:text-ink dark:text-night-text-soft
                    dark:hover:text-night-text"
             @click="close"
-            aria-label="关闭"
+            :aria-label="t('remaining.close')"
           >
             <X :size="18" />
           </button>
@@ -124,7 +126,7 @@ function sourceLabel(kind: string): string {
             <p class="text-sm whitespace-pre-line leading-relaxed">{{ s.text }}</p>
           </div>
           <div v-if="sources.length === 0" class="text-center text-ink-soft dark:text-night-text-soft text-sm py-8">
-            这条回应是从空白里生出来的。
+            {{ t('remaining.thisReplyHasNoHistoricalSource') }}
           </div>
         </div>
       </div>

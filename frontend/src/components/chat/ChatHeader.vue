@@ -12,7 +12,7 @@ const { t, locale } = useLocale()
 const chat = useChatStore()
 const router = useRouter()
 
-const friendLabel = computed(() => settings.friendName || '朋友')
+const friendLabel = computed(() => settings.friendName || t('remaining.friend'))
 const title = computed(() => t('chat.title', { name: friendLabel.value }))
 
 function toggleTheme() {
@@ -38,11 +38,11 @@ function goSettings() {
 
 <template>
   <header
-    class="sticky top-0 z-20 px-4 py-3 flex items-center justify-between
+    class="sticky top-0 z-20 px-4 py-3 flex flex-wrap sm:flex-nowrap items-center justify-between gap-y-2
            backdrop-blur-md bg-paper/70 dark:bg-night-bg/60
            border-b border-ink/5 dark:border-night-text/10"
   >
-    <div class="flex items-center gap-3 min-w-0">
+    <div class="flex items-center gap-3 min-w-0 basis-full sm:basis-auto sm:flex-1">
       <div class="w-10 h-10 rounded-full bg-accent-soft/40 dark:bg-night-accent-soft/30
                   flex items-center justify-center font-serif text-lg
                   text-accent dark:text-night-accent shrink-0">
@@ -51,11 +51,11 @@ function goSettings() {
       <div class="min-w-0">
         <h1 class="text-base font-medium truncate">{{ title }}</h1>
         <p class="text-xs text-ink-soft dark:text-night-text-soft truncate">
-          {{ settings.appSlogan }}
+          {{ settings.appSlogan === '把曾经对你好的话，续成往后的陪伴' ? t('onboarding.slogan') : settings.appSlogan }}
         </p>
       </div>
     </div>
-    <div class="flex items-center gap-1">
+    <div class="flex items-center justify-end gap-1 w-full sm:w-auto shrink-0">
       <label class="sr-only" for="language-switcher">{{ t('common.language') }}</label>
       <select
         id="language-switcher"

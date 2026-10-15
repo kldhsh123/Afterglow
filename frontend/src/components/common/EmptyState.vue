@@ -7,7 +7,7 @@ import { useLocale } from '@/composables/useLocale'
 
 const settings = useSettingsStore()
 const { t, list } = useLocale()
-const target = computed(() => settings.friendName || '朋友')
+const target = computed(() => settings.friendName || t('remaining.friend'))
 const samples = computed(() => list('empty.samples'))
 
 const emit = defineEmits<{ (e: 'pick', text: string): void }>()
@@ -19,7 +19,7 @@ const emit = defineEmits<{ (e: 'pick', text: string): void }>()
                 flex items-center justify-center text-accent dark:text-night-accent mb-5">
       <Heart :size="28" />
     </div>
-    <h2 class="text-xl font-medium mb-2">{{ settings.appSlogan }}</h2>
+    <h2 class="text-xl font-medium mb-2">{{ settings.appSlogan === '把曾经对你好的话，续成往后的陪伴' ? t('onboarding.slogan') : settings.appSlogan }}</h2>
     <p class="text-sm text-ink-soft dark:text-night-text-soft max-w-md mb-8">{{ t('empty.talk', { name: target }) }}</p>
     <div class="flex flex-wrap gap-2 justify-center max-w-md">
       <button

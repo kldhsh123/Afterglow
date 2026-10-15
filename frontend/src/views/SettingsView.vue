@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 设置面板
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useSettingsStore } from '@/stores/settings'
 import { useMemoryStore } from '@/stores/memory'
@@ -32,9 +32,17 @@ const router = useRouter()
 const info = ref<AppInfo | null>(null)
 const updateInfo = ref<UpdateInfo | null>(null)
 const checkingUpdate = ref(false)
+const updateCheckFailed = ref(false)
 const updateCheckHint = ref<string | null>(null)
 const backendError = ref<string | null>(null)
 const busy = ref(false)
+const relationshipLabel = computed({
+  get: () => ({
+    '朋友': t('remaining.friend'), '恋人': t('feedback.partner'),
+    '亲人': t('feedback.family'), '同事': t('feedback.colleague'),
+  }[settings.relationshipDescription] ?? settings.relationshipDescription),
+  set: (value: string) => { settings.relationshipDescription = value },
+})
 const analysisGuideUrl = 'https://github.com/kldhsh123/Afterglow/wiki/高级与实验功能#聊天记录分析'
 
 onMounted(async () => {
@@ -55,10 +63,12 @@ async function checkForUpdate() {
   if (checkingUpdate.value) return
   checkingUpdate.value = true
   updateCheckHint.value = null
+  updateCheckFailed.value = false
   try {
     const next = await triggerUpdateCheck()
     updateInfo.value = next
     if (next.last_error) {
+      updateCheckFailed.value = true
       updateCheckHint.value = t('settings.checkFailed', { value: next.last_error })
     } else if (next.is_outdated && next.latest_version) {
       updateCheckHint.value = t('settings.newVersion', { value: next.latest_version })
@@ -72,6 +82,7 @@ async function checkForUpdate() {
       updateCheckHint.value = null
     }, 3000)
   } catch (e) {
+    updateCheckFailed.value = true
     updateCheckHint.value = t('settings.checkError', { value: (e as Error).message })
   } finally {
     checkingUpdate.value = false
@@ -224,8 +235,7 @@ function back() {
           <p
             v-if="updateCheckHint"
             class="text-xs"
-            :class="updateCheckHint.includes('失败') || updateCheckHint.includes('出错')
-              || updateCheckHint.toLowerCase().includes('failed') || updateCheckHint.toLowerCase().includes('error')
+            :class="updateCheckFailed
               ? 'text-warning'
               : 'text-ink-soft dark:text-night-text-soft'"
           >
@@ -259,7 +269,7 @@ function back() {
         <label class="block">
           <span class="text-sm">{{ t('settings.relationship') }}</span>
           <input
-            v-model="settings.relationshipDescription"
+            v-model="relationshipLabel"
             class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
                    border border-ink/10 dark:border-night-text/10 outline-none focus:ring-2 focus:ring-accent-soft"
           />

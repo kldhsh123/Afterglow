@@ -66,7 +66,7 @@ async function handleImageFiles(files: File[] | FileList | null) {
       const dataUrl = await fileToDataUrl(file, { maxEdge: 1600, maxBytes: 7 * 1024 * 1024 })
       pendingImages.value.push(dataUrl)
     } catch (e) {
-      chat.setError(`图片读取失败：${(e as Error).message}`)
+      chat.setError(t('feedback.imageRead', { error: (e as Error).message }))
     }
   }
 }
@@ -78,11 +78,11 @@ async function handleDocFiles(files: FileList | null) {
     for (const file of Array.from(files)) {
       try {
         const result = await extractDocument(file)
-        const block = `\n\n[文档: ${result.filename} · 估算 ${result.estimated_tokens} tokens]\n${result.text}\n`
+        const block = `\n\n[${t('feedback.documentLabel', { name: result.filename, tokens: result.estimated_tokens })}]\n${result.text}\n`
         text.value = (text.value + block).trim()
         await autoResize()
       } catch (e) {
-        chat.setError(`无法解析 ${file.name}：${(e as Error).message}`)
+        chat.setError(t('feedback.documentRead', { name: file.name, error: (e as Error).message }))
       }
     }
   } finally {
@@ -230,7 +230,7 @@ function stop() {
           class="relative w-20 h-20 rounded-lg overflow-hidden bg-paper-soft dark:bg-night-bg-soft
                  border border-ink/10 dark:border-night-text/10 group"
         >
-          <img :src="src" class="w-full h-full object-cover" alt="待发送图片" />
+          <img :src="src" class="w-full h-full object-cover" :alt="t('remaining.imageReadyToSend')" />
           <button
             class="absolute top-1 right-1 p-0.5 rounded-full bg-ink/60 text-paper-soft
                    opacity-0 group-hover:opacity-100 transition-opacity"
@@ -293,7 +293,7 @@ function stop() {
           v-model="text"
           rows="1"
           :placeholder="t('chat.writeMessage')"
-          class="flex-1 resize-none bg-transparent outline-none px-2 py-2 text-chat
+          class="min-w-0 flex-1 resize-none bg-transparent outline-none px-2 py-2 text-chat
                  text-ink dark:text-night-text placeholder:text-ink-soft/60
                  dark:placeholder:text-night-text-soft/50 leading-relaxed max-h-[200px]"
           @keydown="onKeyDown"

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useLocale } from '@/composables/useLocale'
+const { locale } = useLocale()
 // 用细线 + 居中时间表示对话分隔（强化"时间感"）
 import { computed } from 'vue'
 
@@ -8,8 +10,8 @@ const text = computed(() => {
   const d = new Date(props.timestamp)
   const now = new Date()
   const sameDay = d.toDateString() === now.toDateString()
-  if (sameDay) return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-  return d.toLocaleString('zh-CN', {
+  if (sameDay) return d.toLocaleTimeString(locale.value, { hour: '2-digit', minute: '2-digit' })
+  return d.toLocaleString(locale.value, {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',

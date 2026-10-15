@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useLocale } from '@/composables/useLocale'
+const { t } = useLocale()
 // 占位符消息（图片 / 语音 / 撤回...）的诗化渲染
 import { computed } from 'vue'
 import { Image as ImageIcon, Mic, Film, FileText, EyeOff, MessageSquare } from 'lucide-vue-next'
@@ -13,37 +15,40 @@ const meta = computed(() => {
     case '图片':
       return {
         icon: ImageIcon,
-        primary: '一张照片',
-        secondary: '这张图片已随时间斑驳',
+        primary: t('remaining.aPhoto'),
+        secondary: t('remaining.thisImageHasFadedOverTime'),
       }
     case '语音':
       return {
         icon: Mic,
-        primary: '一段语音',
-        secondary: '声音变得有些听不清',
+        primary: t('remaining.aVoiceMessage'),
+        secondary: t('remaining.theSoundIsNoLongerClear'),
       }
     case '视频':
       return {
         icon: Film,
-        primary: '一段视频',
-        secondary: '画面在记忆里逐渐模糊',
+        primary: t('remaining.aVideo'),
+        secondary: t('remaining.theSceneHasFadedInMemory'),
       }
     case '文件':
       return {
         icon: FileText,
-        primary: '一个文件',
-        secondary: '已经找不到了',
+        primary: t('remaining.aFile'),
+        secondary: t('remaining.noLongerAvailable'),
       }
+    case '表情':
+    case '动画表情':
+      return { icon: ImageIcon, primary: t('polish.sticker'), secondary: t('remaining.noLongerAvailable') }
     case '撤回':
       return {
         icon: EyeOff,
-        primary: '撤回了一条消息',
-        secondary: '想说又抹去了',
+        primary: t('remaining.aMessageWasRecalled'),
+        secondary: t('remaining.wordsWrittenAndErased'),
       }
     case '系统消息':
       return {
         icon: MessageSquare,
-        primary: '系统消息',
+        primary: t('remaining.systemMessage'),
         secondary: '',
       }
     default:
