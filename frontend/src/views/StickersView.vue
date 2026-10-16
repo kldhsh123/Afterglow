@@ -52,7 +52,7 @@ async function load() {
     const r = await listStickers()
     stickers.value = r.items
   } catch (e) {
-    errorMsg.value = (e as Error).message
+    errorMsg.value = `${t('errors.loadFailed')}: ${(e as Error).message}`
   } finally {
     loading.value = false
   }
@@ -77,7 +77,7 @@ async function onFileInput(e: Event) {
     newDataUrl.value = await fileToDataUrl(file, { maxEdge: 480, maxBytes: 1.5 * 1024 * 1024 })
     if (!newName.value) newName.value = file.name.replace(/\.[^.]+$/, '')
   } catch (e) {
-    errorMsg.value = (e as Error).message
+    errorMsg.value = `${t('errors.fileReadFailed')}: ${(e as Error).message}`
   }
 }
 
@@ -111,7 +111,7 @@ async function submitNew() {
     newOwner.value = 'shared'
     await load()
   } catch (e) {
-    errorMsg.value = (e as Error).message
+    errorMsg.value = `${t('errors.operationFailed')}: ${(e as Error).message}`
   } finally {
     saving.value = false
   }
@@ -140,7 +140,7 @@ async function saveEdit() {
     editing.value = null
     await load()
   } catch (e) {
-    errorMsg.value = (e as Error).message
+    errorMsg.value = `${t('errors.operationFailed')}: ${(e as Error).message}`
   }
 }
 
@@ -150,7 +150,7 @@ async function remove(name: string) {
     await deleteSticker(name)
     await load()
   } catch (e) {
-    errorMsg.value = (e as Error).message
+    errorMsg.value = `${t('errors.operationFailed')}: ${(e as Error).message}`
   }
 }
 </script>

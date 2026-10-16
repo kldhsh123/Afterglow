@@ -124,6 +124,7 @@ const zhCN = {
     checkError: '检查出错：{value}',
     notChecked: '尚未检查',
   },
+  errors: { loadFailed: '暂时无法加载此页面', operationFailed: '操作失败', fileReadFailed: '无法读取所选文件', debugRequestFailed: '诊断请求失败' },
   remaining: {
     "hmm": "嗯",
     "letThemStartATopic": "让对方主动开个话题",

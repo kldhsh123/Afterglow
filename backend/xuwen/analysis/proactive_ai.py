@@ -18,6 +18,9 @@ from xuwen.analysis.models import (
 )
 from xuwen.chat_api.llm_client import GenerationParams, LLMClient
 from xuwen.config import Settings
+from xuwen.content_i18n import content_text
+from xuwen.error_i18n import error_text
+from xuwen.prompt_language import structured_output_instruction
 
 logger = logging.getLogger(__name__)
 _JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
@@ -65,7 +68,9 @@ async def analyze_proactive_reasons(
             if len(batch) > 1:
                 midpoint = len(batch) // 2
                 logger.info(
-                    "主动开聊原因分析批次解析失败，将 %d 条拆为 %d + %d 条重试",
+                    content_text(
+                        "Could not parse proactive-reason batch; splitting %d entries into %d + %d for retry"
+                    ),
                     len(batch),
                     midpoint,
                     len(batch) - midpoint,
@@ -75,18 +80,22 @@ async def analyze_proactive_reasons(
                     analyze_batch(batch[midpoint:]),
                 )
                 return [*left, *right]
-            logger.warning("主动开聊原因分析批次失败，保留未分析状态", exc_info=True)
+            logger.warning(
+                content_text("Proactive-reason analysis batch failed; leaving entries unanalyzed"),
+                exc_info=True,
+            )
             return []
         except Exception:
-            logger.warning("主动开聊原因分析请求失败，保留未分析状态", exc_info=True)
+            logger.warning(
+                content_text(
+                    "Proactive-reason analysis request failed; leaving entries unanalyzed"
+                ),
+                exc_info=True,
+            )
             return []
 
     batch_results = await asyncio.gather(*(analyze_batch(batch) for batch in batches))
-    analyzed = {
-        item.opening_id: item
-        for results in batch_results
-        for item in results
-    }
+    analyzed = {item.opening_id: item for results in batch_results for item in results}
 
     output: list[ProactiveOpeningRecord] = []
     for opening in report.openings:
@@ -120,7 +129,7 @@ def merge_cached_proactive_reasons(
     cached: ProactiveAnalysisReport | None,
 ) -> ProactiveAnalysisReport:
     """按稳定 opening_id 复用已有 AI 归因，内容变化时不复用。"""
-    if cached is None:
+    if cached is None or cached.output_language != current.output_language:
         return current
     cached_by_id = {opening.opening_id: opening for opening in cached.openings}
     output: list[ProactiveOpeningRecord] = []
@@ -162,28 +171,30 @@ async def _analyze_batch(
         {
             "role": "system",
             "content": (
-                "你分析私人聊天中双方为什么重新开聊，以及为什么可能选择这个时间。"
-                "只能依据输入，严格输出 JSON；不得把相关性写成确定因果。"
+                "Analyze why each participant restarted a private conversation and why they may have chosen "
+                "that time. Use only input evidence, return strict JSON, and never present correlation as "
+                "certain causation."
             ),
         },
         {
             "role": "user",
             "content": (
-                "逐条分析 records。reason_category 只能是 continue_topic、event_trigger、"
-                "care、self_share、question、emotional_need、routine、greeting、playful、"
-                "affection、other、unknown。reason_summary 解释发起者为什么开聊；"
-                "time_explanation 解释为什么可能在该时点开聊，必须区分消息中的直接时间线索、"
-                "历史时段规律和无法判断。仅凭几点钟不能推断作息或心理动机；证据不足就写 unknown。"
-                "evidence_quotes 只能逐字引用 previous_tail、opening_content 或 first_response 中存在的短句。"
-                "alternative_explanations 至少给出一种其它可能，confidence 按证据强弱给 0~1。"
-                "返回 {\"analyses\":[{\"opening_id\":\"...\","
-                "\"reason_category\":\"unknown\",\"reason_summary\":\"...\","
-                "\"time_explanation\":\"...\",\"evidence_quotes\":[\"...\"],"
-                "\"confidence\":0.0,\"alternative_explanations\":[\"...\"]}]}。\n"
+                (
+                    "Analyze each record. reason_category must be continue_topic/event_trigger/care/self_share/qu"
+                    "estion/emotional_need/routine/greeting/playful/affection/other/unknown. reason_summary "
+                    "explains why the initiator began chatting. time_explanation must distinguish direct timing "
+                    "clues, historical time patterns and uncertainty. Clock time alone does not establish "
+                    "routines or motives; use unknown when unsupported. evidence_quotes must be exact substrings "
+                    "from previous_tail, opening_content or first_response. Give at least one alternative "
+                    'explanation and confidence 0..1 grounded in evidence. Return {"analyses":[{"opening_id":"...'
+                    '","reason_category":"unknown","reason_summary":"...","time_explanation":"...","evidence_quot'
+                    'es":["..."],"confidence":0.0,"alternative_explanations":["..."]}]}.\n'
+                )
                 + json.dumps({"records": payload}, ensure_ascii=False)
             ),
         },
     ]
+    messages[0]["content"] += "\n" + structured_output_instruction()
     last_error: ValueError | None = None
     for attempt in range(2):
         raw = await llm.complete_chat(
@@ -210,13 +221,14 @@ async def _analyze_batch(
                         {
                             "role": "user",
                             "content": (
-                                "上一个回答不是要求的 JSON。不要解释，不要使用 Markdown；"
-                                "只返回符合既定结构的一个 JSON 对象，并覆盖输入中的每个 opening_id。"
+                                "The previous answer was not valid JSON. No explanation or Markdown. Return one JSON object matching the required schema and covering every input opening_id."
                             ),
                         },
                     ]
                 )
-    raise ValueError("主动开聊原因分析修复后仍无有效 JSON") from last_error
+    raise ValueError(
+        error_text("Proactive-reason analysis still contains no valid JSON after repair")
+    ) from last_error
 
 
 def _parse_batch_attributions(
@@ -226,7 +238,7 @@ def _parse_batch_attributions(
     obj = _parse_json_object(raw)
     items = obj.get("analyses")
     if not isinstance(items, list):
-        raise ValueError("主动开聊原因分析缺少 analyses 数组")
+        raise ValueError(error_text("Proactive-reason analysis is missing the analyses array"))
     allowed_ids = {opening.opening_id for opening in openings}
     output: list[_OpeningAttribution] = []
     seen: set[str] = set()
@@ -241,7 +253,11 @@ def _parse_batch_attributions(
         seen.add(parsed.opening_id)
     if len(output) != len(allowed_ids):
         raise ValueError(
-            f"主动开聊原因分析返回条目不完整：期望 {len(allowed_ids)}，实际 {len(output)}"
+            error_text(
+                "Incomplete proactive-reason results: expected {p0}, received {p1}",
+                p0=len(allowed_ids),
+                p1=len(output),
+            )
         )
     return output
 
@@ -331,11 +347,11 @@ def _parse_json_object(raw: str) -> dict[str, object]:
     except json.JSONDecodeError:
         match = _JSON_BLOCK_RE.search(text)
         if match is None:
-            raise ValueError("模型未返回 JSON") from None
+            raise ValueError(error_text("The model did not return JSON")) from None
         try:
             parsed = json.loads(match.group(0))
         except json.JSONDecodeError as exc:
-            raise ValueError("模型返回的 JSON 无法解析") from exc
+            raise ValueError(error_text("The model returned invalid JSON")) from exc
     if not isinstance(parsed, dict):
-        raise ValueError("模型输出根节点必须是对象")
+        raise ValueError(error_text("The model output root must be an object"))
     return parsed

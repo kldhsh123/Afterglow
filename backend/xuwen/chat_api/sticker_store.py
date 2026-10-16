@@ -23,6 +23,7 @@ from typing import Any, Literal
 
 from xuwen.config import Settings
 from xuwen.core.errors import XuwenError
+from xuwen.error_i18n import error_text
 
 Owner = Literal["ai", "self", "shared"]
 
@@ -31,8 +32,12 @@ _NAME_RE = re.compile(r"^[\w一-鿿\-]{1,32}$")
 # 图片 data URL
 _DATA_URL_RE = re.compile(r"^data:image/(?P<mime>[a-zA-Z0-9.+-]+);base64,(?P<data>.+)$")
 _MIME_TO_EXT: dict[str, str] = {
-    "png": "png", "jpeg": "jpg", "jpg": "jpg",
-    "gif": "gif", "webp": "webp", "bmp": "bmp",
+    "png": "png",
+    "jpeg": "jpg",
+    "jpg": "jpg",
+    "gif": "gif",
+    "webp": "webp",
+    "bmp": "bmp",
 }
 
 
@@ -45,11 +50,11 @@ class StickerError(XuwenError):
 class Sticker:
     """单张表情包。"""
 
-    name: str                        # 唯一标识，AI 用 [sticker:name] 调用
-    description: str                 # 给 AI 看的语义描述，如"开心打趣"
+    name: str  # 唯一标识，AI 用 [sticker:name] 调用
+    description: str  # 给 AI 看的语义描述，如"开心打趣"
     sha: str
     extension: str
-    owner: Owner = "shared"          # ai 只 AI 用 / self 只用户用 / shared 共用
+    owner: Owner = "shared"  # ai 只 AI 用 / self 只用户用 / shared 共用
     tags: list[str] = field(default_factory=list)
     created_at_ms: int = 0
 
@@ -83,7 +88,7 @@ class StickerStore:
         try:
             raw = json.loads(self._index_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as e:
-            raise StickerError(f"表情包索引损坏：{e}") from e
+            raise StickerError(error_text("The sticker index is corrupt: {p0}", p0=e)) from e
         if not isinstance(raw, list):
             self._cache = {}
             return self._cache
@@ -130,15 +135,21 @@ class StickerStore:
 
         if not _NAME_RE.match(name):
             raise StickerError(
-                "name 仅允许中文 / 英数 / 下划线 / 中划线，长度 1-32",
+                error_text(
+                    "name must be 1-32 characters using Chinese characters, letters, digits, underscores or hyphens"
+                ),
             )
         if not description.strip():
-            raise StickerError("必须给表情包写一句说明（AI 用它判断什么时候发）")
+            raise StickerError(
+                error_text("A sticker description is required so the AI knows when to use it")
+            )
 
         mime, raw = _decode_data_url(data_url)
         if len(raw) > self.settings.sticker_max_image_bytes:
             mb = self.settings.sticker_max_image_bytes / (1024 * 1024)
-            raise StickerError(f"表情包过大（>{mb:.1f}MB），请先压缩")
+            raise StickerError(
+                error_text("Sticker too large (>{p0:.1f}MB). Compress it first", p0=mb)
+            )
 
         sha = hashlib.sha256(raw).hexdigest()
         ext = _MIME_TO_EXT[mime]
@@ -172,10 +183,10 @@ class StickerStore:
         cache = self._load()
         sticker = cache.get(name)
         if sticker is None:
-            raise StickerError(f"找不到表情包：{name}")
+            raise StickerError(error_text("Sticker not found: {p0}", p0=name))
         if description is not None:
             if not description.strip():
-                raise StickerError("description 不能为空")
+                raise StickerError(error_text("description must not be empty"))
             sticker.description = description.strip()
         if owner is not None:
             sticker.owner = owner
@@ -216,14 +227,14 @@ class StickerStore:
 def _decode_data_url(data_url: str) -> tuple[str, bytes]:
     m = _DATA_URL_RE.match(data_url.strip())
     if not m:
-        raise StickerError("仅支持 data:image/<type>;base64,... 形式")
+        raise StickerError(error_text("Only data:image/<type>;base64,... format is supported"))
     mime = m.group("mime").lower()
     if mime not in _MIME_TO_EXT:
-        raise StickerError(f"不支持的图片格式：{mime}")
+        raise StickerError(error_text("Unsupported image format: {p0}", p0=mime))
     try:
         raw = base64.b64decode(m.group("data"), validate=True)
     except Exception as e:
-        raise StickerError("图片 base64 解码失败") from e
+        raise StickerError(error_text("Failed to decode image base64 data")) from e
     return mime, raw
 
 
@@ -248,21 +259,18 @@ def find_sticker_tokens(text: str) -> list[tuple[int, int, str]]:
 
 
 def render_sticker_block_for_prompt(stickers: list[Sticker]) -> str:
-    """把表情包列表渲染成 system prompt 的一段说明。"""
     if not stickers:
-        return (
-            "【表情包】当前没有可用的表情包；**绝对不要**输出 `[sticker:xxx]` 形式的占位，"
-            "用文字 / emoji 表达即可（否则会出现一段乱码）。"
-        )
-    names = "、".join(f"[sticker:{s.name}]" for s in stickers)
+        return "[Stickers] None available. Never output [sticker:xxx] placeholders. Use text or appropriate emoji instead."
+    names = ", ".join(f"[sticker:{s.name}]" for s in stickers)
     lines = [
-        "【表情包】只能从下面这份列表里挑，**不要自创**也不要修改名字（少一个字 / 多一个字都会让前端渲染失败）：",
+        "[Stickers] Choose only from this complete list. Never invent or modify names; exact spelling is required:"
     ]
-    for s in stickers:
-        lines.append(f"- [sticker:{s.name}]：{s.description}")
+    for sticker in stickers:
+        lines.append(f"- [sticker:{sticker.name}]: {sticker.description}")
     lines.append(
-        f"以上是当前**全部**可用名字：{names}。"
-        "用名字一字不差地写出来，否则不要输出 `[sticker:...]` 这种格式——用文字代替。"
+        f"All available names: {names}. Use exact names or plain text; never emit an unknown [sticker:...] token."
     )
-    lines.append("挑选要贴合语境的；不要为了发而发，文字回应优先。")
+    lines.append(
+        "Choose only when relevant. Prefer a text response; do not send stickers merely for the sake of it."
+    )
     return "\n".join(lines)

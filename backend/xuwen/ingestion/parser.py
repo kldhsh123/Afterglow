@@ -10,6 +10,7 @@ from typing import Any, cast
 from xuwen.config import Settings
 from xuwen.core.errors import ParseError
 from xuwen.core.models import NormalizedMessage
+from xuwen.error_i18n import error_text
 from xuwen.ingestion.plugins import (
     JSONL_RECORDS_KEY,
     TEXT_CONTENT_KEY,
@@ -40,9 +41,9 @@ def load_qq_json(path: str | Path) -> dict[str, Any]:
     """解码聊天文件；JSON、JSONL 和文本格式的解释完全交给 plugin。"""
     p = Path(path)
     if not p.exists():
-        raise ParseError(f"找不到聊天记录文件：{p}")
+        raise ParseError(error_text("Chat file not found: {p0}", p0=p))
     if not p.is_file():
-        raise ParseError(f"请选择导出目录内的聊天文件：{p}")
+        raise ParseError(error_text("Select a chat file inside the export directory: {p0}", p0=p))
     if p.suffix.lower() in {".txt", ".md", ".html", ".htm"}:
         try:
             return {
@@ -50,16 +51,16 @@ def load_qq_json(path: str | Path) -> dict[str, Any]:
                 TEXT_SUFFIX_KEY: p.suffix.lower(),
             }
         except (OSError, UnicodeDecodeError) as e:
-            raise ParseError(f"无法读取 UTF-8 聊天文件：{p.name}") from e
+            raise ParseError(error_text("Cannot read the UTF-8 chat file: {p0}", p0=p.name)) from e
     if p.suffix.lower() in {".jsonl", ".ndjson"}:
         return _load_jsonl_records(p)
     try:
         with p.open("r", encoding="utf-8-sig") as f:
             payload = json.load(f)
     except json.JSONDecodeError as e:
-        raise ParseError(f"JSON 解析失败：{e}") from e
+        raise ParseError(error_text("JSON parsing failed: {p0}", p0=e)) from e
     if not isinstance(payload, dict):
-        raise ParseError("JSON 顶层必须是对象")
+        raise ParseError(error_text("The JSON root must be an object"))
     return cast(dict[str, Any], payload)
 
 
@@ -76,18 +77,22 @@ def _load_jsonl_records(path: Path) -> dict[str, Any]:
                 try:
                     item = json.loads(line)
                 except json.JSONDecodeError as e:
-                    raise ParseError(f"JSONL 第 {line_no} 行解析失败：{e.msg}") from e
+                    raise ParseError(
+                        error_text("Failed to parse JSONL line {p0}: {p1}", p0=line_no, p1=e.msg)
+                    ) from e
                 if not isinstance(item, dict):
-                    raise ParseError(f"JSONL 第 {line_no} 行必须是 JSON 对象")
+                    raise ParseError(
+                        error_text("JSONL line {p0} must be a JSON object", p0=line_no)
+                    )
                 item.setdefault(
                     "_jsonlSourceId",
                     f"{path.stem}-{source_namespace}-{line_no}",
                 )
                 records.append(item)
     except UnicodeDecodeError as e:
-        raise ParseError(f"JSONL 不是有效的 UTF-8 文件：{e}") from e
+        raise ParseError(error_text("The JSONL file is not valid UTF-8: {p0}", p0=e)) from e
     if not records:
-        raise ParseError("JSONL 中没有记录")
+        raise ParseError(error_text("The JSONL file contains no records"))
     return {JSONL_RECORDS_KEY: records}
 
 

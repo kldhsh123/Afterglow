@@ -11,6 +11,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from xuwen.analysis.models import BlockAnalysis
+from xuwen.prompt_language import output_language
 
 ANALYSIS_CACHE_VERSION = 5
 EXPERIMENTAL_CACHE_VERSION = 3
@@ -32,7 +33,9 @@ class AnalysisStorage:
     def block_path(self, block_id: str) -> Path:
         return self.blocks_dir / f"{block_id}.json"
 
-    def load_block(self, block_id: str, *, require_experimental: bool = False) -> BlockAnalysis | None:
+    def load_block(
+        self, block_id: str, *, require_experimental: bool = False
+    ) -> BlockAnalysis | None:
         path = self.block_path(block_id)
         if not path.exists():
             return None
@@ -40,7 +43,10 @@ class AnalysisStorage:
             result = BlockAnalysis.model_validate_json(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return None
-        if result.schema_version != ANALYSIS_CACHE_VERSION:
+        if (
+            result.schema_version != ANALYSIS_CACHE_VERSION
+            or result.output_language != output_language()
+        ):
             return None
         if require_experimental:
             experimental = self.load_experimental_block(block_id)
@@ -59,7 +65,10 @@ class AnalysisStorage:
             result = BlockAnalysis.model_validate_json(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return None
-        if result.experimental_schema_version != EXPERIMENTAL_CACHE_VERSION:
+        if (
+            result.experimental_schema_version != EXPERIMENTAL_CACHE_VERSION
+            or result.output_language != output_language()
+        ):
             return None
         return result
 

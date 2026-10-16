@@ -75,7 +75,7 @@ async function load() {
   try {
     report.value = await fetchPersonalityReport()
   } catch (reason) {
-    error.value = (reason as Error).message
+    error.value = `${t('errors.loadFailed')}: ${(reason as Error).message}`
   } finally {
     loading.value = false
   }
@@ -88,7 +88,7 @@ async function loadExperimental() {
   try {
     experimental.value = await fetchExperimentalReport()
   } catch (reason) {
-    experimentalError.value = (reason as Error).message
+    experimentalError.value = `${t('errors.loadFailed')}: ${(reason as Error).message}`
   } finally {
     experimentalLoading.value = false
   }

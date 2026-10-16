@@ -20,7 +20,9 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from xuwen.content_i18n import content_text
 from xuwen.core.errors import XuwenError
+from xuwen.error_i18n import error_text
 
 logger = logging.getLogger(__name__)
 
@@ -61,13 +63,19 @@ def extract(
     """从字节流提取文本。"""
     if len(data) > max_bytes:
         mb = max_bytes / (1024 * 1024)
-        raise DocumentError(f"文件过大（>{mb:.0f}MB），请压缩或切分后再上传")
+        raise DocumentError(
+            error_text("File too large (>{p0:.0f}MB). Compress or split it before uploading", p0=mb)
+        )
 
     ext = _ext_of(filename)
     extractor = _DISPATCH.get(ext)
     if extractor is None:
         raise DocumentError(
-            f"暂不支持 .{ext or '?'} 格式。已支持：{sorted(_DISPATCH.keys())}"
+            error_text(
+                "Unsupported .{p0} format. Supported formats: {p1}",
+                p0=ext or "?",
+                p1=sorted(_DISPATCH.keys()),
+            )
         )
 
     try:
@@ -76,14 +84,18 @@ def extract(
         raise
     except Exception as e:
         # 不带原始错误信息（防泄漏）
-        logger.warning("文档提取失败 ext=%s: %s", ext, type(e).__name__)
+        logger.warning(content_text("Document extraction failed ext=%s: %s"), ext, type(e).__name__)
         raise DocumentError(
-            f"无法解析 {filename}（{type(e).__name__}）。可能是文件损坏或格式不被支持。"
+            error_text(
+                "Cannot parse {p0} ({p1}). The file may be corrupt or its format unsupported.",
+                p0=filename,
+                p1=type(e).__name__,
+            )
         ) from e
 
     text = text.strip()
     if not text:
-        raise DocumentError(f"{filename} 提取后内容为空")
+        raise DocumentError(error_text("No text could be extracted from {p0}", p0=filename))
 
     char_count = len(text)
     return ExtractedDocument(
@@ -120,7 +132,7 @@ def _extract_csv(data: bytes) -> str:
         padded = (row + [""] * len(head))[: len(head)]
         lines.append("| " + " | ".join(padded) + " |")
     if len(rows) > 201:
-        lines.append(f"\n（共 {len(rows)} 行，仅展示前 200 行）")
+        lines.append(content_text("\n({rows} rows total; showing the first 200)", rows=len(rows)))
     return "\n".join(lines)
 
 
@@ -128,7 +140,9 @@ def _extract_json(data: bytes) -> str:
     try:
         obj = json.loads(_decode(data))
     except json.JSONDecodeError as e:
-        raise DocumentError(f"JSON 解析失败：{e.msg} (行 {e.lineno})") from e
+        raise DocumentError(
+            error_text("JSON parsing failed: {p0} (line {p1})", p0=e.msg, p1=e.lineno)
+        ) from e
     return json.dumps(obj, ensure_ascii=False, indent=2)
 
 
@@ -141,10 +155,10 @@ def _extract_pdf(data: bytes) -> str:
         try:
             txt = page.extract_text() or ""
         except Exception as e:
-            logger.info("pdf 第 %d 页提取失败：%s", i, type(e).__name__)
+            logger.info(content_text("Cannot extract PDF page %d: %s"), i, type(e).__name__)
             continue
         if txt.strip():
-            parts.append(f"--- 第 {i} 页 ---\n{txt.strip()}")
+            parts.append(content_text("--- Page {page} ---", page=i) + "\n" + txt.strip())
     return "\n\n".join(parts)
 
 
@@ -174,7 +188,7 @@ def _extract_xlsx(data: bytes) -> str:
     parts: list[str] = []
     for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
-        parts.append(f"## Sheet：{sheet_name}\n")
+        parts.append(content_text("## Sheet: {name}\n", name=sheet_name))
         rows = list(ws.iter_rows(values_only=True))
         if not rows:
             continue
@@ -186,7 +200,7 @@ def _extract_xlsx(data: bytes) -> str:
             padded = (cells + [""] * len(head))[: len(head)]
             parts.append("| " + " | ".join(padded) + " |")
         if len(rows) > 201:
-            parts.append(f"（共 {len(rows)} 行，仅展示前 200 行）")
+            parts.append(content_text("({rows} rows total; showing the first 200)", rows=len(rows)))
     return "\n".join(parts)
 
 

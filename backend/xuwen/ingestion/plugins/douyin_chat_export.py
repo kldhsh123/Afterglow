@@ -15,6 +15,7 @@ from typing import Any
 from xuwen.config import Settings
 from xuwen.core.errors import ParseError
 from xuwen.core.models import MessageKind, NormalizedMessage, SenderRole
+from xuwen.error_i18n import error_text
 from xuwen.ingestion.plugins import (
     ImportIdentityCandidate,
     ImportInspection,
@@ -56,17 +57,21 @@ class DouyinChatExportPlugin:
     ) -> list[NormalizedMessage]:
         canonical = _canonical_payload(payload)
         if canonical is None or not _looks_like_douyin_chatlab(canonical):
-            raise ParseError("JSON / JSONL 不符合 douyin-chat-export ChatLab 格式")
+            raise ParseError(
+                error_text("JSON / JSONL does not match the douyin-chat-export ChatLab format")
+            )
 
         meta = canonical.get("meta")
         meta = meta if isinstance(meta, dict) else {}
         conversation_type = str(meta.get("type") or "private").strip().lower()
         if conversation_type != "private":
-            raise ParseError("douyin-chat-export plugin 目前只支持 private 私聊导入")
+            raise ParseError(
+                error_text("The douyin-chat-export plugin currently supports private chats only")
+            )
 
         raw_messages = canonical.get("messages")
         if not isinstance(raw_messages, list):
-            raise ParseError("ChatLab payload 中缺少 messages 数组")
+            raise ParseError(error_text("The ChatLab payload is missing the messages array"))
 
         messages: list[NormalizedMessage] = []
         for idx, raw in enumerate(raw_messages):
@@ -86,7 +91,9 @@ class DouyinChatExportPlugin:
         source_is_jsonl = jsonl_records(payload) is not None
         canonical = _canonical_payload(payload)
         if canonical is None or not _looks_like_douyin_chatlab(canonical):
-            return ImportInspection("unknown", [], 0, "无法识别 Douyin Chat Export 格式")
+            return ImportInspection(
+                "unknown", [], 0, error_text("Cannot recognize the Douyin Chat Export format")
+            )
 
         meta = canonical.get("meta")
         meta = meta if isinstance(meta, dict) else {}
@@ -149,9 +156,7 @@ class DouyinChatExportPlugin:
             candidates=candidates,
             total_messages=len(raw_messages),
             error=error,
-            format_label=(
-                "Douyin Chat Export JSONL" if source_is_jsonl else "Douyin Chat Export"
-            ),
+            format_label=("Douyin Chat Export JSONL" if source_is_jsonl else "Douyin Chat Export"),
         )
 
 

@@ -20,6 +20,7 @@ from xuwen.companion.relationship import RelationshipMemoryManager
 from xuwen.config import Settings
 from xuwen.core.metrics import MetricsRecorder
 from xuwen.core.update_check import UpdateChecker
+from xuwen.error_i18n import error_text
 from xuwen.ingestion.embedder import EmbeddingClient
 from xuwen.memory.retriever import HybridRetriever
 from xuwen.memory.store import MemoryStore
@@ -68,5 +69,7 @@ def get_state() -> AppState:
     在 override 生效前调用会抛错。
     """
     raise RuntimeError(
-        "AppState 尚未注入：请确认 chat_api.app:create_app() 已正确启动"
+        error_text(
+            "AppState is not initialized. Check that chat_api.app:create_app() started correctly"
+        )
     )

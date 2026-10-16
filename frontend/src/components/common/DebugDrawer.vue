@@ -74,7 +74,7 @@ function debugEndpointErrorMessage(e: unknown): string {
   if (/404|not found/i.test(message)) {
     return t('remaining.debugEndpointsAreDisabledSetDebug')
   }
-  return message
+  return `${t('errors.debugRequestFailed')}: ${message}`
 }
 
 async function runSearch() {
@@ -97,7 +97,7 @@ async function runSearch() {
     searchResult.value = await searchMemory(q, 12, chat.conversationId)
     await refresh()
   } catch (e) {
-    errorMsg.value = (e as Error).message
+    errorMsg.value = `${t('errors.debugRequestFailed')}: ${(e as Error).message}`
   } finally {
     searchLoading.value = false
   }
@@ -113,7 +113,7 @@ async function runProactive() {
     })
     await refresh()
   } catch (e) {
-    errorMsg.value = (e as Error).message
+    errorMsg.value = `${t('errors.operationFailed')}: ${(e as Error).message}`
   } finally {
     proactiveLoading.value = false
   }

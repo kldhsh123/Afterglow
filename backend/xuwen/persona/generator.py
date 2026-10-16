@@ -9,6 +9,7 @@ from pathlib import Path
 from xuwen.config import Settings
 from xuwen.core.errors import ParseError
 from xuwen.core.models import NormalizedMessage, Session
+from xuwen.error_i18n import error_text
 from xuwen.ingestion.cleaner import Cleaner
 from xuwen.ingestion.parser import load_qq_json
 from xuwen.ingestion.plugins import select_plugin
@@ -62,7 +63,7 @@ def load_persona_dataset(
     """加载全部画像源，去重后按 plugin 时间线切分会话。"""
     source_paths = [Path(path) for path in paths]
     if not source_paths:
-        raise ValueError("至少需要一个聊天 JSON 或 JSONL 文件")
+        raise ValueError(error_text("At least one chat JSON or JSONL file is required"))
 
     settings.require_identity()
     parsed_messages = 0
@@ -76,7 +77,9 @@ def load_persona_dataset(
             plugin = select_plugin(payload, preferred=plugin_name)
             parsed = plugin.parse(payload, settings)
         except Exception as exc:
-            raise ParseError(f"画像源文件处理失败（{path}）：{exc}") from exc
+            raise ParseError(
+                error_text("Failed to process persona source file ({p0}): {p1}", p0=path, p1=exc)
+            ) from exc
 
         parsed_messages += len(parsed)
         for message in parsed:
@@ -86,9 +89,7 @@ def load_persona_dataset(
                 continue
             seen.add(identity)
             # persona 不读取 raw；释放逐行 JSON 引用可显著降低多文件画像的峰值内存。
-            grouped_messages.setdefault(plugin.name, []).append(
-                replace(message, raw=None)
-            )
+            grouped_messages.setdefault(plugin.name, []).append(replace(message, raw=None))
 
     cleaner = Cleaner(settings, json_emoji_mode=json_emoji_mode)
     cleaned: list[NormalizedMessage] = []
@@ -161,10 +162,7 @@ def generate_persona_artifacts(
         unique_messages=len(dataset.messages),
         duplicate_messages=dataset.duplicate_messages,
         friend_messages=sum(
-            1
-            for session in dataset.sessions
-            for message in session.messages
-            if message.is_friend
+            1 for session in dataset.sessions for message in session.messages if message.is_friend
         ),
         sessions=len(dataset.sessions),
         circadian_sample_size=circadian.sample_size,

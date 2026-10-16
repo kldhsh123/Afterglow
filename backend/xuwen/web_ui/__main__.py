@@ -22,18 +22,23 @@ import sys
 
 from fastapi import FastAPI
 
-from xuwen.config import get_settings
+from xuwen.cli_i18n import SUPPORTED_LANGUAGES, cli_text
+from xuwen.config import LanguageSettings, get_settings
 from xuwen.web_ui import create_config_app
 
 
-def build_standalone_app(*, base_url: str = "http://127.0.0.1:8765") -> FastAPI:
+def build_standalone_app(
+    *, base_url: str = "http://127.0.0.1:8765", language: str | None = None
+) -> FastAPI:
     """构造独立模式 app。
 
     base_url 用于启动 banner 显示的访问地址。
     """
     settings = get_settings()
+    if language in SUPPORTED_LANGUAGES:
+        settings = settings.model_copy(update={"xuwen_language": language})
     app = FastAPI(
-        title="Afterglow 配置 UI（独立模式）",
+        title=cli_text("config.title", settings.xuwen_language),
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
@@ -44,37 +49,51 @@ def build_standalone_app(*, base_url: str = "http://127.0.0.1:8765") -> FastAPI:
 
 
 def main() -> None:
+    language: str = LanguageSettings().xuwen_language
+    for index, arg in enumerate(sys.argv[1:], 1):
+        candidate = (
+            arg.split("=", 1)[1]
+            if arg.startswith("--language=")
+            else (
+                sys.argv[index + 1] if arg == "--language" and index + 1 < len(sys.argv) else None
+            )
+        )
+        if candidate in SUPPORTED_LANGUAGES:
+            language = candidate
     parser = argparse.ArgumentParser(
         prog="python -m xuwen.web_ui",
-        description=(
-            "独立启动 Afterglow 配置 UI（不跑主 chat API）。"
-            "适合升级后改配置、或想要最小启动开销的场景。"
-        ),
+        description=cli_text("config.description", language),
+    )
+    parser.add_argument(
+        "--language",
+        choices=SUPPORTED_LANGUAGES,
+        default=language,
+        help=cli_text("language.help", language),
     )
     parser.add_argument(
         "--host",
         default="127.0.0.1",
-        help="监听地址，默认 127.0.0.1（仅本机）。生产场景请保持默认。",
+        help=cli_text("config.host", language),
     )
     parser.add_argument(
         "--port",
         type=int,
         default=8765,
-        help="监听端口，默认 8765（避开主服务的 8000）。",
+        help=cli_text("config.port", language),
     )
     args = parser.parse_args()
 
     try:
         import uvicorn
     except ImportError:
-        print("缺少 uvicorn 依赖，请运行 uv sync 安装。", file=sys.stderr)
+        print(cli_text("config.uvicorn_missing", language), file=sys.stderr)
         sys.exit(1)
 
     base_url = f"http://{args.host}:{args.port}"
 
     # 用闭包让 banner 拿到正确的 host:port
     def factory() -> FastAPI:
-        return build_standalone_app(base_url=base_url)
+        return build_standalone_app(base_url=base_url, language=args.language)
 
     uvicorn.run(
         factory,

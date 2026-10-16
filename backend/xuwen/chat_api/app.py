@@ -37,6 +37,7 @@ from xuwen.companion.proactive import ProactiveEngine
 from xuwen.companion.proactive_context import ProactiveContextCache
 from xuwen.companion.relationship import RelationshipMemoryManager
 from xuwen.config import Settings, get_settings
+from xuwen.content_i18n import content_text
 from xuwen.core.metrics import MetricsRecorder
 from xuwen.core.update_check import UpdateChecker
 from xuwen.ingestion.embedder import EmbeddingClient
@@ -45,6 +46,7 @@ from xuwen.memory.reranker import QueryRewriter, SemanticReranker
 from xuwen.memory.retriever import HybridRetriever
 from xuwen.memory.store import MemoryStore
 from xuwen.memory.writer import WritebackQueue
+from xuwen.prompt_language import language_scope
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -55,7 +57,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     resolved_settings = settings or get_settings()
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         store = MemoryStore(resolved_settings)
         await store.connect()
         store.ensure_tables()
@@ -109,10 +111,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             query_rewriter = QueryRewriter(resolved_settings, query_rewrite_llm)
 
         semantic_reranker = None
-        if (
-            resolved_settings.rerank_enabled
-            and resolved_settings.rerank_mode != "never"
-        ):
+        if resolved_settings.rerank_enabled and resolved_settings.rerank_mode != "never":
             rerank_llm = LLMClient(
                 resolved_settings,
                 api_url=resolved_settings.resolved_rerank_api_url,
@@ -134,7 +133,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 import logging as _logging
 
                 _logging.getLogger(__name__).warning(
-                    "CROSS_RERANK_ENABLED=true 但 URL/KEY/MODEL 未配齐，已忽略 cross-encoder 粗排"
+                    content_text(
+                        "CROSS_RERANK_ENABLED=true, but URL/KEY/MODEL are incomplete; skipping cross-encoder reranking"
+                    )
                 )
             else:
                 cross_reranker = CrossReranker(resolved_settings)
@@ -159,9 +160,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         proactive = ProactiveEngine(resolved_settings, store=store)
         proactive_context_cache = ProactiveContextCache(resolved_settings)
         web_search = (
-            WebSearchClient(resolved_settings)
-            if resolved_settings.web_access_enabled
-            else None
+            WebSearchClient(resolved_settings) if resolved_settings.web_access_enabled else None
         )
         web_fetch = (
             WebFetchClient(resolved_settings)
@@ -237,6 +236,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 await web_search.aclose()
             if web_fetch is not None:
                 await web_fetch.aclose()
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        # Startup work and spawned background tasks inherit the configured language.
+        with language_scope(resolved_settings.xuwen_language):
+            async with _lifespan(app):
+                yield
 
     app = FastAPI(
         title=resolved_settings.app_name,

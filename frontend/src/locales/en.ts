@@ -80,6 +80,7 @@ const en = {
     connectionError: 'Cannot connect to backend: {value}', operationError: 'Operation failed: {value}', checkFailed: 'Check failed: {value}',
     newVersion: 'New version found: {value}', latest: 'Already up to date', checkComplete: 'Check complete', checkError: 'Check error: {value}', notChecked: 'Not checked yet',
   },
+  errors: { loadFailed: 'Could not load this view', operationFailed: 'The operation failed', fileReadFailed: 'Could not read the selected file', debugRequestFailed: 'The diagnostics request failed' },
   remaining: {
     "hmm": "Hmm",
     "letThemStartATopic": "Let them start a topic",

@@ -24,6 +24,7 @@ from typing import Any
 from xuwen.config import Settings
 from xuwen.core.errors import ParseError
 from xuwen.core.models import MessageKind, NormalizedMessage, SenderRole
+from xuwen.error_i18n import error_text
 from xuwen.ingestion.plugins import (
     ImportIdentityCandidate,
     ImportImageRef,
@@ -60,9 +61,9 @@ class QQExporterV5Plugin:
     ) -> list[NormalizedMessage]:
         canonical = _canonical_payload(payload)
         if canonical is None:
-            raise ParseError("JSONL 不符合 QQChatExporter 消息格式")
+            raise ParseError(error_text("JSONL does not match the QQChatExporter message format"))
         if "messages" not in canonical or not isinstance(canonical["messages"], list):
-            raise ParseError("payload 中缺少 messages 数组")
+            raise ParseError(error_text("The payload is missing the messages array"))
 
         messages: list[NormalizedMessage] = []
         for idx, raw in enumerate(canonical["messages"]):
@@ -84,7 +85,9 @@ class QQExporterV5Plugin:
         source_is_jsonl = jsonl_records(payload) is not None
         canonical = _canonical_payload(payload)
         if canonical is None:
-            return ImportInspection("unknown", [], 0, "无法识别 QQChatExporter 格式")
+            return ImportInspection(
+                "unknown", [], 0, error_text("Cannot recognize the QQChatExporter format")
+            )
         info = canonical.get("chatInfo")
         info = info if isinstance(info, dict) else {}
         self_uid = str(info.get("selfUid") or "")
@@ -142,10 +145,16 @@ class QQExporterV5Plugin:
                 continue
             candidates: list[str] = []
             for resource in content.get("resources") or []:
-                if isinstance(resource, dict) and str(resource.get("type") or "").lower() == "image":
+                if (
+                    isinstance(resource, dict)
+                    and str(resource.get("type") or "").lower() == "image"
+                ):
                     candidates.append(_resource_path(resource))
             for element in content.get("elements") or []:
-                if not isinstance(element, dict) or str(element.get("type") or "").lower() != "image":
+                if (
+                    not isinstance(element, dict)
+                    or str(element.get("type") or "").lower() != "image"
+                ):
                     continue
                 data = element.get("data")
                 if isinstance(data, dict):

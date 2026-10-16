@@ -21,7 +21,7 @@ async function refresh() {
     stats.value = s
     config.value = c
   } catch (e) {
-    errorMsg.value = (e as Error).message
+    errorMsg.value = `${t('errors.debugRequestFailed')}: ${(e as Error).message}`
   } finally {
     loading.value = false
   }
@@ -33,7 +33,7 @@ async function clearMetrics() {
     await resetMetrics()
     await refresh()
   } catch (e) {
-    errorMsg.value = (e as Error).message
+    errorMsg.value = `${t('errors.operationFailed')}: ${(e as Error).message}`
   }
 }
 

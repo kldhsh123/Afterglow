@@ -18,8 +18,11 @@ from tenacity import (
 )
 
 from xuwen.config import Settings
+from xuwen.content_i18n import content_text
 from xuwen.core.errors import XuwenError
+from xuwen.error_i18n import error_text
 from xuwen.ingestion.embedder import _resolve_endpoint
+from xuwen.prompt_language import structured_output_instruction
 
 logger = logging.getLogger(__name__)
 
@@ -78,8 +81,8 @@ class VisionClient:
             try:
                 desc = await self._describe_one(url)
             except VisionError as e:
-                logger.warning("VLM 描述失败：%s", e.message)
-                desc = "[图片：识别失败]"
+                logger.warning(content_text("VLM description failed: %s"), e.message)
+                desc = content_text("[Image: recognition failed]")
             out.append(desc)
         return out
 
@@ -94,7 +97,12 @@ class VisionClient:
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": self.settings.vision_describe_prompt},
+                        {
+                            "type": "text",
+                            "text": self.settings.vision_describe_prompt
+                            + "\n"
+                            + structured_output_instruction(),
+                        },
                         {"type": "image_url", "image_url": {"url": data_url}},
                     ],
                 }
@@ -114,38 +122,43 @@ class VisionClient:
         ):
             with attempt:
                 return await self._call_once(payload)
-        raise VisionError("VLM 重试退出（不应到达）")
+        raise VisionError(error_text("The VLM retry loop exited unexpectedly"))
 
     async def _call_once(self, payload: dict[str, object]) -> str:
         try:
             resp = await self._client.post(self._url, headers=self._headers, json=payload)
         except httpx.HTTPError as e:
             raise _RetryableVisionError(
-                f"VLM 网络错误：{type(e).__name__}"
+                error_text("VLM network error: {p0}", p0=type(e).__name__)
             ) from e
 
         if resp.status_code in (429,) or 500 <= resp.status_code < 600:
-            logger.warning("VLM 上游 %d: %s", resp.status_code, resp.text[:500])
+            logger.warning(content_text("VLM provider %d: %s"), resp.status_code, resp.text[:500])
             raise _RetryableVisionError(
-                f"VLM 暂时不可用（HTTP {resp.status_code}）",
+                error_text("The VLM is temporarily unavailable (HTTP {p0})", p0=resp.status_code),
                 detail={"status": resp.status_code},
             )
         if resp.status_code >= 400:
-            logger.error("VLM 上游 %d: %s", resp.status_code, resp.text[:500])
+            logger.error(content_text("VLM provider %d: %s"), resp.status_code, resp.text[:500])
             raise VisionError(
-                f"VLM 客户端错误（HTTP {resp.status_code}），请检查 VISION_API_KEY / VISION_MODEL（详情见日志）",
+                error_text(
+                    "VLM client error (HTTP {p0}). Check VISION_API_KEY / VISION_MODEL; see the logs for details",
+                    p0=resp.status_code,
+                ),
                 detail={"status": resp.status_code},
             )
 
         try:
             data = resp.json()
         except ValueError as e:
-            raise VisionError("VLM 返回非 JSON 响应") from e
+            raise VisionError(error_text("The VLM returned a non-JSON response")) from e
 
         try:
             content = data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as e:
-            raise VisionError("VLM 响应缺少 choices[0].message.content") from e
+            raise VisionError(
+                error_text("The VLM response is missing choices[0].message.content")
+            ) from e
 
         # 兼容部分 VLM（如 Qwen-VL）会返回 content 是 list[{type:text,text:...}] 的情况
         if isinstance(content, list):
@@ -155,4 +168,4 @@ class VisionClient:
                     text_parts.append(part["text"])
             content = "".join(text_parts)
 
-        return str(content or "").strip() or "[图片：无描述]"
+        return str(content or "").strip() or content_text("[Image: no description]")

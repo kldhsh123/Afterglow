@@ -26,6 +26,7 @@ from typing import Any
 from xuwen.chat_api.llm_client import GenerationParams, LLMClient
 from xuwen.chat_api.schemas import ScheduleTask
 from xuwen.config import Settings
+from xuwen.content_i18n import content_text
 from xuwen.core.metrics import MetricsRecorder
 
 logger = logging.getLogger(__name__)
@@ -43,52 +44,31 @@ _RRULE_FREQ_VALUES = frozenset(
     {"SECONDLY", "MINUTELY", "HOURLY", "DAILY", "WEEKLY", "MONTHLY", "YEARLY"}
 )
 
-_SYSTEM_PROMPT = """你是一个把中文自然语言时间表达【转换为结构化 JSON】的提取器。
-只输出 JSON，不要任何解释、Markdown、代码块标记。
+_SYSTEM_PROMPT = (
+    "Extract a scheduling request in ANY language into a single JSON object. Output JSON only, "
+    "with no explanation, Markdown or code fences.\nUse the supplied now (with timezone) as the "
+    "sole time reference, never your training date.\nFields:\n- trigger_at: absolute ISO 8601 "
+    "timestamp WITH timezone, e.g. 2026-06-01T07:00:00+08:00. For recurring tasks this is the "
+    "FIRST future occurrence.\n- recurrence: an iCalendar RRULE string, or null for a one-off "
+    "task. Daily: FREQ=DAILY; Monday: FREQ=WEEKLY;BYDAY=MO; weekdays: "
+    "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR; first of each month: FREQ=MONTHLY;BYMONTHDAY=1.\n- message:"
+    " short (at most 80 characters), warm, natural text to send AT trigger_at. Use the request's "
+    "language. At delivery the requested time has arrived: do not repeat relative or absolute "
+    "timing such as tomorrow, next week, at 7 or in 5 minutes. Example: 'Wake up, time to get "
+    "going!' rather than 'Tomorrow at 7, wake up'. For a water reminder: 'Time for some water!' "
+    "rather than 'It is 9 now'.\n- title: optional short title, at most 12 characters, in the "
+    "request's language.\nRecurring words (every day/week/month, weekdays/weekends) require "
+    "recurrence. One-off expressions (tomorrow, next Monday, in 5 minutes, 17:00) require "
+    'recurrence=null.\nIf the time cannot be resolved, return {"unparseable": true}. Preserve the '
+    "user's task meaning without inventing details."
+)
 
-字段约束：
-- trigger_at: ISO 8601 含时区，例如 "2026-06-01T07:00:00+08:00"。必须是【绝对】时间；
-  重复任务时表示"首次触发时间"。
-- recurrence: iCalendar RRULE 字符串。一次性任务必须为 null。
-  常用：每天 "FREQ=DAILY"；每周一 "FREQ=WEEKLY;BYDAY=MO"；
-  工作日 "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"；每月 1 号 "FREQ=MONTHLY;BYMONTHDAY=1"。
-- message: 【到达 trigger_at 那一刻】要发送给用户的文本（不超过 80 字，温和自然）。
-  ⚠️ 关键：发送时已经到了 trigger_at，**不要**在 message 里写"明天/后天/下周/X点/还有N分钟"
-  等相对或绝对时间词——时间信息已经在 trigger_at 字段里。message 应像消息已经送达那一刻
-  自然说出来，不需要再解释为什么现在发。
-- title: 简短标题（可选，<= 12 字）。
-
-判断规则：
-- 用户说"每天 / 每周 / 每月 / 工作日 / 周末"等周期词 → 有 recurrence
-- 用户只说"明天 / 后天 / 下周一 / 5 分钟后 / 17:00" 等一次性时间 → recurrence = null
-- 无法解析时间 → 输出 {"unparseable": true}
-
-message 措辞示例（注意时间词的处理）：
-  hint="明天早上7点叫我起床"
-    ✅ {"trigger_at":"<明天07:00>","message":"起床啦～该出门了","title":"晨起"}
-    ❌ {"trigger_at":"<明天07:00>","message":"明天早上7点了，起床啦"}   ← "明天早上7点"在送达时已失效
-
-  hint="每天9点提醒我喝水"
-    ✅ {"trigger_at":"<明天09:00>","recurrence":"FREQ=DAILY;BYHOUR=9;BYMINUTE=0","message":"喝水啦～"}
-    ❌ {"trigger_at":"...","message":"现在是9点，记得喝水"}             ← "现在是9点"是赘述
-
-  hint="下午3点提醒我开会"
-    ✅ {"trigger_at":"<今日15:00>","message":"该开会了，准备一下吧"}
-    ❌ {"trigger_at":"...","message":"3点了，该开会了"}                  ← 去掉时间词更自然
-
-时间换算基准会作为 "now" 给你；不要使用你训练里的时间。"""
-
-_USER_TEMPLATE = """now: {now_iso}
-hint: {hint}
-
-只输出符合下面 schema 的 JSON：
-{{
-  "trigger_at": "ISO 8601 with timezone",
-  "recurrence": "RRULE string or null",
-  "message": "短文本",
-  "title": "可选短标题"
-}}
-解析失败请输出：{{"unparseable": true}}"""
+_USER_TEMPLATE = (
+    'now: {now_iso}\nhint: {hint}\n\nReturn only JSON matching this schema:\n{{"trigger_at":"ISO 8601'
+    ' with timezone","recurrence":null,"message":"short text in the request\'s '
+    'language","title":"optional short title"}}\nUse an RRULE string instead of null for recurring'
+    ' tasks. If unparseable: {{"unparseable": true}}'
+)
 
 
 def _stable_id(trigger_at: str, recurrence: str | None, message: str) -> str:
@@ -237,7 +217,7 @@ async def _extract_one(
             metrics=metrics,
         )
     except Exception:
-        logger.warning("schedule_extractor 调用失败", exc_info=True)
+        logger.warning(content_text("schedule_extractor call failed"), exc_info=True)
         return None
     payload = _parse_extractor_output(raw)
     if not payload:
@@ -295,11 +275,14 @@ async def extract_schedule_tasks(
         )
     except TimeoutError:
         logger.warning(
-            "schedule_extractor 超时（%.1fs），fail-open 返回空列表", timeout
+            content_text(
+                "schedule_extractor timed out after %.1fs; continuing with an empty task list"
+            ),
+            timeout,
         )
         return []
     except Exception:
-        logger.warning("schedule_extractor gather 失败", exc_info=True)
+        logger.warning(content_text("schedule_extractor gather failed"), exc_info=True)
         return []
     tasks: list[ScheduleTask] = []
     for r in results:

@@ -40,3 +40,4 @@ backend/scripts/diag_rerank.py
 backend/scripts/test_proactive_poll.py
 /wiki
 backend/.env COPY1
+/.data

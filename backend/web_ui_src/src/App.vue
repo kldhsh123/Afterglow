@@ -34,6 +34,7 @@ const tokenChecking = ref(false)
 
 // ---- 表单 ----
 const form = reactive({
+  XUWEN_LANGUAGE: 'en',
   SELF_NAME: '',
   SELF_UID: '',
   FRIEND_NAME: '',
@@ -712,6 +713,7 @@ async function saveConfig(opts: { silent?: boolean } = {}): Promise<boolean> {
     const putStr = (k: string, v: string) => { if (v && v.trim()) values[k] = v }
     const putBool = (k: string, v: boolean) => { values[k] = v ? 'true' : 'false' }
 
+    if (existingValuesLoaded.value) putStr('XUWEN_LANGUAGE', form.XUWEN_LANGUAGE)
     putStr('SELF_NAME', form.SELF_NAME)
     putStr('SELF_UID', form.SELF_UID)
     putStr('FRIEND_NAME', form.FRIEND_NAME)
@@ -1311,6 +1313,15 @@ onMounted(async () => {
 
           <!-- 第 2 步：关系 -->
           <div v-else-if="step === 2" class="space-y-5">
+            <label class="block">
+              <span class="text-sm">{{ t('backendLanguage') }}</span>
+              <select v-model="form.XUWEN_LANGUAGE"
+                class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg border border-ink/10 dark:border-night-text/10">
+                <option value="en">{{ t('english') }}</option>
+                <option value="zh-CN">{{ t('chinese') }}</option>
+              </select>
+              <span class="mt-1 block text-xs text-ink-soft dark:text-night-text-soft">{{ t('backendLanguageHelp') }}</span>
+            </label>
             <div>
               <h2 class="text-lg font-medium">{{ t('yourRelationship') }}</h2>
               <p class="mt-1 text-sm text-ink-soft dark:text-night-text-soft">{{ t('usedToSelectASuitableToneTemplate') }}</p>

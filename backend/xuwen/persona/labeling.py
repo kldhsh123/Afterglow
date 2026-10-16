@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from xuwen.config import Settings
+from xuwen.content_i18n import content_text
 from xuwen.memory.schema import TABLE_FRIEND_MESSAGES
 from xuwen.memory.store import MemoryStore
 from xuwen.persona.labeler import ChunkLabel, Labeler
@@ -77,10 +78,7 @@ async def label_all_unlabeled(
         batch_size = max(1, settings.label_batch_size)
         max_concurrency = max(1, settings.label_max_concurrency)
         request_interval = max(0.0, settings.label_request_interval_seconds)
-        batches_to_run = [
-            pending[i : i + batch_size]
-            for i in range(0, total, batch_size)
-        ]
+        batches_to_run = [pending[i : i + batch_size] for i in range(0, total, batch_size)]
         semaphore = asyncio.Semaphore(max_concurrency)
         rate_lock = asyncio.Lock()
         next_request_at = 0.0
@@ -120,7 +118,7 @@ async def label_all_unlabeled(
                 try:
                     labels = await labeler.label_messages(texts)
                 except Exception as e:  # 极端失败兜底
-                    logger.warning("打标批次异常：%s", type(e).__name__)
+                    logger.warning(content_text("Labeling batch error: %s"), type(e).__name__)
                     return _BatchResult(
                         rows=batch,
                         labels=[None] * len(batch),

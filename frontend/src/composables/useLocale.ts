@@ -14,6 +14,10 @@ type TextKey = Paths<typeof zhCN, string>
 type ListKey = Paths<typeof zhCN, readonly string[]>
 
 const LOCALE_STORAGE_KEY = 'afterglow.locale'
+const FALLBACK_TEXT: Record<Locale, string> = {
+  'zh-CN': '文案暂缺',
+  en: 'Text unavailable',
+}
 
 function detectLocale(): Locale {
   if (typeof navigator === 'undefined') return 'en'
@@ -39,7 +43,7 @@ function getValue(source: unknown, path: string): unknown {
 export function useLocale() {
   const isChinese = computed(() => currentLocale.value === 'zh-CN')
   function t(path: TextKey, params: Record<string, string | number> = {}) {
-    const value = getValue(messages[currentLocale.value], path) ?? getValue(messages.en, path) ?? path
+    const value = getValue(messages[currentLocale.value], path) ?? getValue(messages.en, path) ?? FALLBACK_TEXT[currentLocale.value]
     return String(value).replace(/\{(\w+)\}/g, (_, key: string) => String(params[key] ?? `{${key}}`))
   }
   function list(path: ListKey): string[] {

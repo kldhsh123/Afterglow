@@ -13,6 +13,8 @@ from typing import Any, Literal
 
 import httpx
 
+from xuwen.error_i18n import error_text
+
 
 @dataclass
 class TestResult:
@@ -29,15 +31,23 @@ def _explain_http_error(status: int, body_text: str) -> str:
     """把 HTTP 错误翻译成小白能看懂的中文。"""
     snippet = body_text[:200].replace("\n", " ")
     if status == 401:
-        return "密钥无效或已过期。请确认从服务商网站复制的密钥完整、未泄漏。"
+        return error_text(
+            "The API key is invalid or expired. Check that you copied the complete key from your provider and that it has not been compromised."
+        )
     if status == 403:
-        return "服务商拒绝了请求。常见原因：账户余额不足、未启用 API、IP 未授权。"
+        return error_text(
+            "The provider rejected the request. Check your account balance, API access and IP permissions."
+        )
     if status == 404:
-        return "接口路径找不到。请检查接口地址是否正确（不要包含 /chat/completions 这种后缀）。"
+        return error_text(
+            "The endpoint was not found. Check the API URL; leave off endpoint suffixes such as /chat/completions."
+        )
     if status == 429:
-        return "服务商限流了。请稍后再试，或降低并发设置。"
+        return error_text(
+            "The provider rate limited the request. Try again later or reduce concurrency."
+        )
     if 500 <= status < 600:
-        return f"服务商内部错误（HTTP {status}）。建议稍后重试。"
+        return error_text("Provider server error (HTTP {p0}). Try again later.", p0=status)
     return f"HTTP {status}：{snippet}"
 
 
@@ -70,40 +80,61 @@ def _explain_network_error(exc: Exception) -> str:
 
     # 1) 按 httpx 异常类型判定（这些异常的 str(exc) 多为空，不能依赖文本）
     if isinstance(exc, httpx.TimeoutException):
-        return "连接超时。请检查网络、是否需要代理、接口地址是否正确。"
+        return error_text(
+            "The connection timed out. Check your network, proxy requirements and API URL."
+        )
     if isinstance(exc, httpx.ProxyError):
-        return "代理连接失败。请检查代理设置（HTTP_PROXY/HTTPS_PROXY）或关闭代理后重试。"
+        return error_text(
+            "The proxy connection failed. Check HTTP_PROXY/HTTPS_PROXY or retry with the proxy disabled."
+        )
     if isinstance(exc, httpx.ConnectError):
         # ConnectError 会聚合 DNS / 拒绝连接 / SSL 握手等底层原因，能拿到文本就细化
         if "ssl" in text or "certificate" in text:
-            return "SSL/TLS 错误。如果使用本地服务（http://127.0.0.1）请确认协议是 http 而非 https。"
+            return error_text(
+                "SSL/TLS error. For a local service (http://127.0.0.1), check whether the URL should use http instead of https."
+            )
         if (
             "name or service not known" in text
             or "nodename nor servname" in text
             or "temporary failure in name resolution" in text
             or "getaddrinfo" in text
         ):
-            return "域名解析失败。请确认接口地址拼写正确且能访问外网。"
+            return error_text(
+                "DNS lookup failed. Check the API hostname and your internet connection."
+            )
         if "connection refused" in text or "[errno 111]" in text:
-            return "服务拒绝连接。如果是本地服务（如 Ollama），请确认服务已启动。"
-        return f"无法连接到服务（{name}）。请检查接口地址、网络或代理设置。"
+            return error_text(
+                "The service refused the connection. For a local service such as Ollama, check that it is running."
+            )
+        return error_text(
+            "Cannot connect to the service ({p0}). Check the API URL, network and proxy settings.",
+            p0=name,
+        )
     if isinstance(exc, httpx.RemoteProtocolError):
-        return "服务端异常断开连接。请稍后重试，或确认接口地址与协议是否正确。"
+        return error_text(
+            "The server closed the connection unexpectedly. Retry or check the API URL and protocol."
+        )
 
     # 2) 文本兜底：兼容非 httpx 异常，按原有关键词给中文
     if "timeout" in text or "timed out" in text:
-        return "连接超时。请检查网络、是否需要代理、接口地址是否正确。"
+        return error_text(
+            "The connection timed out. Check your network, proxy requirements and API URL."
+        )
     if "ssl" in text:
-        return "SSL/TLS 错误。如果使用本地服务（http://127.0.0.1）请确认协议是 http 而非 https。"
+        return error_text(
+            "SSL/TLS error. For a local service (http://127.0.0.1), check whether the URL should use http instead of https."
+        )
     if "name or service not known" in text or "nodename nor servname" in text:
-        return "域名解析失败。请确认接口地址拼写正确且能访问外网。"
+        return error_text("DNS lookup failed. Check the API hostname and your internet connection.")
     if "connection refused" in text:
-        return "服务拒绝连接。如果是本地服务（如 Ollama），请确认服务已启动。"
+        return error_text(
+            "The service refused the connection. For a local service such as Ollama, check that it is running."
+        )
 
     # 3) 最终兜底——永不为空，带上异常类名与可得原因
     if isinstance(exc, httpx.TransportError):
-        return f"网络传输错误（{name}）：{_describe_exc(exc)}"
-    return f"网络错误（{name}）：{_describe_exc(exc)}"
+        return error_text("Network transport error ({p0}): {p1}", p0=name, p1=_describe_exc(exc))
+    return error_text("Network error ({p0}): {p1}", p0=name, p1=_describe_exc(exc))
 
 
 async def test_openai_chat(
@@ -114,11 +145,11 @@ async def test_openai_chat(
 ) -> TestResult:
     """按所选协议对主模型发一次最短请求。"""
     if not base_url:
-        return TestResult(ok=False, message="未填写接口地址")
+        return TestResult(ok=False, message=error_text("Enter an API URL"))
     if not api_key:
-        return TestResult(ok=False, message="未填写密钥")
+        return TestResult(ok=False, message=error_text("Enter an API key"))
     if not model:
-        return TestResult(ok=False, message="未填写模型名")
+        return TestResult(ok=False, message=error_text("Enter a model name"))
 
     root = base_url.rstrip("/")
     for suffix in ("/chat/completions", "/responses"):
@@ -158,9 +189,31 @@ async def test_openai_chat(
             message=_explain_http_error(resp.status_code, resp.text),
             detail=resp.text[:1000],
         )
+    try:
+        data = resp.json()
+    except ValueError:
+        return TestResult(
+            ok=False,
+            message=error_text(
+                "The service returned an invalid chat response. Check the API URL and protocol."
+            ),
+            detail=resp.text[:1000],
+        )
+    if protocol == "responses":
+        valid_response = isinstance(data, dict) and isinstance(data.get("output"), list)
+    else:
+        valid_response = isinstance(data, dict) and isinstance(data.get("choices"), list)
+    if not valid_response:
+        return TestResult(
+            ok=False,
+            message=error_text(
+                "The service returned an invalid chat response. Check the API URL and protocol."
+            ),
+            detail=resp.text[:1000],
+        )
     return TestResult(
         ok=True,
-        message=f"连接成功，模型 {model} 可用",
+        message=error_text("Connected successfully. Model {p0} is available.", p0=model),
         extra={"status": resp.status_code},
     )
 
@@ -178,16 +231,16 @@ async def test_embedding(
     会校验返回向量的维度是否与用户填写的 EMBEDDING_DIM 一致；不一致给出明确指引。
     """
     if not base_url:
-        return TestResult(ok=False, message="未填写接口地址")
+        return TestResult(ok=False, message=error_text("Enter an API URL"))
     if not api_key:
-        return TestResult(ok=False, message="未填写密钥")
+        return TestResult(ok=False, message=error_text("Enter an API key"))
     if not model:
-        return TestResult(ok=False, message="未填写模型名")
+        return TestResult(ok=False, message=error_text("Enter a model name"))
 
     url = base_url.rstrip("/") + "/embeddings"
     payload: dict[str, Any] = {
         "model": model,
-        "input": "测试" if input_mode == "single" else ["测试"],
+        "input": error_text("ping") if input_mode == "single" else [error_text("ping")],
     }
     if send_dimensions and dim:
         payload["dimensions"] = dim
@@ -205,7 +258,9 @@ async def test_embedding(
         msg = _explain_http_error(resp.status_code, resp.text)
         # 针对"格式不匹配"的额外友好提示
         if resp.status_code == 400 and "schema" in resp.text.lower():
-            msg += "（提示：可尝试把'高级 → EMBEDDING_INPUT_MODE'改为 single，或关闭 encoding_format）"
+            msg += error_text(
+                " (Hint: try setting EMBEDDING_INPUT_MODE to single or disabling encoding_format.)"
+            )
         return TestResult(ok=False, message=msg, detail=resp.text[:1000])
 
     try:
@@ -215,20 +270,25 @@ async def test_embedding(
     except Exception:
         return TestResult(
             ok=False,
-            message="返回内容不是合法的 embedding 响应",
+            message=error_text("The service returned an invalid embedding response."),
             detail=resp.text[:500],
         )
     if dim and got_dim and got_dim != dim:
         return TestResult(
             ok=False,
             message=(
-                f"维度不匹配：你填的是 {dim}，但服务商返回 {got_dim}。"
-                f"请把'向量维度'改为 {got_dim}，或换一个支持 {dim} 维的模型。"
+                error_text(
+                    "Dimension mismatch: you entered {p0}, but the provider returned {p1}. Set vector dimensions to {p2} or choose a model supporting {p3} dimensions.",
+                    p0=dim,
+                    p1=got_dim,
+                    p2=got_dim,
+                    p3=dim,
+                )
             ),
             extra={"actual_dim": got_dim, "expected_dim": dim},
         )
     return TestResult(
         ok=True,
-        message=f"连接成功，向量维度 {got_dim}",
+        message=error_text("Connected successfully. Vector dimensions: {p0}.", p0=got_dim),
         extra={"actual_dim": got_dim},
     )

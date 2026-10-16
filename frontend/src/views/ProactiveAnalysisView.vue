@@ -59,7 +59,7 @@ async function load() {
   try {
     report.value = await fetchProactiveAnalysis()
   } catch (reason) {
-    error.value = (reason as Error).message
+    error.value = `${t('errors.loadFailed')}: ${(reason as Error).message}`
   } finally {
     loading.value = false
   }

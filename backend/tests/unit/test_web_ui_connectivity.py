@@ -10,8 +10,13 @@ from __future__ import annotations
 
 import httpx
 import pytest
+import respx
 
-from xuwen.web_ui.connectivity import _describe_exc, _explain_network_error
+from xuwen.web_ui.connectivity import (
+    _describe_exc,
+    _explain_network_error,
+    test_openai_chat as _test_openai_chat,
+)
 
 # 这些异常的 str() 在实践中常为空——正是 issue #10 的触发场景
 _EMPTY_STR_NETWORK_ERRORS = [
@@ -86,3 +91,39 @@ def test_describe_exc_uses_cause_when_str_empty() -> None:
             raise httpx.ConnectError("") from root
     except httpx.ConnectError as exc:
         assert "底层网络原因" in _describe_exc(exc)
+
+
+@pytest.mark.asyncio
+async def test_chat_rejects_html_success_response() -> None:
+    """A provider homepage must not count as a successful API connectivity test."""
+    with respx.mock(base_url="https://provider.test/v1") as router:
+        router.post("/chat/completions").mock(
+            return_value=httpx.Response(200, text="<!doctype html><html></html>")
+        )
+        result = await _test_openai_chat(
+            "https://provider.test/v1", "sk-test", "test-model"
+        )
+
+    assert result.ok is False
+    assert "合法" in result.message
+
+
+@pytest.mark.asyncio
+async def test_chat_accepts_openai_compatible_response() -> None:
+    """A normal OpenAI-compatible choices response remains successful."""
+    with respx.mock(base_url="https://provider.test/v1") as router:
+        router.post("/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-test",
+                    "object": "chat.completion",
+                    "choices": [{"index": 0, "message": {"content": "pong"}}],
+                },
+            )
+        )
+        result = await _test_openai_chat(
+            "https://provider.test/v1", "sk-test", "test-model"
+        )
+
+    assert result.ok is True

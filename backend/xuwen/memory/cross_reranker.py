@@ -19,6 +19,7 @@ from typing import Any
 import httpx
 
 from xuwen.config import Settings
+from xuwen.content_i18n import content_text
 from xuwen.core.metrics import MetricsRecorder
 from xuwen.core.models import ScoredChunk
 from xuwen.ingestion.embedder import _resolve_endpoint
@@ -93,7 +94,7 @@ class CrossReranker:
             results = await self._call(query_text, documents, top_n)
         except Exception as e:
             logger.warning(
-                "cross reranker 调用失败，使用 RRF 原顺序继续：%s",
+                content_text("Cross-reranker request failed; retaining the RRF order: %s"),
                 type(e).__name__,
             )
             if metrics is not None:
@@ -163,9 +164,7 @@ class CrossReranker:
     # 内部：协议适配
     # ------------------------------------------------------------------
 
-    async def _call(
-        self, query: str, documents: list[str], top_n: int
-    ) -> list[tuple[int, float]]:
+    async def _call(self, query: str, documents: list[str], top_n: int) -> list[tuple[int, float]]:
         if self.settings.cross_rerank_protocol == "dashscope":
             return await self._call_dashscope(query, documents, top_n)
         return await self._call_jina_style(query, documents, top_n)
@@ -246,6 +245,4 @@ def _annotate_passthrough(
 ) -> list[ScoredChunk]:
     """fail-open / 短候选场景下，给截断后的候选挂上元信息便于 debug。"""
     selected = candidates[:top_n]
-    return [
-        replace(c, metadata={**c.metadata, "cross_rerank": reason}) for c in selected
-    ]
+    return [replace(c, metadata={**c.metadata, "cross_rerank": reason}) for c in selected]

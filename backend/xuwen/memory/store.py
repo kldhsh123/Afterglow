@@ -26,6 +26,7 @@ from lancedb.db import DBConnection
 from lancedb.table import Table
 
 from xuwen.config import Settings
+from xuwen.content_i18n import content_text
 from xuwen.core.errors import StoreError
 from xuwen.core.models import (
     DialogueWindowChunk,
@@ -34,6 +35,7 @@ from xuwen.core.models import (
     ResponsePairChunk,
 )
 from xuwen.core.time import now_ms
+from xuwen.error_i18n import error_text
 from xuwen.memory.schema import (
     TABLE_DIALOGUE_WINDOWS,
     TABLE_FRIEND_MESSAGES,
@@ -185,9 +187,7 @@ class MemoryStore:
             if tbl.count_rows() > 0:
                 logger.warning(
                     "%s",
-                    _vector_dim_mismatch_message(
-                        name, table_dim, dim, self.settings.lance_db_path
-                    ),
+                    _vector_dim_mismatch_message(name, table_dim, dim, self.settings.lance_db_path),
                 )
                 continue
             # overwrite 只写入新版本，不删除表目录：drop_table 在部分本地文件系统上会阻塞。
@@ -196,7 +196,9 @@ class MemoryStore:
             self._non_vector_cols.pop(name, None)
             self._nprobes_cache.pop(name, None)
             logger.info(
-                "向量库表 %s 为空，已按 EMBEDDING_DIM=%d 重建（原维度 %d）",
+                content_text(
+                    "Empty vector table %s rebuilt with EMBEDDING_DIM=%d (previous dimension: %d)"
+                ),
                 name,
                 dim,
                 table_dim,
@@ -325,7 +327,9 @@ class MemoryStore:
         rows = self._build_friend_rows(chunks, embeddings)
         if not rows:
             return 0
-        return await self._upsert_rows(TABLE_FRIEND_MESSAGES, rows, friend_messages_schema(self.settings.embedding_dim))
+        return await self._upsert_rows(
+            TABLE_FRIEND_MESSAGES, rows, friend_messages_schema(self.settings.embedding_dim)
+        )
 
     async def upsert_window_chunks(
         self,
@@ -335,7 +339,9 @@ class MemoryStore:
         rows = self._build_window_rows(chunks, embeddings)
         if not rows:
             return 0
-        return await self._upsert_rows(TABLE_DIALOGUE_WINDOWS, rows, dialogue_windows_schema(self.settings.embedding_dim))
+        return await self._upsert_rows(
+            TABLE_DIALOGUE_WINDOWS, rows, dialogue_windows_schema(self.settings.embedding_dim)
+        )
 
     async def upsert_response_pair_chunks(
         self,
@@ -492,11 +498,7 @@ class MemoryStore:
                 id_list_sql = ", ".join(_quote_lance(i) for i in slice_ids)
                 where = f"id IN ({id_list_sql})"
                 arrow_tbl = (
-                    tbl.search()
-                    .where(where)
-                    .select(["id"])
-                    .limit(len(slice_ids))
-                    .to_arrow()
+                    tbl.search().where(where).select(["id"]).limit(len(slice_ids)).to_arrow()
                 )
                 for v in arrow_tbl["id"].to_pylist():
                     if isinstance(v, str) and v:
@@ -597,9 +599,7 @@ class MemoryStore:
                 for offset in range(0, len(prepared), batch_size):
                     chunk = prepared[offset : offset + batch_size]
                     arrow_tbl = pa.Table.from_pylist(chunk, schema=label_schema)
-                    tbl.merge_insert("id").when_matched_update_all().execute(
-                        arrow_tbl
-                    )
+                    tbl.merge_insert("id").when_matched_update_all().execute(arrow_tbl)
                     total += len(chunk)
                 self._record_db_perf("update_labels", table, start, rows=total)
                 return total
@@ -674,14 +674,16 @@ class MemoryStore:
                 .where(f"image_sha = {safe_sha} AND deleted = false")
                 .limit(max(1, limit))
             )
-            cols = [c for c in self._non_vector_columns(TABLE_HISTORY_IMAGES, tbl) if c != "_distance"]
+            cols = [
+                c for c in self._non_vector_columns(TABLE_HISTORY_IMAGES, tbl) if c != "_distance"
+            ]
             if cols:
                 query = query.select(cols)
             arrow_tbl = await asyncio.to_thread(query.to_arrow)
             rows = cast(list[dict[str, Any]], arrow_tbl.to_pylist())
             return rows
         except Exception as e:
-            logger.warning("查询 history_images by sha 失败：%s", type(e).__name__)
+            logger.warning(content_text("Cannot query history_images by sha: %s"), type(e).__name__)
             return []
 
     async def list_history_images_by_ids(self, ids: Iterable[str]) -> list[dict[str, Any]]:
@@ -693,22 +695,20 @@ class MemoryStore:
         rows: list[dict[str, Any]] = []
         _IN_BATCH = 500
         try:
-            cols = [c for c in self._non_vector_columns(TABLE_HISTORY_IMAGES, tbl) if c != "_distance"]
+            cols = [
+                c for c in self._non_vector_columns(TABLE_HISTORY_IMAGES, tbl) if c != "_distance"
+            ]
             for offset in range(0, len(ids_list), _IN_BATCH):
                 slice_ids = ids_list[offset : offset + _IN_BATCH]
                 id_list_sql = ", ".join(_quote_lance(i) for i in slice_ids)
-                query = (
-                    tbl.search()
-                    .where(f"id IN ({id_list_sql})")
-                    .limit(len(slice_ids))
-                )
+                query = tbl.search().where(f"id IN ({id_list_sql})").limit(len(slice_ids))
                 if cols:
                     query = query.select(cols)
                 arrow_tbl = await asyncio.to_thread(query.to_arrow)
                 rows.extend(cast(list[dict[str, Any]], arrow_tbl.to_pylist()))
             return rows
         except Exception as e:
-            logger.warning("批量查询 history_images by ids 失败：%s", type(e).__name__)
+            logger.warning(content_text("Cannot query history_images by ids: %s"), type(e).__name__)
             return []
 
     async def search_relationship_memories(
@@ -761,7 +761,7 @@ class MemoryStore:
             arrow_tbl = tbl.search().where(where).limit(10_000).to_arrow()
             rows = cast(list[dict[str, Any]], arrow_tbl.to_pylist())
         except Exception as e:
-            logger.warning("cleanup_ai_generated 查询失败：%s", type(e).__name__)
+            logger.warning(content_text("cleanup_ai_generated query failed: %s"), type(e).__name__)
             return 0
         count = len(rows)
         if dry_run or count == 0:
@@ -773,7 +773,9 @@ class MemoryStore:
             id_list = ", ".join(_quote_lance(i) for i in ids)
             tbl.update(where=f"id IN ({id_list})", values={"deleted": True})
         except Exception as e:
-            logger.warning("cleanup_ai_generated 软删除失败：%s", type(e).__name__)
+            logger.warning(
+                content_text("cleanup_ai_generated soft deletion failed: %s"), type(e).__name__
+            )
             return 0
         return count
 
@@ -825,11 +827,7 @@ class MemoryStore:
                 for col in self._non_vector_columns(TABLE_DIALOGUE_WINDOWS, tbl)
                 if col != "_distance"
             ]
-            query = (
-                tbl.search()
-                .where("deleted = false")
-                .limit(max(1, limit))
-            )
+            query = tbl.search().where("deleted = false").limit(max(1, limit))
             if cols:
                 query = query.select(cols)
             arrow_tbl = await asyncio.to_thread(query.to_arrow)
@@ -903,8 +901,7 @@ class MemoryStore:
         return {
             "recent": [_db_record_to_dict(r) for r in records[-30:]],
             "by_operation": {
-                key: _db_stats_to_dict(_db_stats(value))
-                for key, value in sorted(grouped.items())
+                key: _db_stats_to_dict(_db_stats(value)) for key, value in sorted(grouped.items())
             },
             "slowest": [
                 _db_record_to_dict(r)
@@ -918,7 +915,11 @@ class MemoryStore:
 
     def _require_db(self) -> DBConnection:
         if self._db is None:
-            raise StoreError("MemoryStore 尚未 connect()，无法访问数据库")
+            raise StoreError(
+                error_text(
+                    "MemoryStore is not connected. Call connect() before accessing the database"
+                )
+            )
         return self._db
 
     def _table(self, name: str) -> Table:
@@ -962,7 +963,9 @@ class MemoryStore:
         except FileNotFoundError:
             return 0
         except Exception as e:
-            logger.warning("无法统计表 %s 的行数：%s", name, type(e).__name__)
+            logger.warning(
+                content_text("Cannot count rows in table %s: %s"), name, type(e).__name__
+            )
             return 0
 
     def _vector_search(
@@ -1041,7 +1044,9 @@ class MemoryStore:
                 for offset in range(0, len(rows), batch_size):
                     chunk = rows[offset : offset + batch_size]
                     arrow_tbl = pa.Table.from_pylist(chunk, schema=schema)
-                    tbl.merge_insert("id").when_matched_update_all().when_not_matched_insert_all().execute(arrow_tbl)
+                    tbl.merge_insert(
+                        "id"
+                    ).when_matched_update_all().when_not_matched_insert_all().execute(arrow_tbl)
                     total += len(chunk)
                 self._record_db_perf("upsert", table, start, rows=total)
                 return total
@@ -1091,7 +1096,7 @@ class MemoryStore:
         for c in chunks:
             vec = embeddings.get(c.chunk_id)
             if vec is None:
-                raise StoreError(f"chunk {c.chunk_id} 缺少向量")
+                raise StoreError(error_text("Chunk {p0} has no vector", p0=c.chunk_id))
             self._check_dim(vec)
             rows.append(
                 {
@@ -1129,7 +1134,7 @@ class MemoryStore:
         for c in chunks:
             vec = embeddings.get(c.chunk_id)
             if vec is None:
-                raise StoreError(f"chunk {c.chunk_id} 缺少向量")
+                raise StoreError(error_text("Chunk {p0} has no vector", p0=c.chunk_id))
             self._check_dim(vec)
             rows.append(
                 {
@@ -1163,7 +1168,7 @@ class MemoryStore:
         for c in chunks:
             vec = embeddings.get(c.chunk_id)
             if vec is None:
-                raise StoreError(f"response pair {c.chunk_id} 缺少向量")
+                raise StoreError(error_text("Response pair {p0} has no vector", p0=c.chunk_id))
             self._check_dim(vec)
             rows.append(
                 {
@@ -1199,7 +1204,7 @@ class MemoryStore:
         for c in chunks:
             vec = embeddings.get(c.chunk_id)
             if vec is None:
-                raise StoreError(f"history image {c.chunk_id} 缺少向量")
+                raise StoreError(error_text("History image {p0} has no vector", p0=c.chunk_id))
             self._check_dim(vec)
             rows.append(
                 {
@@ -1233,7 +1238,11 @@ class MemoryStore:
     def _check_dim(self, vec: list[float]) -> None:
         if len(vec) != self.settings.embedding_dim:
             raise StoreError(
-                f"向量维度不匹配：期望 {self.settings.embedding_dim}，实际 {len(vec)}"
+                error_text(
+                    "Vector dimension mismatch: expected {p0}, received {p1}",
+                    p0=self.settings.embedding_dim,
+                    p1=len(vec),
+                )
             )
 
     def _ensure_table_vector_dim(self, name: str, tbl: Table) -> None:
@@ -1264,11 +1273,15 @@ def _vector_dim_mismatch_message(
     expected_dim: int,
     db_path: Path,
 ) -> str:
-    return (
-        f"向量库表 {table} 的向量维度是 {table_dim}，与当前 EMBEDDING_DIM={expected_dim} 不一致。"
-        "通常是更换了 Embedding 模型或向量维度，而向量库仍是按旧维度建的表；"
-        "不同模型的向量不能混用。请改回原来的 Embedding 模型和 EMBEDDING_DIM；"
-        f"或者先停止后端，备份并删除向量库目录（{db_path}），再启动并重新导入。"
+    return error_text(
+        "Vector table {table} has {actual} dimensions, but EMBEDDING_DIM={expected}. "
+        "This usually means the embedding model or dimension changed while the database still uses the old schema. "
+        "Vectors from different models cannot be mixed. Restore the original embedding model and EMBEDDING_DIM; "
+        "or stop the backend, back up and remove the vector database directory ({path}), then restart and reimport.",
+        table=table,
+        actual=table_dim,
+        expected=expected_dim,
+        path=db_path,
     )
 
 

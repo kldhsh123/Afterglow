@@ -54,9 +54,7 @@ class RelationshipMemoryManager:
 
     def load_markdown(self) -> str:
         text = self._read_markdown_raw()
-        return "\n".join(
-            line for line in text.splitlines() if "(note," not in line
-        ).strip()
+        return "\n".join(line for line in text.splitlines() if "(note," not in line).strip()
 
     async def relevant_memories(
         self,
@@ -120,9 +118,9 @@ class RelationshipMemoryManager:
                 "relationship.markdown.read",
                 (time.perf_counter() - markdown_start) * 1000,
                 detail=f"trace={trace_id},chars={len(markdown)}",
-        )
+            )
         if markdown:
-            parts.append("【关系记忆文件】\n" + markdown)
+            parts.append("[Relationship memory]\n" + markdown)
         relevant: list[str] = []
         if include_relevant:
             relevant = await self.relevant_memories(
@@ -132,7 +130,7 @@ class RelationshipMemoryManager:
             )
         if relevant:
             lines = "\n".join(f"- {m}" for m in relevant)
-            parts.append("【和当前消息相关的关系记忆】\n" + lines)
+            parts.append("[Relationship memories relevant to this message]\n" + lines)
         rendered = "\n\n".join(parts)
         if metrics is not None:
             metrics.record(
@@ -214,6 +212,7 @@ class RelationshipMemoryManager:
             return await self.embedder.embed_texts(texts)
         except Exception:
             return [[0.0] * self.settings.embedding_dim for _ in texts]
+
 
 def _entry_id(text: str) -> str:
     digest = hashlib.sha1(text.encode(), usedforsecurity=False).hexdigest()[:16]

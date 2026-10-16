@@ -21,6 +21,7 @@ from typing import Any, Literal, Protocol, runtime_checkable
 from xuwen.config import Settings
 from xuwen.core.errors import ParseError
 from xuwen.core.models import NormalizedMessage
+from xuwen.error_i18n import error_text
 
 JSONL_RECORDS_KEY = "_afterglowJsonlRecords"
 TEXT_CONTENT_KEY = "_afterglowTextContent"
@@ -141,7 +142,11 @@ def select_plugin(
         plugin = find_plugin(preferred)
         if plugin is None:
             raise ParseError(
-                f"未知的 plugin: {preferred}。可用：{[p.name for p in _REGISTRY]}",
+                error_text(
+                    "Unknown plugin: {p0}. Available: {p1}",
+                    p0=preferred,
+                    p1=[p.name for p in _REGISTRY],
+                ),
             )
         return plugin
 
@@ -154,7 +159,8 @@ def select_plugin(
             continue
 
     raise ParseError(
-        "没有 plugin 能识别这份聊天文件。"
-        f"可用 plugins：{[p.name for p in _REGISTRY]}。"
-        "如果是新平台导出格式，欢迎在 xuwen/ingestion/plugins/ 下添加新 plugin。",
+        error_text(
+            "No plugin recognizes this chat file. Available plugins: {p0}. For a new export format, add a plugin under xuwen/ingestion/plugins/.",
+            p0=[p.name for p in _REGISTRY],
+        ),
     )

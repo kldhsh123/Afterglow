@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import Literal
 
 from xuwen.config import Settings
+from xuwen.content_i18n import content_text
 
 MemorySource = Literal[
     "human_original",
@@ -71,14 +72,16 @@ def source_weight(source: str, settings: Settings) -> float:
 
 def label_for_ui(source: str) -> str:
     """前端记忆溯源的可读标签。"""
-    return {
-        "human_original": "真人历史片段",
-        "human_original_image": "历史图片描述",
-        "history": "真人历史片段",
-        "user_new": "你最近说过",
-        "ai_generated": "此前 AI 回复",
-        "live": "运行时记忆",
-    }.get(source, "记忆片段")
+    return content_text(
+        {
+            "human_original": "Original chat excerpt",
+            "human_original_image": "Historical image description",
+            "history": "Original chat excerpt",
+            "user_new": "Your recent messages",
+            "ai_generated": "Previous AI reply",
+            "live": "Runtime memory",
+        }.get(source, "Memory excerpt")
+    )
 
 
 def ai_generated_long_term_enabled(settings: Settings) -> bool:

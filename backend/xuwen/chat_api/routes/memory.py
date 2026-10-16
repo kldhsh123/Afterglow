@@ -14,6 +14,7 @@ from xuwen.chat_api.schemas import (
 )
 from xuwen.chat_api.state import AppState, get_state
 from xuwen.core.models import RetrievalQuery
+from xuwen.error_i18n import error_text
 from xuwen.memory.schema import (
     TABLE_FRIEND_MESSAGES,
     TABLE_LIVE_MESSAGES,
@@ -61,11 +62,11 @@ async def delete_memory(
     if table not in allowed:
         raise HTTPException(
             status_code=400,
-            detail=f"仅支持删除以下表：{sorted(allowed)}",
+            detail=error_text("Only these tables can be deleted from: {p0}", p0=sorted(allowed)),
         )
     ok = await state.store.soft_delete(table, memory_id)
     if not ok:
-        raise HTTPException(status_code=404, detail="未找到对应记录")
+        raise HTTPException(status_code=404, detail=error_text("Record not found"))
     return {"status": "deleted", "table": table, "id": memory_id}
 
 

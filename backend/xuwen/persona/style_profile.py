@@ -13,24 +13,27 @@ from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from xuwen.content_i18n import content_text
 from xuwen.core.models import MessageKind, NormalizedMessage, Session
 
 _PLACEHOLDER_RE = re.compile(r"\[(图片|语音|视频|文件|表情|动画表情|撤回)\]")
-_EMOJI_RE = re.compile(
-    r"[\U0001F300-\U0001FAFF\U0001F600-\U0001F64F☀-➿⌀-⏿]"
-)
+_EMOJI_RE = re.compile(r"[\U0001F300-\U0001FAFF\U0001F600-\U0001F64F☀-➿⌀-⏿]")
 _QUESTION_RE = re.compile(r"[?？]|吗|嘛|呢$")
-_INTIMACY_RE = re.compile(r"想你|抱抱|抱住|亲|爱你|喜欢你|贴贴|老婆|宝宝|宝贝")
+_INTIMACY_RE = re.compile(
+    "想你|抱抱|抱住|亲|爱你|喜欢你|贴贴|老婆|宝宝|宝贝|\\b(?:miss you|love you|hug|hugs|kiss|cuddle|babe|baby)\\b",
+    re.I,
+)
 _RANDOM_BURST_RE = re.compile(
-    r"(啊{3,}|哈{3,}|呜{3,}|哇{3,}|救命|绷不住|笑死|草|卧槽|发疯|疯了|"
-    r"我要闹了|不活了|爆炸|阴暗|扭曲|爬行|尖叫|胡言乱语|可恶|受不了了)"
+    "(啊{3,}|哈{3,}|呜{3,}|哇{3,}|救命|绷不住|笑死|草|卧槽|发疯|疯了|我要闹了|不活了|爆炸|阴暗|扭曲|爬行|尖叫|胡言乱语|可恶|受不了了)|\\b(?:aaaa+|haha(?:ha)+|lmao|losing my mind|screaming|i can\\x27t take it)\\b",
+    re.I,
 )
 _LIGHT_TONE_RE = re.compile(
-    r"(哈哈|笑死|草|救命|可爱|想你|抱抱|贴贴|发疯|疯了|怎么这样|笨蛋|嘿嘿|？{2,}|!{2,}|！{2,})"
+    "(哈哈|笑死|草|救命|可爱|想你|抱抱|贴贴|发疯|疯了|怎么这样|笨蛋|嘿嘿|？{2,}|!{2,}|！{2,})|\\b(?:haha|lol|lmao|cute|miss you|hugs|silly|hehe)\\b",
+    re.I,
 )
 _SERIOUS_TONE_RE = re.compile(
-    r"(为什么|怎么解决|解释|原因|报错|失败|难受|崩溃|怎么办|帮我|求助|"
-    r"在干嘛|在干什么|吃了吗|睡了吗|今天|昨天|现实|钱|医院|自杀|伤害)"
+    "(为什么|怎么解决|解释|原因|报错|失败|难受|崩溃|怎么办|帮我|求助|在干嘛|在干什么|吃了吗|睡了吗|今天|昨天|现实|钱|医院|自杀|伤害)|\\b(?:why|how to fix|explain|error|failed|upset|overwhelmed|help me|hospital|suicide|harm)\\b",
+    re.I,
 )
 
 
@@ -93,37 +96,61 @@ class _SceneRule:
 _SCENE_RULES: tuple[_SceneRule, ...] = (
     _SceneRule(
         "life_check",
-        "寒暄 / 在干嘛",
+        "Small talk / checking in",
         ("在干嘛", "在干什么", "干嘛呢", "忙吗", "在吗", "你呢", "醒了吗", "起了吗"),
     ),
     _SceneRule(
         "miss_you",
-        "想念 / 亲密表达",
+        "Missing someone / affection",
         ("想你", "想我", "抱抱", "抱住", "亲", "爱你", "喜欢你", "贴贴"),
     ),
     _SceneRule(
         "sleep",
-        "晚安 / 睡觉",
+        "Good night / sleep",
         ("晚安", "睡觉", "睡了吗", "睡了没", "困", "熬夜", "失眠", "怎么还没睡"),
     ),
     _SceneRule(
         "comfort",
-        "安慰 / 情绪低落",
+        "Comfort / low mood",
         ("难受", "好累", "累死", "烦", "不开心", "哭", "崩溃", "委屈", "emo"),
     ),
     _SceneRule(
         "meal",
-        "吃饭 / 日常补给",
+        "Meals / everyday needs",
         ("吃了吗", "吃饭", "吃什么", "饿", "外卖", "奶茶", "咖啡", "早饭", "午饭", "晚饭"),
     ),
     _SceneRule(
         "game",
-        "游戏 / 娱乐",
+        "Games / entertainment",
         ("游戏", "打游戏", "开黑", "上号", "原神", "王者", "lol", "LOL", "steam", "Steam"),
     ),
 )
 
-_DEFAULT_SCENE = _SceneRule("casual", "普通闲聊", ())
+_DEFAULT_SCENE = _SceneRule("casual", "Casual conversation", ())
+
+_EN_SCENE_PATTERNS = {
+    "life_check": (
+        "what are you doing",
+        "what are you up to",
+        "are you busy",
+        "are you there",
+        "how about you",
+    ),
+    "miss_you": ("miss you", "love you", "hug", "hugs", "kiss", "cuddle"),
+    "sleep": ("good night", "sleep", "sleepy", "still awake", "insomnia"),
+    "comfort": ("feeling down", "so tired", "upset", "unhappy", "crying", "overwhelmed", "anxious"),
+    "meal": (
+        "have you eaten",
+        "food",
+        "hungry",
+        "takeout",
+        "coffee",
+        "breakfast",
+        "lunch",
+        "dinner",
+    ),
+    "game": ("game", "gaming", "play together", "genshin", "league of legends", "steam"),
+}
 
 
 def build_style_profile(
@@ -225,45 +252,45 @@ def render_style_profile_for_query(
     return "\n\n".join(part for part in rendered if part)
 
 
-def render_random_burst_block(
-    profile: PersonaStyleProfile | None,
-    query: str,
-) -> str:
+def render_random_burst_block(profile: PersonaStyleProfile | None, query: str) -> str:
     decision = decide_random_burst(profile, query)
     if decision.profile is None:
         return ""
     p = decision.profile
     lines = [
-        "【抽象 / 发疯风格门控】",
-        "这些样本只代表说话习惯，不代表事实；不能替代正常回答。",
-        f"- 本轮允许：{'是' if decision.allowed else '否'}",
-        f"- 建议概率：{round(decision.probability * 100)}%",
-        f"- 原因：{decision.reason}",
-        f"- 证据数：{p.evidence_count}，置信度：{p.confidence}",
-        f"- 平均长度：{p.avg_reply_chars:.1f} 字，反问比例：{_pct(p.question_reply_ratio)}，emoji 比例：{_pct(p.emoji_reply_ratio)}",
-        "规则：只有用户也在轻松、调侃、撒娇或发疯时，才可以少量借鉴；用户问事实、状态、解释、安慰、求助时禁止使用。",
+        "[Chaotic/playful style gate]",
+        "These samples show speech habits, not facts, and cannot replace a proper answer.",
+        f"- Allowed this turn: {('yes' if decision.allowed else 'no')}",
+        f"- Suggested probability: {round(decision.probability * 100)}%",
+        f"- Reason: {decision.reason}",
+        f"- Evidence count: {p.evidence_count}; confidence: {p.confidence}",
+        f"- Mean length: {p.avg_reply_chars:.1f} characters; question ratio: {_pct(p.question_reply_ratio)}; emoji ratio: {_pct(p.emoji_reply_ratio)}",
+        "Borrow this style sparingly only when the user is relaxed, playful, affectionate or chaotic. Never use it for factual/state questions, explanations, comfort or requests for help.",
     ]
     if decision.allowed:
-        lines.append("- 真实样本：")
+        lines.append("- Genuine samples: ")
         for sample in p.samples[:4]:
             lines.append(f"  - {_short(sample.friend_reply, 64)}")
     return "\n".join(lines)
 
 
-def decide_random_burst(
-    profile: PersonaStyleProfile | None,
-    query: str,
-) -> RandomBurstDecision:
+def decide_random_burst(profile: PersonaStyleProfile | None, query: str) -> RandomBurstDecision:
     p = profile.random_burst if profile is not None else None
     if p is None or p.evidence_count == 0:
-        return RandomBurstDecision(False, 0.0, "没有可用样本", p)
+        return RandomBurstDecision(False, 0.0, "No available samples", p)
     if _SERIOUS_TONE_RE.search(query):
-        return RandomBurstDecision(False, 0.0, "当前问题需要事实/状态/解释或安慰", p)
+        return RandomBurstDecision(
+            False, 0.0, "This request needs facts, current state, explanation or comfort", p
+        )
     if _RANDOM_BURST_RE.search(query):
-        return RandomBurstDecision(True, 0.45, "用户当前也在发疯或抽象表达", p)
+        return RandomBurstDecision(
+            True, 0.45, "The user is also expressing a chaotic/playful mood", p
+        )
     if _LIGHT_TONE_RE.search(query):
-        return RandomBurstDecision(True, 0.18, "用户语气轻松，可低概率借鉴", p)
-    return RandomBurstDecision(True, 0.05, "普通闲聊，仅允许极低概率点缀", p)
+        return RandomBurstDecision(
+            True, 0.18, "The tone is relaxed; occasional borrowing is allowed", p
+        )
+    return RandomBurstDecision(True, 0.05, "Casual chat: very rare stylistic touches only", p)
 
 
 def _iter_response_pairs(
@@ -291,7 +318,10 @@ def _usable_message(message: NormalizedMessage) -> bool:
 def _scene_for_text(text: str) -> _SceneRule:
     lowered = text.lower()
     for rule in _SCENE_RULES:
-        if any(pattern.lower() in lowered for pattern in rule.patterns):
+        if any(pattern.lower() in lowered for pattern in rule.patterns) or any(
+            re.search(r"(?<!\w)" + re.escape(pattern) + r"(?!\w)", lowered)
+            for pattern in _EN_SCENE_PATTERNS.get(rule.scene_id, ())
+        ):
             return rule
     return _DEFAULT_SCENE
 
@@ -308,7 +338,7 @@ def _build_scene_profile(
     chosen = _choose_samples(samples, sample_limit)
     return StyleSceneProfile(
         scene_id=rule.scene_id,
-        title=rule.title,
+        title=content_text(rule.title),
         evidence_count=count,
         confidence=_confidence(count),
         avg_reply_chars=round(sum(lengths) / count, 2) if lengths else 0.0,
@@ -363,20 +393,19 @@ def _choose_samples(
 
 def _render_scene(scene: StyleSceneProfile, profile: PersonaStyleProfile) -> str:
     lines = [
-        f"【场景画像：{scene.title}】",
-        f"- 证据数：{scene.evidence_count}，置信度：{scene.confidence}",
-        f"- 平均回复长度：{scene.avg_reply_chars:.1f} 字，短回复比例：{_pct(scene.short_reply_ratio)}",
-        f"- 反问/追问比例：{_pct(scene.question_reply_ratio)}",
-        f"- emoji 比例：{_pct(scene.emoji_reply_ratio)}，图片占位比例：{_pct(scene.image_placeholder_ratio)}",
-        f"- 亲密表达比例：{_pct(scene.intimacy_reply_ratio)}",
+        f"[Scene profile: {scene.title}]",
+        f"- Evidence count: {scene.evidence_count}; confidence: {scene.confidence}",
+        f"- Mean reply length: {scene.avg_reply_chars:.1f} characters; short-reply ratio: {_pct(scene.short_reply_ratio)}",
+        f"- Question/follow-up ratio: {_pct(scene.question_reply_ratio)}",
+        f"- Emoji ratio: {_pct(scene.emoji_reply_ratio)}; image-placeholder ratio: {_pct(scene.image_placeholder_ratio)}",
+        f"- Intimacy-expression ratio: {_pct(scene.intimacy_reply_ratio)}",
     ]
     if scene.confidence == "low":
-        lines.append("- 证据不足：只能轻度参考，不要形成强风格结论。")
-    lines.append("- 真实样本：")
+        lines.append("- Weak evidence: use lightly, without strong style conclusions.")
+    lines.append("- Genuine samples: ")
     for sample in scene.samples[:4]:
         lines.append(
-            f"  - {profile.self_name}：{_short(sample.user_text, 48)} / "
-            f"{profile.friend_name}：{_short(sample.friend_reply, 64)}"
+            f"  - {profile.self_name}：{_short(sample.user_text, 48)} / {profile.friend_name}：{_short(sample.friend_reply, 64)}"
         )
     return "\n".join(lines)
 

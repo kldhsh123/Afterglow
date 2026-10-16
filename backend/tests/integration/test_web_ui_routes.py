@@ -66,10 +66,20 @@ def test_ping_open_without_token(cfg_settings) -> None:
         assert r.json()["ok"] is True
 
 
-def test_schema_requires_token(cfg_settings) -> None:
+@pytest.mark.parametrize(
+    ("language", "expected"),
+    [
+        (None, "Unauthorized. Check the access token printed in the backend startup console and enter it here."),
+        ("en", "Unauthorized. Check the access token printed in the backend startup console and enter it here."),
+        ("zh-TW", "未授权，请检查并输入后端启动时打印到控制台的访问token。"),
+    ],
+)
+def test_schema_requires_token(cfg_settings, language, expected) -> None:
     app = create_app(cfg_settings)
     with TestClient(app) as client:
-        assert client.get("/config/schema").status_code == 401
+        response = client.get("/config/schema", headers={"Accept-Language": language} if language else {})
+        assert response.status_code == 401
+        assert response.json()["error"]["message"] == expected
 
 
 def test_schema_with_valid_token(cfg_settings) -> None:

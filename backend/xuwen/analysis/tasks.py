@@ -13,6 +13,7 @@ from typing import Any
 
 from xuwen.analysis.pipeline import analyze_relationship
 from xuwen.config import Settings
+from xuwen.content_i18n import content_text
 
 
 @dataclass(slots=True)
@@ -21,7 +22,7 @@ class AnalysisTask:
     files: list[str]
     status: str = "pending"
     progress: float = 0.0
-    stage: str = "等待开始"
+    stage: str = field(default_factory=lambda: content_text("Waiting to start"))
     detail: str = ""
     error: str = ""
     started_at: float = field(default_factory=time.time)
@@ -130,19 +131,24 @@ async def run_analysis_task(
     since: str | None,
 ) -> None:
     manager = get_analysis_task_manager()
-    manager.update(task_id, status="running", progress=0.02, stage="读取与清洗聊天记录")
+    manager.update(
+        task_id,
+        status="running",
+        progress=0.02,
+        stage=content_text("Reading and cleaning chat history"),
+    )
 
     def progress(done: int, total: int, stage: str) -> None:
         ratio = done / total if total else 0.0
         if stage == "map":
             value = 0.08 + ratio * 0.72
-            label = f"分析对话块 {done}/{total}"
+            label = content_text("Analyzing conversation blocks {p0}/{p1}", p0=done, p1=total)
         elif stage == "monthly_reduce":
             value = 0.80 + ratio * 0.10
-            label = f"归并月度摘要 {done}/{total}"
+            label = content_text("Merging monthly summaries {p0}/{p1}", p0=done, p1=total)
         else:
             value = 0.90 + ratio * 0.08
-            label = "生成最终报告"
+            label = content_text("Generating the final report")
         manager.update(task_id, progress=value, stage=label)
 
     try:
@@ -156,13 +162,13 @@ async def run_analysis_task(
             progress_cb=progress,
         )
     except asyncio.CancelledError:
-        manager.update(task_id, status="cancelled", stage="已取消")
+        manager.update(task_id, status="cancelled", stage=content_text("Cancelled"))
         raise
     except Exception as exc:
         manager.update(
             task_id,
             status="failed",
-            stage="分析失败",
+            stage=content_text("Analysis failed"),
             error=f"{type(exc).__name__}: {exc}",
         )
     else:
@@ -170,6 +176,6 @@ async def run_analysis_task(
             task_id,
             status="done",
             progress=1.0,
-            stage="分析完成",
+            stage=content_text("Analysis complete"),
             report=report.to_dict(),
         )

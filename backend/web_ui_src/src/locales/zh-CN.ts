@@ -1,5 +1,8 @@
 const zhCN = {
+  backendLanguage: '后端语言',
+  backendLanguageHelp: '控制启动提示、主动消息和 CLI/API 默认语言（XUWEN_LANGUAGE），默认英文。保存后重启后端生效；页面语言单独设置。',
   backendMissingUrl: '未填写接口地址',
+  backendConfigUnauthorized: '未授权，请检查并输入后端启动时打印到控制台的访问token。',
   backendMissingKey: '未填写密钥',
   backendMissingModel: '未填写模型名',
   backendInvalidKey: '密钥无效或已过期。请确认从服务商网站复制的密钥完整、未泄漏。',
@@ -18,6 +21,7 @@ const zhCN = {
   backendTransport: '网络传输错误（{name}）：{detail}',
   backendNetwork: '网络错误（{name}）：{detail}',
   backendChatSuccess: '连接成功，模型 {model} 可用',
+  backendChatInvalid: '返回内容不是合法的 chat 响应',
   backendEmbeddingSuccess: '连接成功，向量维度 {dim}',
   backendEmbeddingInvalid: '返回内容不是合法的 embedding 响应',
   backendEmbeddingDimension: "维度不匹配：你填的是 {expected}，但服务商返回 {actual}。请把'向量维度'改为 {actual}，或换一个支持 {expected} 维的模型。",

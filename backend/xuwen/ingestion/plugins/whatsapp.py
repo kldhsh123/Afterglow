@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from xuwen.config import Settings
 from xuwen.core.errors import ParseError
 from xuwen.core.models import MessageKind, NormalizedMessage, SenderRole
+from xuwen.error_i18n import error_text
 from xuwen.ingestion.plugins import (
     TEXT_CONTENT_KEY,
     TEXT_SUFFIX_KEY,
@@ -134,7 +135,9 @@ class WhatsAppPlugin:
 
     def inspect(self, payload: dict[str, Any]) -> ImportInspection:
         if not self.match(payload):
-            return ImportInspection("unknown", [], 0, "无法识别 WhatsApp 导出")
+            return ImportInspection(
+                "unknown", [], 0, error_text("Cannot recognize the WhatsApp export")
+            )
         records = _records(_source(payload), markdown=payload.get(TEXT_SUFFIX_KEY) == ".md")
         names = list(dict.fromkeys(raw["sender"] for raw in records if raw["sender"]))
         candidates = [
@@ -149,7 +152,9 @@ class WhatsAppPlugin:
 
     def parse(self, payload: dict[str, Any], settings: Settings) -> list[NormalizedMessage]:
         if not self.match(payload):
-            raise ParseError("文件不符合 WhatsApp TXT / Markdown 聊天格式")
+            raise ParseError(
+                error_text("The file does not match the WhatsApp TXT / Markdown chat format")
+            )
         records = _records(_source(payload), markdown=payload.get(TEXT_SUFFIX_KEY) == ".md")
         # 点分隔日期使用日/月；斜杠默认月/日，有明确大于 12 的首项时按日/月。
         day_first = any(

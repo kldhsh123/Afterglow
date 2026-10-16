@@ -1,0 +1,4 @@
+{
+  "auth.config_missing": "API authentication is enabled, but XUWEN_API_KEY is not configured. Set a local API key in .env first.",
+  "auth.invalid": "Missing or invalid API key. Send Authorization: Bearer <key> in the header."
+}

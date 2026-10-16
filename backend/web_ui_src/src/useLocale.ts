@@ -6,6 +6,10 @@ export type Locale = 'zh-CN' | 'en'
 const locale = ref<Locale>(detectLocale())
 const messages = { 'zh-CN': zhCN, en }
 const STORAGE_KEY = 'afterglow.config.locale'
+const FALLBACK_TEXT: Record<Locale, string> = {
+  'zh-CN': '文案暂缺',
+  en: 'Text unavailable',
+}
 
 try {
   const stored = localStorage.getItem(STORAGE_KEY)
@@ -21,7 +25,7 @@ function detectLocale(): Locale {
 export function useLocale() {
   const isChinese = computed(() => locale.value === 'zh-CN')
   function t(key: keyof typeof zhCN, params: Record<string, string | number> = {}) {
-    const text = messages[locale.value][key] ?? messages.en[key] ?? key
+    const text = messages[locale.value][key] ?? messages.en[key] ?? FALLBACK_TEXT[locale.value]
     return text.replace(/\{(\w+)\}/g, (_, name: string) => String(params[name] ?? `{${name}}`))
   }
   function setLocale(value: Locale) {

@@ -14,6 +14,7 @@ from bs4 import BeautifulSoup
 from xuwen.config import Settings
 from xuwen.core.errors import ParseError
 from xuwen.core.models import MessageKind, NormalizedMessage, SenderRole
+from xuwen.error_i18n import error_text
 from xuwen.ingestion.plugins import (
     TEXT_CONTENT_KEY,
     TEXT_SUFFIX_KEY,
@@ -152,7 +153,9 @@ class TelegramHTMLPlugin:
 
     def inspect(self, payload: dict[str, Any]) -> ImportInspection:
         if not self.match(payload):
-            return ImportInspection("unknown", [], 0, "无法识别 Telegram HTML 导出")
+            return ImportInspection(
+                "unknown", [], 0, error_text("Cannot recognize the Telegram HTML export")
+            )
         records = _records(_source(payload))
         names = list(dict.fromkeys(raw["sender"] for raw in records if raw["sender"]))
         return ImportInspection(
@@ -164,7 +167,9 @@ class TelegramHTMLPlugin:
 
     def parse(self, payload: dict[str, Any], settings: Settings) -> list[NormalizedMessage]:
         if not self.match(payload):
-            raise ParseError("文件不符合 Telegram Desktop HTML 导出格式")
+            raise ParseError(
+                error_text("The file does not match the Telegram Desktop HTML export format")
+            )
         messages: list[NormalizedMessage] = []
         for seq, raw in enumerate(_records(_source(payload))):
             sender = raw["sender"]

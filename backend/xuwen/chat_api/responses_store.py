@@ -11,6 +11,8 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from threading import Lock
 
+from xuwen.error_i18n import error_text
+
 
 @dataclass(slots=True, frozen=True)
 class ResponseRecord:
@@ -29,7 +31,7 @@ class ResponsesStore:
 
     def __init__(self, capacity: int = 512) -> None:
         if capacity <= 0:
-            raise ValueError("ResponsesStore capacity 必须为正整数")
+            raise ValueError(error_text("ResponsesStore capacity must be a positive integer"))
         self._capacity = capacity
         self._items: OrderedDict[str, ResponseRecord] = OrderedDict()
         self._lock = Lock()

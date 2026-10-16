@@ -13,6 +13,7 @@ from typing import Any
 from xuwen.analysis.proactive import load_proactive_analysis
 from xuwen.companion.life import LifeSnapshot
 from xuwen.config import Settings
+from xuwen.content_i18n import content_text
 from xuwen.core.time import local_now
 from xuwen.memory.store import MemoryStore
 from xuwen.persona.proactive_profile import (
@@ -141,7 +142,11 @@ class ProactiveEngine:
         score = _weighted_score(features)
         threshold = max(0.0, min(1.0, self.settings.proactive_score_threshold))
         should_send = not skip_reasons and score >= threshold
-        reason_text = "matched_learned_rhythm" if should_send else _decision_reason(skip_reasons, score, threshold)
+        reason_text = (
+            "matched_learned_rhythm"
+            if should_send
+            else _decision_reason(skip_reasons, score, threshold)
+        )
         private_context = _private_context(
             profile,
             now=current,
@@ -330,7 +335,11 @@ class ProactiveEngine:
         cid = conversation_id or ""
         if not cid:
             return
-        ts = at_ms if at_ms is not None else int(local_now(self.settings.app_timezone).timestamp() * 1000)
+        ts = (
+            at_ms
+            if at_ms is not None
+            else int(local_now(self.settings.app_timezone).timestamp() * 1000)
+        )
         if ts <= 0:
             return
         async with self._state_lock:
@@ -387,8 +396,10 @@ class ProactiveEngine:
         cid = conversation_id or ""
         if not cid:
             return {"forced": False, "reason": "missing_conversation_id"}
-        current_ms = at_ms if at_ms is not None else int(
-            local_now(self.settings.app_timezone).timestamp() * 1000
+        current_ms = (
+            at_ms
+            if at_ms is not None
+            else int(local_now(self.settings.app_timezone).timestamp() * 1000)
         )
         if current_ms <= 0:
             return {"forced": False, "reason": "invalid_at_ms"}
@@ -470,7 +481,7 @@ class ProactiveEngine:
         rebuilt = compute_proactive_profile_from_window_rows(
             rows,
             friend_name=self.settings.friend_name or "TA",
-            self_name=self.settings.self_name or "我",
+            self_name=self.settings.self_name or content_text("Me"),
             min_gap_minutes=self.settings.proactive_learning_min_gap_minutes,
             timezone=self.settings.app_timezone,
         )
@@ -536,10 +547,7 @@ class ProactiveEngine:
             reasons.append("disabled")
         if _in_quiet_hours(now, self.settings.proactive_quiet_hours):
             reasons.append("quiet_hours")
-        if (
-            idle_minutes is not None
-            and idle_minutes < self.settings.proactive_min_idle_minutes
-        ):
+        if idle_minutes is not None and idle_minutes < self.settings.proactive_min_idle_minutes:
             reasons.append("not_idle_enough")
         if self._sent_today(conversation_id, now) >= self.settings.proactive_max_per_day:
             reasons.append("daily_limit")
@@ -570,7 +578,13 @@ class ProactiveEngine:
             else 0.35
         )
         speaker_key = last_role if last_role in {"user", "assistant"} else "unknown"
-        historical_speaker = "self" if speaker_key == "user" else "friend" if speaker_key == "assistant" else "unknown"
+        historical_speaker = (
+            "self"
+            if speaker_key == "user"
+            else "friend"
+            if speaker_key == "assistant"
+            else "unknown"
+        )
         speaker_weight = profile.previous_last_speaker_weights.get(historical_speaker, 0.35)
         opening_weight = max(profile.opening_type_weights.values(), default=0.35)
         availability_weight = _availability_weight(life)
@@ -617,7 +631,9 @@ class ProactiveEngine:
             state=state,
             should_send=False,
             score=decision.score if decision is not None else 0.0,
-            threshold=decision.threshold if decision is not None else self.settings.proactive_score_threshold,
+            threshold=decision.threshold
+            if decision is not None
+            else self.settings.proactive_score_threshold,
             reason=reason if decision is None else "scheduled",
             skip_reasons=decision.skip_reasons if decision is not None else [],
             features=decision.features if decision is not None else {},
@@ -662,7 +678,10 @@ class ProactiveEngine:
         if self._user_activity_ms.get(cid, 0) > last_sent:
             return False
         for row in recent_live:
-            if str(row.get("role") or "") == "user" and int(row.get("created_at_ms") or 0) > last_sent:
+            if (
+                str(row.get("role") or "") == "user"
+                and int(row.get("created_at_ms") or 0) > last_sent
+            ):
                 return False
         return True
 
@@ -728,9 +747,7 @@ class ProactiveEngine:
     def _save_poll_state(self) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
-            "candidates": {
-                cid: asdict(candidate) for cid, candidate in self._candidates.items()
-            },
+            "candidates": {cid: asdict(candidate) for cid, candidate in self._candidates.items()},
             "user_activity_ms": self._user_activity_ms,
         }
         self.state_path.write_text(
@@ -794,23 +811,25 @@ def _private_context(
     score: float,
     features: dict[str, float],
 ) -> str:
-    idle_text = "未知" if idle_minutes is None else f"{int(idle_minutes)} 分钟"
+    idle_text = "unknown" if idle_minutes is None else f"{int(idle_minutes)} minutes"
     life_text = ""
     if life is not None:
         life_text = (
-            f" 当前 life 状态：{life.current_activity}；可用性：{life.availability}；"
-            f"可聊话题：{life.topic_seed}。"
+            f" Current activity: {life.current_activity}; availability: {life.availability}; "
+            f"topic seed: {life.topic_seed}."
         )
     sample_text = ""
     if profile.samples:
-        samples = " / ".join(sample.opening_text for sample in profile.samples[:3] if sample.opening_text)
+        samples = " / ".join(
+            sample.opening_text for sample in profile.samples[:3] if sample.opening_text
+        )
         if samples:
-            sample_text = f" 历史主动开场样本：{samples}。"
+            sample_text = f" Historical proactive openings: {samples}."
     return (
-        f"主动聊天候选原因：{reason}。当前时间 {now:%Y-%m-%d %H:%M}，"
-        f"距离最近会话空闲 {idle_text}，上一条运行时消息角色：{last_role}。"
-        f"画像摘要：{profile.summary or '样本不足，保守处理'}。"
-        f"评分 {score:.2f}，特征：{_feature_summary(features)}。"
+        f"Proactive candidate reason: {reason}. Current time: {now:%Y-%m-%d %H:%M}; "
+        f"idle since the last conversation: {idle_text}; last runtime message role: {last_role}. "
+        f"Profile summary: {profile.summary or 'Insufficient samples; be conservative'}. "
+        f"Score: {score:.2f}; features: {_feature_summary(features)}."
         f"{life_text}{sample_text}"
     )
 
@@ -819,27 +838,27 @@ def _topic_hint(profile: ProactiveProfile, *, life: LifeSnapshot | None) -> str:
     opening = _top_key(profile.opening_type_weights)
     topic = life.topic_seed if life is not None and life.topic_seed else ""
     opening_text = {
-        "greeting": "轻短问候",
-        "life_check": "问问在干嘛或忙完没",
-        "care": "接住近况做轻微关心",
-        "continue_topic": "接上上一轮话题",
-        "self_share": "像随手分享自己状态那样开场",
-        "playful": "轻松调侃式开场",
-        "affection": "按历史贴近习惯轻短开场，不主动升级关系",
-        "wake_ping": "像叫醒或早间戳一下那样短开场",
-        "short_ping": "像随手 ping 一下那样轻短开场，但要补一个可回复的小钩子",
-        "question_probe": "用一个自然小问题开场",
-        "night_ping": "深夜短短问一句",
-        "other": "自然短开场",
-    }.get(opening, "自然短开场")
+        "greeting": "a brief greeting",
+        "life_check": "a light check-in about what the user is doing or whether they have finished",
+        "care": "a small expression of care connected to recent circumstances",
+        "continue_topic": "a continuation of the previous topic",
+        "self_share": "a casual update about your own state",
+        "playful": "a playful, light opening",
+        "affection": "a brief affectionate opening consistent with history, without escalating the relationship",
+        "wake_ping": "a brief morning or wake-up nudge",
+        "short_ping": "a casual brief ping with a concrete point the user can respond to",
+        "question_probe": "a natural small question",
+        "night_ping": "a brief late-night question",
+        "other": "a natural brief opening",
+    }.get(opening, "a natural brief opening")
     parts = [
-        f"按历史主动开聊习惯，用“{opening_text}”方式主动找用户。",
-        "必须短、像私聊，不要解释调度或系统判断。",
-        "即使历史开场很短，也不能只发 ping；要有一个用户容易接住的点。",
-        "不要推断用户当前在线、没睡、正在看消息；没有 presence 信号时，只能表达自己的状态或用条件句。",
+        f"Follow historical proactive habits and start with {opening_text}.",
+        "Keep it short and conversational. Do not explain scheduling or system decisions.",
+        "Even if historical openings were short, do not send only a ping; give the user an easy point to respond to.",
+        "Do not assume the user is online, awake or reading messages. Without presence evidence, describe only your own state or use a conditional sentence.",
     ]
     if topic:
-        parts.append(f"可以自然带到：{topic}。")
+        parts.append(f"You may naturally refer to: {topic}.")
     return " ".join(parts)
 
 

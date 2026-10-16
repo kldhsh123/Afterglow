@@ -192,6 +192,8 @@ uv run uvicorn xuwen.chat_api.app:create_app --factory --reload
 
 终端会在缺少关键配置时打印一次性 token。打开 `http://127.0.0.1:8000/config/`，完成身份、模型、聊天导入与访问密码配置，然后重启后端。
 
+后端语言在 `backend/.env` 设置：`XUWEN_LANGUAGE=en`（默认英文）或 `XUWEN_LANGUAGE=zh-CN`（中文），修改后重启。启动提示和主动消息（包括重写及失败兜底）使用此配置。CLI 的 `--language` 和 HTTP 的 `Accept-Language` 分别覆盖命令输出和接口输出的默认语言；普通聊天仍尊重用户的语言要求。内部模型指令使用英文，聊天原文和用户自定义提示词保留。
+
 完整步骤、前端启动和第三方客户端接入见[快速开始](https://github.com/kldhsh123/Afterglow/wiki/快速开始)。
 
 ## 支持的聊天格式

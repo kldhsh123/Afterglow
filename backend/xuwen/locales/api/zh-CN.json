@@ -1,0 +1,4 @@
+{
+  "auth.config_missing": "后端 API 鉴权已启用，但 XUWEN_API_KEY 未配置。请先在 .env 设置本地 API key。",
+  "auth.invalid": "缺少或错误的 API key（请在 Header 中带 Authorization: Bearer <key>）"
+}

@@ -22,6 +22,7 @@ from dataclasses import replace
 
 from xuwen.config import Settings
 from xuwen.core.models import MessageKind, NormalizedMessage
+from xuwen.error_i18n import error_text
 from xuwen.persona.pii_rules import PIIRule, load_rules, redact
 
 JSON_EMOJI_MODES = ("raw", "normalized")
@@ -54,11 +55,30 @@ _WECHAT_EMOJI_RE = re.compile(r"\[[一-龥]{1,4}\]")
 
 # 这些方括号占位符承载明确语义（媒体类型 / 撤回 / 系统），由 plugin / 上游
 # 显式生成，emoji 归一化必须放过它们；否则 [图片] 会被错误改写成 [表情]。
-_RESERVED_BRACKET_TOKENS: frozenset[str] = frozenset({
-    "[图片]", "[语音]", "[视频]", "[文件]", "[位置]", "[链接]", "[通话]",
-    "[名片]", "[小程序]", "[转账]", "[红包]", "[表情]", "[表情包]", "[动画表情]",
-    "[撤回]", "[系统消息]", "[引用]", "[未知消息]", "[附件]", "[分享视频]",
-})
+_RESERVED_BRACKET_TOKENS: frozenset[str] = frozenset(
+    {
+        "[图片]",
+        "[语音]",
+        "[视频]",
+        "[文件]",
+        "[位置]",
+        "[链接]",
+        "[通话]",
+        "[名片]",
+        "[小程序]",
+        "[转账]",
+        "[红包]",
+        "[表情]",
+        "[表情包]",
+        "[动画表情]",
+        "[撤回]",
+        "[系统消息]",
+        "[引用]",
+        "[未知消息]",
+        "[附件]",
+        "[分享视频]",
+    }
+)
 
 # QQ uid 通用形式：`u_` + 22 个 base64url 字符
 # 用于兜底匹配未知 uid（不是 self/friend 的那种）
@@ -90,8 +110,11 @@ class Cleaner:
     ) -> None:
         if json_emoji_mode not in JSON_EMOJI_MODES:
             raise ValueError(
-                f"json_emoji_mode 必须是 {' / '.join(JSON_EMOJI_MODES)}，"
-                f"实际为 {json_emoji_mode!r}"
+                error_text(
+                    "json_emoji_mode must be one of {p0}; received {p1!r}",
+                    p0=" / ".join(JSON_EMOJI_MODES),
+                    p1=json_emoji_mode,
+                )
             )
         self.settings = settings
         self.json_emoji_mode = json_emoji_mode
@@ -105,12 +128,8 @@ class Cleaner:
         # uid 形式的 @ 提及替换（兼容 QQ 在 mention 文本里直接写 @u_xxxx 的情况）。
         # 用 all_self_uids / all_friend_uids 而不是单个 self_uid，以支持
         # 跨平台 / 跨账号场景（同一个人有多个 UID，全部需要替换成 @你 / @我）。
-        self._self_uid_res = [
-            self._uid_pattern(uid) for uid in settings.all_self_uids if uid
-        ]
-        self._friend_uid_res = [
-            self._uid_pattern(uid) for uid in settings.all_friend_uids if uid
-        ]
+        self._self_uid_res = [self._uid_pattern(uid) for uid in settings.all_self_uids if uid]
+        self._friend_uid_res = [self._uid_pattern(uid) for uid in settings.all_friend_uids if uid]
 
     # ------------------------------------------------------------------
     # 公开接口

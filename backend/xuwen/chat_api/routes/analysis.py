@@ -17,6 +17,7 @@ from xuwen.analysis.tasks import (
     run_analysis_task,
 )
 from xuwen.chat_api.state import AppState, get_state
+from xuwen.error_i18n import error_text
 from xuwen.ingestion.plugins import CHAT_FILE_SUFFIXES
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
@@ -48,10 +49,8 @@ def proactive_analysis(state: AppState = Depends(get_state)) -> Any:
 @router.get("/experimental")
 def experimental(state: AppState = Depends(get_state)) -> Any:
     if not state.settings.analysis_experimental_enabled:
-        raise HTTPException(status_code=404, detail="实验性分析未启用")
-    profile_path = (
-        state.settings.analysis_data_dir / "experimental" / "personality_profile.json"
-    )
+        raise HTTPException(status_code=404, detail=error_text("Experimental analysis is disabled"))
+    profile_path = state.settings.analysis_data_dir / "experimental" / "personality_profile.json"
     if profile_path.exists():
         return _read_artifact(profile_path)
     return _read_artifact(state.settings.analysis_data_dir / "experimental" / "insights.json")
@@ -63,10 +62,14 @@ async def start(
     state: AppState = Depends(get_state),
 ) -> dict[str, Any]:
     if not request.timeline and not request.personality:
-        raise HTTPException(status_code=400, detail="至少选择时间线或性格报告")
+        raise HTTPException(
+            status_code=400, detail=error_text("Select at least a timeline or personality report")
+        )
     files = _resolve_upload_files(request.files, state.settings.config_ui_uploads_dir)
     if not files:
-        raise HTTPException(status_code=400, detail="uploads 目录中没有可分析的 JSON/JSONL 文件")
+        raise HTTPException(
+            status_code=400, detail=error_text("No JSON/JSONL files to analyze in uploads")
+        )
     manager = get_analysis_task_manager()
     active = manager.list_active()
     if active:
@@ -91,7 +94,7 @@ async def start(
 def task_status(task_id: str) -> dict[str, Any]:
     task = get_analysis_task_manager().get(task_id)
     if task is None:
-        raise HTTPException(status_code=404, detail="分析任务不存在")
+        raise HTTPException(status_code=404, detail=error_text("Analysis task not found"))
     return task.to_dict()
 
 
@@ -99,7 +102,7 @@ def task_status(task_id: str) -> dict[str, Any]:
 async def task_stream(task_id: str) -> StreamingResponse:
     manager = get_analysis_task_manager()
     if manager.get(task_id) is None:
-        raise HTTPException(status_code=404, detail="分析任务不存在")
+        raise HTTPException(status_code=404, detail=error_text("Analysis task not found"))
 
     return StreamingResponse(analysis_sse_stream(task_id), media_type="text/event-stream")
 
@@ -108,19 +111,23 @@ async def task_stream(task_id: str) -> StreamingResponse:
 async def cancel(task_id: str) -> dict[str, str]:
     manager = get_analysis_task_manager()
     if manager.get(task_id) is None:
-        raise HTTPException(status_code=404, detail="分析任务不存在")
+        raise HTTPException(status_code=404, detail=error_text("Analysis task not found"))
     if not await manager.cancel(task_id):
-        raise HTTPException(status_code=409, detail="任务已经结束")
+        raise HTTPException(status_code=409, detail=error_text("The task has already finished"))
     return {"status": "cancelling"}
 
 
 def _read_artifact(path: Path) -> Any:
     if not path.exists():
-        raise HTTPException(status_code=404, detail="分析结果尚未生成")
+        raise HTTPException(
+            status_code=404, detail=error_text("Analysis results are not available yet")
+        )
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
-        raise HTTPException(status_code=500, detail="分析结果文件损坏") from exc
+        raise HTTPException(
+            status_code=500, detail=error_text("The analysis result file is corrupt")
+        ) from exc
 
 
 def _resolve_upload_files(names: list[str], uploads_dir: Path) -> list[Path]:
@@ -133,8 +140,13 @@ def _resolve_upload_files(names: list[str], uploads_dir: Path) -> list[Path]:
     for candidate in candidates:
         resolved = candidate.resolve()
         if root not in resolved.parents or resolved.suffix.lower() not in CHAT_FILE_SUFFIXES:
-            raise HTTPException(status_code=400, detail="文件必须位于 uploads 目录内")
+            raise HTTPException(
+                status_code=400, detail=error_text("Files must be inside the uploads directory")
+            )
         if not resolved.is_file():
-            raise HTTPException(status_code=404, detail=f"未找到上传文件：{candidate.name}")
+            raise HTTPException(
+                status_code=404,
+                detail=error_text("Uploaded file not found: {p0}", p0=candidate.name),
+            )
         output.append(resolved)
     return sorted(set(output))

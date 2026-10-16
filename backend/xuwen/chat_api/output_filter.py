@@ -11,6 +11,8 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
+from xuwen.content_i18n import content_text
+
 _MEDIA_PLACEHOLDER_RE = re.compile(
     r"\[(?:图片|语音|视频|文件|表情|动画表情|撤回|系统消息)(?:[:：][^\]]*)?\]\s*[:：]?\s*"
 )
@@ -54,6 +56,7 @@ def _filter_unknown_stickers(text: str, valid_names: frozenset[str]) -> str:
     valid_names 为空集表示当前没有任何可用 sticker，因此所有 sticker token 都要剥离。
     如果读取 sticker 列表失败需要跳过校验，调用方应传 None。
     """
+
     def _replace(match: re.Match[str]) -> str:
         name = match.group(1)
         if name in valid_names:
@@ -93,7 +96,7 @@ def sanitize_assistant_text(
     else:
         out = "\n".join(_LEADING_PUNCT_RE.sub("", line) for line in out.splitlines())
     if fallback_empty and text.strip() and not out:
-        return "嗯"
+        return content_text("Mm")
     return out
 
 
@@ -166,9 +169,7 @@ class AssistantOutputFilter:
         last_hint_open = buffer_lower.rfind(_SCHEDULE_HINT_OPEN_TAG, 0, cut)
         if last_hint_open >= 0:
             hint_close_idx = buffer_lower.find(_SCHEDULE_HINT_CLOSE_TAG, last_hint_open)
-            if hint_close_idx == -1 or (
-                hint_close_idx + len(_SCHEDULE_HINT_CLOSE_TAG) > cut
-            ):
+            if hint_close_idx == -1 or (hint_close_idx + len(_SCHEDULE_HINT_CLOSE_TAG) > cut):
                 cut = last_hint_open
         if cut <= 0:
             return ""

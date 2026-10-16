@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass
 from typing import Literal
 
 from xuwen.analysis.models import ProactiveAnalysisReport, ProactiveOpeningRecord
+from xuwen.content_i18n import content_text
 
 QualityStatus = Literal["ready", "limited", "not_ready"]
 
@@ -65,28 +66,68 @@ def evaluate_proactive_quality(
 
     if total < 12:
         critical = True
-        issues.append(f"有效长间隔主动开场只有 {total} 条，调度画像证据不足")
-        recommendations.append("补充更长时间范围的聊天记录后重新运行主动倾向分析")
+        issues.append(
+            content_text(
+                "Only {p0} valid proactive openings after long gaps; insufficient evidence for a scheduling profile",
+                p0=total,
+            )
+        )
+        recommendations.append(
+            content_text("Import a longer date range and rerun proactive analysis")
+        )
     elif total < 30:
-        issues.append(f"有效长间隔主动开场只有 {total} 条，画像稳定性有限")
+        issues.append(
+            content_text(
+                "Only {p0} valid proactive openings after long gaps; profile stability is limited",
+                p0=total,
+            )
+        )
 
     if meaningful_ratio < 0.45:
         critical = True
-        issues.append(f"有实际文本信息的开场仅占 {meaningful_ratio:.0%}")
+        issues.append(
+            content_text("Only {p0:.0%} of openings contain meaningful text", p0=meaningful_ratio)
+        )
     elif meaningful_ratio < 0.70:
-        issues.append(f"有实际文本信息的开场占 {meaningful_ratio:.0%}，低信息样本偏多")
+        issues.append(
+            content_text(
+                "{p0:.0%} of openings contain meaningful text; low-information samples are common",
+                p0=meaningful_ratio,
+            )
+        )
 
     if placeholder_ratio > 0.35:
-        issues.append(f"含图片/表情等占位符的样本占 {placeholder_ratio:.0%}")
+        issues.append(
+            content_text(
+                "{p0:.0%} of samples contain image/sticker placeholders", p0=placeholder_ratio
+            )
+        )
     if specific_ratio < 0.30:
-        issues.append(f"可形成具体话题的开场仅占 {specific_ratio:.0%}，容易触发通用兜底")
-        recommendations.append("不要启用自动主动消息，直到具体话题样本占比提升")
+        issues.append(
+            content_text(
+                "Only {p0:.0%} of openings offer a specific topic; generic fallbacks may be frequent",
+                p0=specific_ratio,
+            )
+        )
+        recommendations.append(
+            content_text(
+                "Keep automatic proactive messages disabled until the share of specific-topic samples improves"
+            )
+        )
     if other_ratio > 0.60:
-        issues.append(f"无法分类的 other 开场占 {other_ratio:.0%}")
-        recommendations.append("检查开场分类和占位符清洗规则")
+        issues.append(content_text("{p0:.0%} of openings are unclassified (other)", p0=other_ratio))
+        recommendations.append(
+            content_text("Review opening classification and placeholder cleaning rules")
+        )
     if report.ai_analysis_status != "not_requested" and attribution_ratio < 0.70:
-        issues.append(f"AI 动机归因覆盖率只有 {attribution_ratio:.0%}")
-        recommendations.append("重新运行主动倾向分析，补齐失败的 AI 归因批次")
+        issues.append(
+            content_text(
+                "AI motivation attribution covers only {p0:.0%} of samples", p0=attribution_ratio
+            )
+        )
+        recommendations.append(
+            content_text("Rerun proactive analysis to fill in failed AI attribution batches")
+        )
 
     fallback_risk = "low"
     if specific_ratio < 0.30 or meaningful_ratio < 0.70:
@@ -102,12 +143,14 @@ def evaluate_proactive_quality(
         status = "ready"
     recommended = status == "ready"
     summary = {
-        "ready": "数据质量通过，建议启用主动消息。",
-        "limited": "数据可用于观察调度倾向，但不建议自动发送主动消息。",
-        "not_ready": "数据质量不足，不建议启用主动消息。",
+        "ready": content_text("Data quality passed. Proactive messages can be enabled."),
+        "limited": content_text(
+            "The data can inform scheduling preferences, but automatic proactive messages are not recommended."
+        ),
+        "not_ready": content_text("Insufficient data quality. Keep proactive messages disabled."),
     }[status]
     if not recommendations and not recommended:
-        recommendations.append("先修复列出的问题，再重新运行质量检查")
+        recommendations.append(content_text("Fix the listed issues, then rerun the quality check"))
 
     return ProactiveQualityReport(
         status=status,

@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from xuwen.config import Settings
 from xuwen.core.errors import ParseError
 from xuwen.core.models import MessageKind, NormalizedMessage, SenderRole
+from xuwen.error_i18n import error_text
 from xuwen.ingestion.plugins import ImportIdentityCandidate, ImportImageRef, ImportInspection
 
 
@@ -31,7 +32,9 @@ class DiscordChatExporterPlugin:
 
     def inspect(self, payload: dict[str, Any]) -> ImportInspection:
         if not self.match(payload):
-            return ImportInspection("unknown", [], 0, "无法识别 DiscordChatExporter JSON")
+            return ImportInspection(
+                "unknown", [], 0, error_text("Cannot recognize DiscordChatExporter JSON")
+            )
         authors: dict[str, str] = {}
         for raw in payload["messages"]:
             if not isinstance(raw, dict) or not isinstance(raw.get("author"), dict):
@@ -49,7 +52,7 @@ class DiscordChatExporterPlugin:
 
     def parse(self, payload: dict[str, Any], settings: Settings) -> list[NormalizedMessage]:
         if not self.match(payload):
-            raise ParseError("JSON 不符合 DiscordChatExporter 格式")
+            raise ParseError(error_text("JSON does not match the DiscordChatExporter format"))
         messages: list[NormalizedMessage] = []
         for seq, raw in enumerate(payload["messages"]):
             if not isinstance(raw, dict):

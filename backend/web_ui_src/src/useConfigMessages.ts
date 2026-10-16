@@ -1,8 +1,9 @@
 import zhCN from './locales/zh-CN'
+import en from './locales/en'
 import { useLocale } from './useLocale'
 
 // Match only known UI messages; filenames, provider diagnostics and user data stay intact.
-const matchers = Object.entries(zhCN)
+const matchers = [zhCN, en].flatMap(catalog => Object.entries(catalog)
   .filter(([key]) => key.startsWith('backend'))
   .map(([key, template]) => {
     const names: string[] = []
@@ -14,15 +15,16 @@ const matchers = Object.entries(zhCN)
       return part.replace(/[.*+?^$(){}|[\]\\]/g, '\\$&')
     }).join('')
     return { key: key as keyof typeof zhCN, names, pattern: new RegExp('^' + pattern + '$') }
-  })
+  }))
 
 export function useConfigMessages() {
-  const { isChinese, t } = useLocale()
+  const { t } = useLocale()
   function translateBackendText(text: string): string {
-    if (!text || isChinese.value) return text
-    const hint = zhCN.backendEmbeddingSchemaHint
-    if (text.endsWith(hint)) {
-      return translateBackendText(text.slice(0, -hint.length)) + t('backendEmbeddingSchemaHint')
+    if (!text) return text
+    for (const hint of [zhCN.backendEmbeddingSchemaHint, en.backendEmbeddingSchemaHint]) {
+      if (text.endsWith(hint)) {
+        return translateBackendText(text.slice(0, -hint.length)) + t('backendEmbeddingSchemaHint')
+      }
     }
     for (const { key, names, pattern } of matchers) {
       const match = pattern.exec(text)

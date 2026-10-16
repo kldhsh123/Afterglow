@@ -14,7 +14,10 @@ from typing import Annotated, Literal
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from xuwen.content_i18n import content_text
 from xuwen.core.errors import ConfigError
+from xuwen.error_i18n import error_text
+from xuwen.prompt_language import language_scope
 
 RelationshipType = Literal["friend", "lover", "family", "colleague", "custom"]
 WebSearchProvider = Literal["tavily", "searxng"]
@@ -26,16 +29,16 @@ ReasoningEffort = Literal["none", "low", "medium", "high", "xhigh", "null"]
 
 # 关系类型到自然语言描述的默认映射（仅在用户未自定义 RELATIONSHIP_DESCRIPTION 时使用）
 _RELATIONSHIP_DEFAULTS: dict[RelationshipType, str] = {
-    "friend": "朋友",
-    "lover": "恋人",
-    "family": "亲人",
-    "colleague": "同事",
+    "friend": "Friend",
+    "lover": "Romantic partner",
+    "family": "Family member",
+    "colleague": "Colleague",
     "custom": "",  # custom 必须由用户填写 RELATIONSHIP_DESCRIPTION
 }
 
 
-class Settings(BaseSettings):
-    """xuwen 运行时配置。"""
+class LanguageSettings(BaseSettings):
+    """Language defaults can be loaded before CLI help without validating API settings."""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -43,6 +46,15 @@ class Settings(BaseSettings):
         case_sensitive=False,
         extra="ignore",
     )
+
+    xuwen_language: Literal["en", "zh-CN"] = Field(
+        default="en",
+        description="后端默认语言及主动消息语言：en 或 zh-CN；CLI --language 优先",
+    )
+
+
+class Settings(LanguageSettings):
+    """xuwen 运行时配置。"""
 
     # ----- 应用元数据 -----
     app_name: str = Field(default="Afterglow", description="前端与 API 元数据中展示的应用名")
@@ -100,7 +112,9 @@ class Settings(BaseSettings):
 
     # ----- 关系与模板 -----
     relationship_type: RelationshipType = "friend"
-    relationship_description: str = Field(default="", description="自定义关系描述，仅 custom 时必填")
+    relationship_description: str = Field(
+        default="", description="自定义关系描述，仅 custom 时必填"
+    )
     persona_template: str = Field(
         default="xuwen",
         description="内置模板名（xuwen/friend/lover/family/colleague），或 .md.j2 文件绝对路径",
@@ -177,9 +191,7 @@ class Settings(BaseSettings):
     # 后续要重新检查由前端"立即检查"按钮（POST /info/check-update）触发；
     # 请求只会 GET 一个公开 URL，不传任何身份 / 配置 / API key。
     update_check_enabled: bool = True
-    update_check_url: str = (
-        "https://api.github.com/repos/kldhsh123/Afterglow/releases/latest"
-    )
+    update_check_url: str = "https://api.github.com/repos/kldhsh123/Afterglow/releases/latest"
     update_check_timeout_seconds: float = 8.0
 
     # ----- 视觉理解（vision / VLM）-----
@@ -193,7 +205,9 @@ class Settings(BaseSettings):
     vision_api_url: str = ""
     vision_api_key: SecretStr = Field(default=SecretStr(""))
     vision_model: str = "qwen-vl-plus"
-    vision_describe_prompt: str = "请用一两句话客观描述这张图片的内容，不要发挥。"
+    vision_describe_prompt: str = (
+        "Describe the image objectively in one or two sentences. Do not invent details."
+    )
     vision_timeout_seconds: float = 15.0
     # 单张图片最大字节（base64 解码后）；超过会被拒绝
     vision_max_image_bytes: int = 8 * 1024 * 1024  # 8MB
@@ -561,12 +575,18 @@ class Settings(BaseSettings):
             "/companion",
         }
         if not v or not isinstance(v, str):
-            raise ValueError("CONFIG_UI_PATH_PREFIX 不能为空")
+            raise ValueError(error_text("CONFIG_UI_PATH_PREFIX must not be empty"))
         stripped = v.strip()
         if stripped in ("", "/"):
-            raise ValueError("CONFIG_UI_PATH_PREFIX 不能是 / 或空（会绕过主 API 鉴权）")
+            raise ValueError(
+                error_text(
+                    "CONFIG_UI_PATH_PREFIX must not be / or empty, as this would bypass main API authentication"
+                )
+            )
         if not stripped.startswith("/"):
-            raise ValueError("CONFIG_UI_PATH_PREFIX 必须以 / 开头，例如 /config")
+            raise ValueError(
+                error_text("CONFIG_UI_PATH_PREFIX must start with /, for example /config")
+            )
         normalized = stripped.rstrip("/") or stripped
         # 不仅拒绝精确匹配，还要拒绝 reserved 的子路径：
         # 如 /v1/chat 仍会让 path.startswith("/v1/chat/") 放行 /v1/chat/completions
@@ -574,9 +594,11 @@ class Settings(BaseSettings):
         for r in reserved:
             if normalized == r or normalized.startswith(r + "/"):
                 raise ValueError(
-                    f"CONFIG_UI_PATH_PREFIX 不能落在主 API 业务前缀 {r} 下"
-                    f"（当前值 {normalized} 会让该前缀的业务路由绕过 XUWEN_API_KEY）。"
-                    f"建议保留默认 /config 或改为 /admin / /setup-ui 等独立路径。"
+                    error_text(
+                        "CONFIG_UI_PATH_PREFIX must not be under the main API prefix {p0}: {p1} would bypass XUWEN_API_KEY for those routes. Use /config or a separate path such as /admin or /setup-ui.",
+                        p0=r,
+                        p1=normalized,
+                    )
                 )
         return normalized
 
@@ -585,42 +607,42 @@ class Settings(BaseSettings):
     def _check_overlap(cls, v: int, info: object) -> int:
         # window_overlap 不能 >= window_size，否则窗口无法前进
         if v < 0:
-            raise ValueError("window_overlap 必须 >= 0")
+            raise ValueError(error_text("window_overlap must be >= 0"))
         return v
 
     @field_validator("embedding_dim")
     @classmethod
     def _check_dim(cls, v: int) -> int:
         if v <= 0:
-            raise ValueError("embedding_dim 必须为正整数")
+            raise ValueError(error_text("embedding_dim must be a positive integer"))
         return v
 
     @field_validator("embedding_max_concurrency")
     @classmethod
     def _check_embedding_concurrency(cls, v: int) -> int:
         if v <= 0:
-            raise ValueError("embedding_max_concurrency 必须为正整数")
+            raise ValueError(error_text("embedding_max_concurrency must be a positive integer"))
         return v
 
     @field_validator("embedding_max_requests_per_minute")
     @classmethod
     def _check_embedding_rate_limit(cls, v: int) -> int:
         if v < 0:
-            raise ValueError("embedding_max_requests_per_minute 必须 >= 0")
+            raise ValueError(error_text("embedding_max_requests_per_minute must be >= 0"))
         return v
 
     @field_validator("label_max_concurrency")
     @classmethod
     def _check_label_concurrency(cls, v: int) -> int:
         if v <= 0:
-            raise ValueError("label_max_concurrency 必须为正整数")
+            raise ValueError(error_text("label_max_concurrency must be a positive integer"))
         return v
 
     @field_validator("label_request_interval_seconds")
     @classmethod
     def _check_label_interval(cls, v: float) -> float:
         if v < 0:
-            raise ValueError("label_request_interval_seconds 必须 >= 0")
+            raise ValueError(error_text("label_request_interval_seconds must be >= 0"))
         return v
 
     @field_validator(
@@ -632,14 +654,14 @@ class Settings(BaseSettings):
     @classmethod
     def _check_small_model_temperature(cls, v: float) -> float:
         if not 0 <= v <= 2:
-            raise ValueError("小模型 temperature 必须在 0 到 2 之间")
+            raise ValueError(error_text("Small-model temperature must be between 0 and 2"))
         return v
 
     @field_validator("rerank_weight")
     @classmethod
     def _check_rerank_weight(cls, v: float) -> float:
         if not 0 <= v <= 1:
-            raise ValueError("rerank_weight 必须在 0 到 1 之间")
+            raise ValueError(error_text("rerank_weight must be between 0 and 1"))
         return v
 
     @field_validator(
@@ -668,7 +690,7 @@ class Settings(BaseSettings):
     @classmethod
     def _check_positive_tuning_ints(cls, v: int) -> int:
         if v < 0:
-            raise ValueError("调优整数参数必须 >= 0")
+            raise ValueError(error_text("Integer tuning parameters must be >= 0"))
         return v
 
     @field_validator(
@@ -689,14 +711,16 @@ class Settings(BaseSettings):
     @classmethod
     def _check_model_timeout(cls, v: float) -> float:
         if not math.isfinite(v) or v <= 0:
-            raise ValueError("模型 timeout 必须为有限正数")
+            raise ValueError(error_text("Model timeout must be a finite positive number"))
         return v
 
     @field_validator("analysis_request_interval_seconds")
     @classmethod
     def _check_analysis_interval(cls, v: float) -> float:
         if not math.isfinite(v) or v < 0:
-            raise ValueError("analysis_request_interval_seconds 必须为有限非负数")
+            raise ValueError(
+                error_text("analysis_request_interval_seconds must be a finite nonnegative number")
+            )
         return v
 
     @field_validator(
@@ -708,63 +732,67 @@ class Settings(BaseSettings):
     @classmethod
     def _check_analysis_positive_ints(cls, v: int) -> int:
         if v <= 0:
-            raise ValueError("关系分析的 token、字符预算与并发参数必须为正整数")
+            raise ValueError(
+                error_text(
+                    "Relationship analysis token budgets, character budgets and concurrency must be positive integers"
+                )
+            )
         return v
 
     @field_validator("web_search_max_results")
     @classmethod
     def _check_web_search_max_results(cls, v: int) -> int:
         if v < 0:
-            raise ValueError("web_search_max_results 必须 >= 0")
+            raise ValueError(error_text("web_search_max_results must be >= 0"))
         return min(v, 10)
 
     @field_validator("web_search_timeout_seconds")
     @classmethod
     def _check_web_search_timeout(cls, v: float) -> float:
         if v < 0:
-            raise ValueError("web_search_timeout_seconds 必须 >= 0")
+            raise ValueError(error_text("web_search_timeout_seconds must be >= 0"))
         return v
 
     @field_validator("web_fetch_timeout_seconds")
     @classmethod
     def _check_web_fetch_timeout(cls, v: float) -> float:
         if v < 0:
-            raise ValueError("web_fetch_timeout_seconds 必须 >= 0")
+            raise ValueError(error_text("web_fetch_timeout_seconds must be >= 0"))
         return v
 
     @field_validator("web_fetch_max_urls")
     @classmethod
     def _check_web_fetch_max_urls(cls, v: int) -> int:
         if v < 0:
-            raise ValueError("web_fetch_max_urls 必须 >= 0")
+            raise ValueError(error_text("web_fetch_max_urls must be >= 0"))
         return min(v, 5)
 
     @field_validator("web_fetch_max_redirects")
     @classmethod
     def _check_web_fetch_max_redirects(cls, v: int) -> int:
         if v < 0:
-            raise ValueError("web_fetch_max_redirects 必须 >= 0")
+            raise ValueError(error_text("web_fetch_max_redirects must be >= 0"))
         return min(v, 10)
 
     @field_validator("web_fetch_max_bytes")
     @classmethod
     def _check_web_fetch_max_bytes(cls, v: int) -> int:
         if v <= 0:
-            raise ValueError("web_fetch_max_bytes 必须为正整数")
+            raise ValueError(error_text("web_fetch_max_bytes must be a positive integer"))
         return min(v, 2 * 1024 * 1024)
 
     @field_validator("web_fetch_max_chars")
     @classmethod
     def _check_web_fetch_max_chars(cls, v: int) -> int:
         if v <= 0:
-            raise ValueError("web_fetch_max_chars 必须为正整数")
+            raise ValueError(error_text("web_fetch_max_chars must be a positive integer"))
         return min(v, 20000)
 
     @field_validator("life_temperature")
     @classmethod
     def _check_life_temperature(cls, v: float) -> float:
         if not 0 <= v <= 2:
-            raise ValueError("life_temperature 必须在 0 到 2 之间")
+            raise ValueError(error_text("life_temperature must be between 0 and 2"))
         return v
 
     @field_validator(
@@ -776,8 +804,9 @@ class Settings(BaseSettings):
     def _check_life_positive_int(cls, v: int) -> int:
         if v < 0:
             raise ValueError(
-                "life_max_tokens / life_max_reply_delay_seconds / "
-                "life_update_interval_minutes 必须 >= 0"
+                error_text(
+                    "life_max_tokens / life_max_reply_delay_seconds / life_update_interval_minutes must be >= 0"
+                )
             )
         return v
 
@@ -801,9 +830,7 @@ class Settings(BaseSettings):
             return None
         return v
 
-    @field_validator(
-        "self_aliases", "friend_aliases", "self_uids", "friend_uids", mode="before"
-    )
+    @field_validator("self_aliases", "friend_aliases", "self_uids", "friend_uids", mode="before")
     @classmethod
     def _split_aliases(cls, v: object) -> object:
         """支持 .env 里用逗号分隔传入字符串列表。
@@ -826,13 +853,16 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _check_window(self) -> Settings:
         if self.window_overlap >= self.window_size:
-            raise ValueError("window_overlap 必须严格小于 window_size")
+            raise ValueError(error_text("window_overlap must be strictly less than window_size"))
         if self.adaptive_chunk_max_chars < self.adaptive_chunk_target_chars:
-            raise ValueError("adaptive_chunk_max_chars 必须 >= adaptive_chunk_target_chars")
+            raise ValueError(
+                error_text("adaptive_chunk_max_chars must be >= adaptive_chunk_target_chars")
+            )
         if self.analysis_experimental_prompt_enabled and not self.analysis_experimental_enabled:
             raise ValueError(
-                "ANALYSIS_EXPERIMENTAL_PROMPT_ENABLED=true 时必须同时开启 "
-                "ANALYSIS_EXPERIMENTAL_ENABLED"
+                error_text(
+                    "ANALYSIS_EXPERIMENTAL_PROMPT_ENABLED=true also requires ANALYSIS_EXPERIMENTAL_ENABLED"
+                )
             )
         return self
 
@@ -844,8 +874,9 @@ class Settings(BaseSettings):
         """
         if self.relationship_type == "custom" and not self.relationship_description:
             raise ValueError(
-                "RELATIONSHIP_TYPE=custom 时必须填写 RELATIONSHIP_DESCRIPTION，"
-                "或把 RELATIONSHIP_TYPE 改为 friend / lover / family / colleague 之一"
+                error_text(
+                    "RELATIONSHIP_TYPE=custom requires RELATIONSHIP_DESCRIPTION. Alternatively, use friend / lover / family / colleague"
+                )
             )
         return self
 
@@ -862,9 +893,9 @@ class Settings(BaseSettings):
             return self.relationship_description
         if self.relationship_type == "custom":
             raise ConfigError(
-                "RELATIONSHIP_TYPE=custom 时必须填写 RELATIONSHIP_DESCRIPTION",
+                error_text("RELATIONSHIP_TYPE=custom requires RELATIONSHIP_DESCRIPTION"),
             )
-        return _RELATIONSHIP_DEFAULTS[self.relationship_type]
+        return content_text(_RELATIONSHIP_DEFAULTS[self.relationship_type])
 
     @property
     def resolved_life_api_url(self) -> str:
@@ -1008,10 +1039,7 @@ class Settings(BaseSettings):
         """
         if self.adaptive_chunk_max_concurrency > 0:
             return self.adaptive_chunk_max_concurrency
-        if (
-            not self.adaptive_chunk_api_url
-            and self.label_api_key.get_secret_value()
-        ):
+        if not self.adaptive_chunk_api_url and self.label_api_key.get_secret_value():
             return self.label_max_concurrency
         return 4
 
@@ -1088,18 +1116,17 @@ class Settings(BaseSettings):
         if not self.self_name:
             missing.append("SELF_NAME")
         if not self.all_self_uids:
-            missing.append("SELF_UID 或 SELF_UIDS")
+            missing.append(content_text("SELF_UID or SELF_UIDS"))
         if not self.friend_name:
             missing.append("FRIEND_NAME")
         if not self.all_friend_uids:
-            missing.append("FRIEND_UID 或 FRIEND_UIDS")
+            missing.append(content_text("FRIEND_UID or FRIEND_UIDS"))
         if missing:
             raise ConfigError(
-                "缺少必填配置：" + ", ".join(missing) + "。\n"
-                "请打开 backend/.env，参考 .env.example 顶部的"
-                "「身份信息」一节填写。\n"
-                "如何获取 SELF_UID / FRIEND_UID：见 backend/README.md 的"
-                "「如何找到 UID」章节。",
+                error_text(
+                    "Missing required settings: {p0}.\nOpen backend/.env and fill in the identity settings using .env.example.\nSee backend/README.md for how to find SELF_UID / FRIEND_UID.",
+                    p0=", ".join(missing),
+                ),
                 detail={"missing": missing},
             )
 
@@ -1111,7 +1138,8 @@ def get_settings() -> Settings:
     LRU 缓存确保整个进程只加载一次 .env。
     需要重新加载时调用 `get_settings.cache_clear()`。
     """
-    return Settings()
+    with language_scope(LanguageSettings().xuwen_language):
+        return Settings()
 
 
 def _dedupe_names(names: list[str]) -> list[str]:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from xuwen.cli_i18n import cli_text, fixed_fallback
 from xuwen.config import Settings
 from xuwen.ingestion.cli import (
     _auto_build_vector_indices,
@@ -42,6 +43,36 @@ def test_analyze_cli_accepts_repeated_targets() -> None:
     )
 
     assert args.targets == ["timeline", "personality"]
+
+
+def test_cli_language_defaults_to_english_and_accepts_both_positions() -> None:
+    parser = _build_parser()
+    assert parser.parse_args(["stats"]).language == "en"
+    assert parser.parse_args(["--language", "zh-CN", "stats"]).language == "zh-CN"
+    assert parser.parse_args(["stats", "--language", "zh-CN"]).language == "zh-CN"
+
+
+def test_cli_text_never_exposes_missing_translation_key(monkeypatch) -> None:
+    import xuwen.cli_i18n as i18n
+
+    monkeypatch.setattr(i18n, "_load_catalog", lambda _language: {})
+    assert cli_text("missing.key", "zh-CN") == fixed_fallback("missing.key")
+    assert cli_text("missing.key", "zh-CN") != "missing.key"
+
+    monkeypatch.setattr(
+        i18n,
+        "_load_catalog",
+        lambda language: {"partial.key": "Fixed English copy"} if language == "en" else {},
+    )
+    assert cli_text("partial.key", "zh-CN") == "Fixed English copy"
+
+
+def test_cli_locale_files_cover_the_fixed_fallback_catalog() -> None:
+    import xuwen.cli_i18n as i18n
+
+    expected_keys = set(i18n._FALLBACKS)
+    for language in i18n.SUPPORTED_LANGUAGES:
+        assert expected_keys <= set(i18n._load_catalog(language))
 
 
 def test_proactive_analysis_has_a_separate_cli_command() -> None:
@@ -104,7 +135,7 @@ async def test_rebuild_proactive_profile_from_store_saves_combined_rows(tmp_path
     summary = await _rebuild_proactive_profile_from_store(settings, store)
 
     assert store.limit == 50
-    assert "共识别 1 次" in summary
+    assert "Identified 1 proactive openings" in summary
     saved = load_proactive_profile(
         settings.persona_data_dir / PROACTIVE_PROFILE_FILENAME
     )

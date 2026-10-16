@@ -8,13 +8,20 @@ import uuid
 from collections.abc import Awaitable, Callable
 
 from fastapi import FastAPI, Request, Response
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
+from xuwen.api_i18n import api_text, request_language
 from xuwen.config import Settings
+from xuwen.content_i18n import content_text
 from xuwen.core.errors import XuwenError
+from xuwen.error_i18n import error_text
+from xuwen.prompt_language import language_scope
 
 logger = logging.getLogger(__name__)
 
@@ -51,8 +58,7 @@ class ApiKeyGuard(BaseHTTPMiddleware):
         from xuwen.web_ui.first_run import check_first_run
 
         config_ui_active = (
-            self.settings.config_ui_enabled
-            or check_first_run(self.settings).is_first_run
+            self.settings.config_ui_enabled or check_first_run(self.settings).is_first_run
         )
         if config_ui_active:
             prefix = self.settings.config_ui_path_prefix.rstrip("/")
@@ -61,12 +67,15 @@ class ApiKeyGuard(BaseHTTPMiddleware):
         if api_key is None:
             if not self.settings.api_auth_required:
                 return await call_next(request)
+            language = request_language(
+                request.headers.get("accept-language"), default=self.settings.xuwen_language
+            )
             return JSONResponse(
                 status_code=503,
                 content={
                     "error": {
                         "code": "xuwen.auth_config",
-                        "message": "后端 API 鉴权已启用，但 XUWEN_API_KEY 未配置。请先在 .env 设置本地 API key。",
+                        "message": api_text("auth.config_missing", language),
                     }
                 },
             )
@@ -74,12 +83,15 @@ class ApiKeyGuard(BaseHTTPMiddleware):
         expected = api_key.get_secret_value()
         provided = _extract_token(request)
         if provided != expected:
+            language = request_language(
+                request.headers.get("accept-language"), default=self.settings.xuwen_language
+            )
             return JSONResponse(
                 status_code=401,
                 content={
                     "error": {
                         "code": "xuwen.auth",
-                        "message": "缺少或错误的 API key（请在 Header 中带 Authorization: Bearer <key>）",
+                        "message": api_text("auth.invalid", language),
                     }
                 },
             )
@@ -88,6 +100,10 @@ class ApiKeyGuard(BaseHTTPMiddleware):
 
 class RequestIdMiddleware(BaseHTTPMiddleware):
     """为每个请求分配 x-request-id，便于追踪日志。"""
+
+    def __init__(self, app: ASGIApp, settings: Settings) -> None:
+        super().__init__(app)
+        self.settings = settings
 
     async def dispatch(
         self,
@@ -98,15 +114,25 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
         request.state.request_id = rid
         start = time.perf_counter()
         try:
-            response = await call_next(request)
+            with language_scope(
+                request_language(
+                    request.headers.get("accept-language"), default=self.settings.xuwen_language
+                )
+            ):
+                response = await call_next(request)
         except Exception:
             duration = (time.perf_counter() - start) * 1000
-            logger.exception("请求处理异常 path=%s rid=%s elapsed_ms=%.1f", request.url.path, rid, duration)
+            logger.exception(
+                content_text("Request failed path=%s rid=%s elapsed_ms=%.1f"),
+                request.url.path,
+                rid,
+                duration,
+            )
             raise
         duration = (time.perf_counter() - start) * 1000
         response.headers["x-request-id"] = rid
         logger.info(
-            "请求完成 method=%s path=%s status=%d rid=%s elapsed_ms=%.1f",
+            content_text("Request complete method=%s path=%s status=%d rid=%s elapsed_ms=%.1f"),
             request.method,
             request.url.path,
             response.status_code,
@@ -128,7 +154,7 @@ def install_middleware(app: FastAPI, settings: Settings) -> None:
     所以这里的注册顺序是从内到外。
     """
     app.add_middleware(ApiKeyGuard, settings=settings)
-    app.add_middleware(RequestIdMiddleware)
+    app.add_middleware(RequestIdMiddleware, settings=settings)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -155,6 +181,36 @@ def install_exception_handlers(app: FastAPI) -> None:
                 }
             },
             headers={"x-request-id": rid} if rid else None,
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def _validation_error_handler(
+        request: Request, exc: RequestValidationError
+    ) -> JSONResponse:
+        errors = []
+        for entry in exc.errors():
+            item = dict(entry)
+            kind = str(item.get("type", ""))
+            if kind == "missing":
+                item["msg"] = error_text("This field is required")
+            elif kind == "json_invalid":
+                item["msg"] = error_text("Invalid JSON")
+            elif kind == "value_error" and isinstance(item.get("ctx"), dict):
+                item["msg"] = error_text(
+                    "Invalid value: {reason}", reason=item["ctx"].get("error", "")
+                )
+            else:
+                item["msg"] = error_text("Invalid value: {reason}", reason=item.get("msg", ""))
+            errors.append(item)
+        return JSONResponse(status_code=422, content={"detail": jsonable_encoder(errors)})
+
+    @app.exception_handler(StarletteHTTPException)
+    async def _http_error_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+        detail = exc.detail
+        if detail in ("Not Found", "Method Not Allowed", "Unauthorized", "Forbidden"):
+            detail = error_text(detail)
+        return JSONResponse(
+            status_code=exc.status_code, content={"detail": detail}, headers=exc.headers
         )
 
 

@@ -1,5 +1,5 @@
 import { useLocale } from './useLocale'
-const { t } = useLocale()
+const { t, locale } = useLocale()
 // 配置 UI 后端 API 客户端
 // 路径前缀从当前 URL 推断（页面挂在 /config/ 就用 /config，挂在 /admin/ 就用 /admin），
 // 这样后端改 CONFIG_UI_PATH_PREFIX 不用重新构建前端。
@@ -57,7 +57,7 @@ export function setToken(token: string): void {
 
 function authHeaders(): Record<string, string> {
   const t = getToken()
-  return t ? { Authorization: `Bearer ${t}` } : {}
+  return { 'Accept-Language': locale.value, ...(t ? { Authorization: `Bearer ${t}` } : {}) }
 }
 
 async function jsonRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -243,7 +243,8 @@ export const api = {
 
   taskStreamUrl: (id: string): string => {
     const t = getToken()
-    const tq = t ? `?token=${encodeURIComponent(t)}` : ''
-    return CONFIG_PREFIX + `/import/${id}/stream${tq}`
+    const query = new URLSearchParams({ language: locale.value })
+    if (t) query.set('token', t)
+    return CONFIG_PREFIX + `/import/${id}/stream?${query}`
   },
 }

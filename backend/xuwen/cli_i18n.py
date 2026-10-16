@@ -1,0 +1,168 @@
+"""Translations for user-facing xuwen CLI text."""
+
+from __future__ import annotations
+
+import json
+from functools import lru_cache
+from pathlib import Path
+
+SUPPORTED_LANGUAGES = ("en", "zh-CN")
+DEFAULT_LANGUAGE = "en"
+
+# This in-code English catalog is the final fallback when locale files are incomplete.
+_FALLBACKS = {
+    "config.title": "Afterglow configuration UI (standalone)",
+    "config.description": "Run the standalone Afterglow configuration UI without the main chat API, for a minimal service when updating settings.",
+    "config.host": "Bind address; default: 127.0.0.1 (local only). Keep the default in production.",
+    "config.port": "Bind port; default: 8765 (separate from the main service on 8000).",
+    "config.uvicorn_missing": "uvicorn is missing. Run uv sync to install dependencies.",
+    "app.description": "Afterglow chat history and memory command line tools",
+    "language.help": "Output language (en or zh-CN); defaults to XUWEN_LANGUAGE, or en",
+    "ascii.help": "Use ASCII table labels for terminals without CJK support",
+    "import.help": "Import exported JSON, JSONL, TXT, Markdown, or HTML chat files",
+    "import.paths": "One or more chat export paths; formats and platforms may be mixed",
+    "import.env": "Optional .env file path",
+    "import.plugin": "Force a parser plugin; by default the format is detected automatically",
+    "import.emoji": "JSON emoji placeholder mode: raw or normalized",
+    "import.rebuild_help": "Rebuild selected tables before import: friend,window,pair,all",
+    "images.help": "Import historical images and index visual descriptions",
+    "images.path": "Export directory containing chat files and image resources",
+    "stats.help": "Show current vector store statistics",
+    "plugins.help": "List registered import plugins",
+    "label.help": "Label unlabeled friend message chunks with a small model",
+    "index.help": "Build vector indexes for vector tables",
+    "optimize.help": "Merge new data into indexes and clean old versions",
+    "analyze.help": "Generate relationship timeline and personality reports",
+    "analyze.paths": "Chat JSON or JSONL files",
+    "analyze.blocks": "List deterministic analysis blocks without calling a model",
+    "analyze.inspect": "Print a block's metadata and full text without calling a model",
+    "analyze.timeline": "Generate only the timeline",
+    "analyze.personality": "Generate only the personality report",
+    "analyze.target": "Run only selected analysis targets; may be repeated",
+    "analyze.resume": "Reuse completed deterministic analysis blocks (default: enabled)",
+    "analyze.since": "Only analyze messages from this month onward",
+    "proactive.help": "Analyze proactive conversation starts separately",
+    "proactive.resume": "Reuse completed AI attribution (default: enabled)",
+    "generic.out_dir": "Output directory",
+    "generic.limit": "Maximum number of items to process",
+    "generic.min_rows": "Skip indexing tables below this row count",
+    "generic.index_type": "Index type; auto selects based on table size",
+    "generic.force": "Rebuild indexes even when they already exist",
+    "error.no_paths": "At least one chat file path is required.",
+    "import.batch": "Batch import: {count} files; sharing the database and embedding client",
+    "import.start": "Importing: {path}",
+    "import.emoji_mode": "JSON emoji mode: {mode}",
+    "import.label_start": "Labeling {count} new chunks (model {model}, batch={batch}, concurrency={concurrency}, interval={interval}s)",
+    "import.label_progress": "Labeled {done}/{total}",
+    "import.rebuild": "Rebuilding tables: {tables} (existing table data will be deleted)",
+    "import.process": "Processing {current}/{total}: {path}",
+    "import.circadian": "Rebuilt circadian profile from all files: {summary}",
+    "import.proactive": "Rebuilt proactive profile from imported windows: {summary}",
+    "import.circadian_failed": "Could not rebuild the circadian profile after batch import; ignored",
+    "import.proactive_failed": "Could not rebuild the proactive profile after batch import; ignored",
+    "report.title": "Import report",
+    "report.total": "Total ({count} files)",
+    "report.metric": "Metric",
+    "report.value": "Value",
+    "report.raw": "Raw messages",
+    "report.parsed": "Parsed",
+    "report.skipped": "Skipped / failed",
+    "report.sessions": "Sessions",
+    "report.friend": "Friend chunks",
+    "report.window": "Dialogue window chunks",
+    "report.pair": "Response pairs",
+    "report.emb_friend": "Embedded friend chunks",
+    "report.emb_window": "Embedded windows",
+    "report.emb_pair": "Embedded response pairs",
+    "report.up_friend": "Upserted friend chunks",
+    "report.up_window": "Upserted windows",
+    "report.up_pair": "Upserted response pairs",
+    "report.duration": "Duration (seconds)",
+    "report.tip": "Note: ",
+    "stats.path": "LanceDB path",
+    "images.start": "Importing historical images: {path}",
+    "images.title": "Image import report",
+    "images.refs": "Image references",
+    "images.matched": "Matched files",
+    "images.missing": "Missing / skipped",
+    "images.unique": "Unique images",
+    "images.described": "Descriptions generated / reused",
+    "images.reused": "Duplicate hashes reused",
+    "images.failed": "Description failures skipped",
+    "images.existing": "Existing links",
+    "images.indexed": "Image rows written",
+    "index.auto_built": "Automatically built vector indexes for {count} tables: {tables}",
+    "label.disabled": "Labeling is disabled. Set LABELING_ENABLED=true and configure LABEL_API_KEY in .env to enable it.",
+    "label.start": "Starting labeling: model={model}, batch={batch}, concurrency={concurrency}, interval={interval}s",
+    "label.report": "Labeling report",
+    "label.pending": "Chunks pending",
+    "label.done": "Labeled",
+    "label.failed": "Failed / unknown",
+    "label.calls": "LLM calls",
+    "plugins.empty": "No import plugins are registered.",
+    "plugins.title": "Registered import plugins",
+    "error.rebuild_value": "Unknown --rebuild-tables value: {value}",
+    "error.target_conflict": "--target cannot be combined with --timeline-only or --personality-only.",
+    "analyze.blocks_title": "Relationship analysis blocks ({count})",
+    "analyze.number": "Number",
+    "analyze.block_id": "Block ID",
+    "analyze.start_time": "Start time",
+    "analyze.messages": "Messages",
+    "analyze.characters": "Characters",
+    "analyze.sessions": "Sessions",
+    "error.block_missing": "Analysis block not found: {block_id}. Check the input, identity settings, --since, and ANALYSIS_BLOCK_CHAR_BUDGET.",
+    "analyze.running": "Analyzing relationship history...",
+    "analyze.stage.map": "Mapping",
+    "analyze.stage.timeline": "Timeline",
+    "analyze.stage.life": "Life",
+    "analyze.stage.personality": "Personality",
+    "analyze.stage.experimental": "Experimental",
+    "analyze.stage.monthly_reduce": "Monthly reduction",
+    "analyze.failed": "Relationship analysis failed: {error}",
+    "analyze.skipped": "Skipped {count} analysis blocks due to model refusals or invalid JSON. See failures/ and manifest.json in the output directory.",
+    "proactive.running": "Analyzing proactive conversation starts...",
+    "proactive.failed": "Proactive analysis failed: {error}",
+    "proactive.quality_hint": "After analysis, run the data quality check before enabling proactive messaging:",
+    "index.building": "Building vector indexes ({label}{force})...",
+    "index.force": ", rebuilding",
+    "optimize.running": "Optimizing all tables (merging index updates and cleaning old versions)...",
+    "fallback.missing": "Text unavailable",
+    "startup.first_run_log": "First-run setup: missing {missing}; configuration UI enabled at {url} (token: {token})",
+    "startup.enabled_log": "Configuration UI enabled at {url} (token: {token})",
+    "startup.first_run_title": "First-run setup detected (missing {missing})",
+    "startup.first_run_enabled": "Configuration UI enabled for this session",
+    "startup.browser": "Open in browser: {url}",
+    "startup.token": "Access token ({source}): {token}",
+    "startup.paste": "Paste this token into step 1 of the setup wizard.",
+    "startup.restart": "This message will disappear after setup is saved and the backend is restarted.",
+    "startup.enabled_title": "Afterglow configuration UI enabled",
+}
+
+
+@lru_cache(maxsize=2)
+def _load_catalog(language: str) -> dict[str, str]:
+    if language not in SUPPORTED_LANGUAGES:
+        language = DEFAULT_LANGUAGE
+    path = Path(__file__).parent / "locales" / "cli" / f"{language}.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def cli_text(key: str, language: str = DEFAULT_LANGUAGE, **params: object) -> str:
+    """Resolve localized copy, falling back to fixed English copy, never the key."""
+    catalog = _load_catalog(language)
+    value = catalog.get(key) or _load_catalog(DEFAULT_LANGUAGE).get(key) or _FALLBACKS.get(key)
+    if not isinstance(value, str) or not value:
+        value = _FALLBACKS["fallback.missing"]
+    try:
+        return value.format(**params)
+    except (KeyError, ValueError):
+        return value
+
+
+def fixed_fallback(key: str) -> str:
+    """Expose fixed copy for tests and tooling that needs a guaranteed fallback."""
+    return _FALLBACKS.get(key, _FALLBACKS["fallback.missing"])

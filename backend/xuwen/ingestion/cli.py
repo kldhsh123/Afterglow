@@ -19,7 +19,9 @@ from rich.console import Console
 from rich.logging import RichHandler
 from rich.table import Table
 
-from xuwen.config import Settings, get_settings
+from xuwen.cli_i18n import DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES, cli_text
+from xuwen.config import LanguageSettings, Settings, get_settings
+from xuwen.content_i18n import content_text
 from xuwen.core.models import ImportReport
 from xuwen.ingestion.embedder import EmbeddingClient
 from xuwen.ingestion.importer import import_history
@@ -32,6 +34,11 @@ from xuwen.memory.store import MemoryStore
 
 console = Console()
 
+
+def _t(args: argparse.Namespace, key: str, **params: object) -> str:
+    return cli_text(key, getattr(args, "language", DEFAULT_LANGUAGE), **params)
+
+
 # 初始化日志：把 WARNING 及以上的消息打到控制台（包括 embedding 上游错误正文）
 logging.basicConfig(
     level=logging.INFO,
@@ -40,152 +47,163 @@ logging.basicConfig(
 )
 
 
-def _build_parser() -> argparse.ArgumentParser:
+def _build_parser(language: str = DEFAULT_LANGUAGE) -> argparse.ArgumentParser:
+    def text(key: str) -> str:
+        return cli_text(key, language)
+
     parser = argparse.ArgumentParser(
         prog="xuwen-ingest",
-        description="续温 / Afterglow 历史聊天导入工具",
+        description=text("app.description"),
+    )
+    parser.add_argument(
+        "--language", choices=SUPPORTED_LANGUAGES, default=language, help=text("language.help")
     )
     parser.add_argument(
         "--ascii",
         action="store_true",
-        help="使用纯 ASCII 列名输出表格（适用于不支持中文宽字符的终端）",
+        help=text("ascii.help"),
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    p_import = sub.add_parser("import", help="把导出的 JSON / JSONL / TXT / Markdown / HTML 聊天文件导入向量库")
+    def add_language_option(command: argparse.ArgumentParser) -> None:
+        command.add_argument(
+            "--language",
+            choices=SUPPORTED_LANGUAGES,
+            default=argparse.SUPPRESS,
+            help=text("language.help"),
+        )
+
+    p_import = sub.add_parser("import", help=text("import.help"))
+    add_language_option(p_import)
     p_import.add_argument(
         "json_paths",
         type=Path,
         nargs="+",
-        help="一个或多个聊天导出文件路径（自动识别格式，可混合平台）",
+        help=text("import.paths"),
     )
-    p_import.add_argument("--env-file", type=Path, default=None, help="可选：.env 文件路径")
+    p_import.add_argument("--env-file", type=Path, default=None, help=text("import.env"))
     p_import.add_argument(
         "--plugin",
         default=None,
-        help="可选：强制使用某个 plugin（如 qqexporter_v5 / wechat_weflow）。不指定则自动识别。",
+        help=text("import.plugin"),
     )
     p_import.add_argument(
         "--json-emoji-mode",
         choices=("raw", "normalized"),
         default="raw",
-        help=(
-            "JSON 表情占位符模式：raw（默认）自动把方括号内 1-12 个字符视为表情；"
-            "normalized 表示文件已由用户预处理，只识别统一标记 [/表情]。"
-        ),
+        help=text("import.emoji"),
     )
     p_import.add_argument(
         "--rebuild-tables",
         default="",
-        help=(
-            "导入前重建指定索引表，逗号分隔：friend,window,pair,all。"
-            "切到 CHUNKING_STRATEGY=adaptive 并希望旧数据也生效时，建议用 window,friend。"
-        ),
+        help=text("import.rebuild_help"),
     )
     p_images = sub.add_parser(
         "import-images",
-        help="离线导入导出包中的历史图片，调用视觉模型生成摘要并写入图片索引",
+        help=text("images.help"),
     )
+    add_language_option(p_images)
     p_images.add_argument(
         "export_dir",
         type=Path,
-        help="导出目录；自动收集其中的聊天 JSON/JSONL 和图片资源",
+        help=text("images.path"),
     )
-    p_images.add_argument("--env-file", type=Path, default=None, help="可选：.env 文件路径")
+    p_images.add_argument("--env-file", type=Path, default=None, help=text("import.env"))
     p_images.add_argument(
         "--plugin",
         default=None,
-        help="可选：强制使用某个文本导入 plugin 解析消息身份（如 afterglow_v1 / qqexporter_v5）",
+        help=text("import.plugin"),
     )
 
-    sub.add_parser("stats", help="显示向量库当前统计")
-    sub.add_parser("plugins", help="列出所有内置导入 plugin")
-    p_label = sub.add_parser("label", help="给未打标的 friend_messages 跑一遍小模型打标")
+    p_stats = sub.add_parser("stats", help=text("stats.help"))
+    add_language_option(p_stats)
+    p_plugins = sub.add_parser("plugins", help=text("plugins.help"))
+    add_language_option(p_plugins)
+    p_label = sub.add_parser("label", help=text("label.help"))
+    add_language_option(p_label)
     p_label.add_argument(
         "--limit",
         type=int,
         default=100000,
-        help="本次最多处理多少条（默认 10 万，等于全标）",
+        help=text("generic.limit"),
     )
     p_index = sub.add_parser(
         "index",
-        help="对向量表建索引以加速检索（已建过的表跳过；按行数自动分层选索引类型）",
+        help=text("index.help"),
     )
+    add_language_option(p_index)
     p_index.add_argument(
         "--min-rows",
         type=int,
         default=None,
-        help="表行数低于此值不建索引；默认读 LANCE_INDEX_MIN_ROWS",
+        help=text("generic.min_rows"),
     )
     p_index.add_argument(
         "--index-type",
         choices=["auto", "IVF_FLAT", "IVF_PQ", "IVF_HNSW_SQ", "IVF_HNSW_PQ"],
         default="auto",
-        help=(
-            "索引类型：auto(默认，按行数分层)/IVF_FLAT(<50k 精确)/IVF_PQ(50k-500k 量化)"
-            "/IVF_HNSW_SQ(>=500k 大库)；显式指定会覆盖自动选择"
-        ),
+        help=text("generic.index_type"),
     )
     p_index.add_argument(
         "--force",
         action="store_true",
-        help="即使已建过索引也强制重建（用于从旧 IVF_PQ 切到新分层；replace 现有索引）",
+        help=text("generic.force"),
     )
-    sub.add_parser(
-        "optimize",
-        help="对所有向量表跑 table.optimize()：把新写入数据并入索引、清理旧版本",
-    )
-    p_analyze = sub.add_parser("analyze", help="从原始聊天文件生成关系时间线与性格报告")
-    p_analyze.add_argument("paths", nargs="+", type=Path, help="聊天 JSON / JSONL 文件")
-    p_analyze.add_argument("--env-file", type=Path, default=None, help="可选：.env 文件路径")
-    p_analyze.add_argument("--out-dir", type=Path, default=None, help="输出目录")
+    p_optimize = sub.add_parser("optimize", help=text("optimize.help"))
+    add_language_option(p_optimize)
+    p_analyze = sub.add_parser("analyze", help=text("analyze.help"))
+    add_language_option(p_analyze)
+    p_analyze.add_argument("paths", nargs="+", type=Path, help=text("analyze.paths"))
+    p_analyze.add_argument("--env-file", type=Path, default=None, help=text("import.env"))
+    p_analyze.add_argument("--out-dir", type=Path, default=None, help=text("generic.out_dir"))
     inspect_mode = p_analyze.add_mutually_exclusive_group()
     inspect_mode.add_argument(
         "--list-blocks",
         action="store_true",
-        help="只列出确定性分析块，不调用模型",
+        help=text("analyze.blocks"),
     )
     inspect_mode.add_argument(
         "--inspect-block",
         default=None,
         metavar="BLOCK_ID",
-        help="打印指定分析块的元数据和完整文本，不调用模型",
+        help=text("analyze.inspect"),
     )
     mode = p_analyze.add_mutually_exclusive_group()
-    mode.add_argument("--timeline-only", action="store_true", help="只生成时间线")
-    mode.add_argument("--personality-only", action="store_true", help="只生成性格报告")
+    mode.add_argument("--timeline-only", action="store_true", help=text("analyze.timeline"))
+    mode.add_argument("--personality-only", action="store_true", help=text("analyze.personality"))
     p_analyze.add_argument(
         "--target",
         dest="targets",
         action="append",
         choices=("timeline", "personality", "life", "experimental"),
-        help="只运行指定关系分析；可重复传入。不传则运行现有全量分析",
+        help=text("analyze.target"),
     )
     p_analyze.add_argument(
         "--resume",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="复用已完成的确定性分析块（默认开启）",
+        help=text("analyze.resume"),
     )
-    p_analyze.add_argument("--since", default=None, metavar="YYYY-MM", help="只分析该月份以后")
+    p_analyze.add_argument("--since", default=None, metavar="YYYY-MM", help=text("analyze.since"))
     p_proactive = sub.add_parser(
         "analyze-proactive",
-        help="单独分析主动消息倾向；不会运行时间线、人格或生活分析",
+        help=text("proactive.help"),
     )
-    p_proactive.add_argument("paths", nargs="+", type=Path, help="聊天 JSON / JSONL 文件")
-    p_proactive.add_argument("--env-file", type=Path, default=None, help="可选：.env 文件路径")
-    p_proactive.add_argument("--out-dir", type=Path, default=None, help="输出目录")
+    add_language_option(p_proactive)
+    p_proactive.add_argument("paths", nargs="+", type=Path, help=text("analyze.paths"))
+    p_proactive.add_argument("--env-file", type=Path, default=None, help=text("import.env"))
+    p_proactive.add_argument("--out-dir", type=Path, default=None, help=text("generic.out_dir"))
     p_proactive.add_argument(
         "--resume",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="复用已完成的主动开聊 AI 归因（默认开启）",
+        help=text("proactive.resume"),
     )
     p_proactive.add_argument(
         "--since",
         default=None,
         metavar="YYYY-MM",
-        help="只分析该月份以后",
+        help=text("analyze.since"),
     )
     return parser
 
@@ -207,9 +225,7 @@ async def _rebuild_proactive_profile_from_store(
         save_proactive_profile,
     )
 
-    rows = await store.list_dialogue_windows(
-        limit=settings.proactive_profile_window_limit
-    )
+    rows = await store.list_dialogue_windows(limit=settings.proactive_profile_window_limit)
     profile = compute_proactive_profile_from_window_rows(
         rows,
         friend_name=settings.friend_name or "TA",
@@ -251,33 +267,15 @@ async def _rebuild_circadian_profile_from_files(
         profile,
         settings.persona_data_dir / CIRCADIAN_PROFILE_FILENAME,
     )
-    return (
-        f"合并 {dataset.source_files} 个文件，样本 {profile.sample_size}，"
-        f"{profile.summary}"
+    return content_text(
+        "Merged {files} files, {samples} samples; {summary}",
+        files=dataset.source_files,
+        samples=profile.sample_size,
+        summary=profile.summary,
     )
 
 
-# 中文 / ASCII 双套列名
-_LABELS_CN = {
-    "metric": "指标",
-    "value": "值",
-    "raw": "原始消息数",
-    "parsed": "解析成功",
-    "skipped": "跳过 / 失败",
-    "sessions": "会话数",
-    "friend": "朋友单条 chunk",
-    "window": "对话窗口 chunk",
-    "pair": "问答响应 pair",
-    "emb_friend": "向量化（单条）",
-    "emb_window": "向量化（窗口）",
-    "emb_pair": "向量化（pair）",
-    "up_friend": "入库（单条）",
-    "up_window": "入库（窗口）",
-    "up_pair": "入库（pair）",
-    "duration": "耗时 (秒)",
-    "title": "导入报告",
-    "tip": "提示：",
-}
+# ASCII labels remain intentionally stable for machine-friendly terminals.
 _LABELS_ASCII = {
     "metric": "metric",
     "value": "value",
@@ -299,24 +297,53 @@ _LABELS_ASCII = {
     "tip": "TIP:",
 }
 
+_REPORT_LABEL_KEYS = {
+    "metric": "report.metric",
+    "value": "report.value",
+    "raw": "report.raw",
+    "parsed": "report.parsed",
+    "skipped": "report.skipped",
+    "sessions": "report.sessions",
+    "friend": "report.friend",
+    "window": "report.window",
+    "pair": "report.pair",
+    "emb_friend": "report.emb_friend",
+    "emb_window": "report.emb_window",
+    "emb_pair": "report.emb_pair",
+    "up_friend": "report.up_friend",
+    "up_window": "report.up_window",
+    "up_pair": "report.up_pair",
+    "duration": "report.duration",
+    "title": "report.title",
+    "tip": "report.tip",
+}
+
+
+def _labels(language: str, *, ascii_only: bool = False) -> dict[str, str]:
+    if ascii_only:
+        labels = dict(_LABELS_ASCII)
+        labels["_language"] = language
+        return labels
+    labels = {name: cli_text(key, language) for name, key in _REPORT_LABEL_KEYS.items()}
+    labels["_language"] = language
+    return labels
+
 
 async def _run_import(args: argparse.Namespace) -> int:
     settings = _load_settings(args.env_file)
-    L = _LABELS_ASCII if args.ascii else _LABELS_CN
+    L = _labels(args.language, ascii_only=args.ascii)
 
     paths: list[Path] = list(args.json_paths)
     if not paths:
-        console.print("[red]错误：至少需要一个 JSON / JSONL 文件路径。[/red]")
+        console.print(f"[red]{_t(args, 'error.no_paths')}[/red]")
         return 1
 
     multi = len(paths) > 1
     if multi:
-        console.print(
-            f"[bold]批量导入：[/]{len(paths)} 个文件，共享 LanceDB 连接和 Embedding 客户端"
-        )
+        console.print(f"[bold]{_t(args, 'import.batch', count=len(paths))}[/]")
     else:
-        console.print(f"[bold]开始导入：[/]{paths[0]}")
-    console.print(f"[dim]JSON 表情模式：{args.json_emoji_mode}[/]")
+        console.print(f"[bold]{_t(args, 'import.start', path=paths[0])}[/]")
+    console.print(f"[dim]{_t(args, 'import.emoji_mode', mode=args.json_emoji_mode)}[/]")
 
     # 打标阶段进度回调：按 batch 打印「已打标 done/total」
     # 只有 labeling_enabled=true 时才会真正触发（否则 importer 内部跳过）
@@ -325,24 +352,18 @@ async def _run_import(args: argparse.Namespace) -> int:
     def _label_progress(done: int, total: int) -> None:
         if not label_started[0]:
             console.print(
-                f"[dim]·[/] 开始打标 [bold]{total}[/] 条新 chunk "
-                f"（模型 {settings.label_model}，batch={settings.label_batch_size}，"
-                f"并发={settings.label_max_concurrency}，间隔={settings.label_request_interval_seconds}s）"
+                f"[dim]·[/] {_t(args, 'import.label_start', count=total, model=settings.label_model, batch=settings.label_batch_size, concurrency=settings.label_max_concurrency, interval=settings.label_request_interval_seconds)}"
             )
             label_started[0] = True
         # 不刷屏：每完成 10% 或最后一批才打印
         if done == total or done % max(1, total // 10) < settings.label_batch_size:
-            console.print(f"[dim]·[/] 已打标 {done}/{total}")
+            console.print(f"[dim]·[/] {_t(args, 'import.label_progress', done=done, total=total)}")
 
     # 多文件场景：CLI 拥有 store + embedder，循环里复用同一份；
     # 单文件场景也走这条路径，省一次 connect/disconnect。
-    rebuild_tables = _parse_rebuild_tables(args.rebuild_tables)
+    rebuild_tables = _parse_rebuild_tables(args.rebuild_tables, args.language)
     if rebuild_tables:
-        console.print(
-            "[yellow]重建索引表：[/]"
-            + ", ".join(rebuild_tables)
-            + "（旧表数据会被删除后按本次导入重新生成）"
-        )
+        console.print(f"[yellow]{_t(args, 'import.rebuild', tables=', '.join(rebuild_tables))}[/]")
         _delete_lancedb_table_dirs(settings, rebuild_tables)
 
     store = MemoryStore(settings)
@@ -355,7 +376,7 @@ async def _run_import(args: argparse.Namespace) -> int:
         for idx, path in enumerate(paths):
             if multi:
                 console.print(
-                    f"\n[bold cyan][{idx + 1}/{len(paths)}][/] 处理 {path}"
+                    f"\n[bold cyan]{_t(args, 'import.process', current=idx + 1, total=len(paths), path=path)}[/]"
                 )
             report = await import_history(
                 path,
@@ -383,10 +404,10 @@ async def _run_import(args: argparse.Namespace) -> int:
                 plugin_name=args.plugin,
                 json_emoji_mode=args.json_emoji_mode,
             )
-            console.print(f"[dim]·[/] 已基于全部文件重建作息画像：{circadian_summary}")
+            console.print(f"[dim]·[/] {_t(args, 'import.circadian', summary=circadian_summary)}")
         except Exception:
             logging.getLogger(__name__).warning(
-                "批量导入后重建 circadian profile 失败，已忽略",
+                cli_text("import.circadian_failed", args.language),
                 exc_info=True,
             )
         try:
@@ -394,21 +415,19 @@ async def _run_import(args: argparse.Namespace) -> int:
                 settings,
                 store,
             )
-            console.print(f"[dim]·[/] 已基于已入库窗口重建主动开聊画像：{proactive_summary}")
+            console.print(f"[dim]·[/] {_t(args, 'import.proactive', summary=proactive_summary)}")
         except Exception:
             logging.getLogger(__name__).warning(
-                "批量导入后重建 proactive profile 失败，已忽略",
+                cli_text("import.proactive_failed", args.language),
                 exc_info=True,
             )
 
-    await _auto_build_vector_indices(settings)
+    await _auto_build_vector_indices(settings, args.language)
 
     return 0
 
 
-def _print_report(
-    report: ImportReport, L: dict[str, str], *, header: str | None = None
-) -> None:
+def _print_report(report: ImportReport, L: dict[str, str], *, header: str | None = None) -> None:
     """打印单个文件的导入报告。"""
     title = L["title"] if header is None else f"{L['title']} — {header}"
     tbl = Table(title=title, show_lines=False)
@@ -433,17 +452,24 @@ def _print_report(
         console.print(f"[yellow]{L['tip']}[/]{note}")
 
 
-def _print_aggregate(
-    reports: list[tuple[Path, ImportReport]], L: dict[str, str]
-) -> None:
+def _print_aggregate(reports: list[tuple[Path, ImportReport]], L: dict[str, str]) -> None:
     """打印多文件汇总。所有数值简单相加，duration 累加为总耗时。"""
     if not reports:
         return
     fields = (
-        "total_raw_messages", "parsed_messages", "skipped_messages", "sessions",
-        "friend_chunks", "window_chunks", "response_pairs",
-        "embedded_friend", "embedded_window", "embedded_response_pairs",
-        "upserted_friend", "upserted_window", "upserted_response_pairs",
+        "total_raw_messages",
+        "parsed_messages",
+        "skipped_messages",
+        "sessions",
+        "friend_chunks",
+        "window_chunks",
+        "response_pairs",
+        "embedded_friend",
+        "embedded_window",
+        "embedded_response_pairs",
+        "upserted_friend",
+        "upserted_window",
+        "upserted_response_pairs",
         "duration_seconds",
     )
     totals: dict[str, float] = {f: 0 for f in fields}
@@ -467,7 +493,10 @@ def _print_aggregate(
         (L["up_pair"], "upserted_response_pairs"),
         (L["duration"], "duration_seconds"),
     )
-    tbl = Table(title=f"{L['title']} (合计 {len(reports)} 个文件)", show_lines=False)
+    tbl = Table(
+        title=cli_text("report.total", L.get("_language", DEFAULT_LANGUAGE), count=len(reports)),
+        show_lines=False,
+    )
     tbl.add_column(L["metric"])
     tbl.add_column(L["value"], justify="right")
     for label, field in label_map:
@@ -483,7 +512,7 @@ async def _run_stats(args: argparse.Namespace) -> int:
     store.ensure_tables()
     s = await store.stats()
     console.print(
-        f"[bold]LanceDB 路径：[/]{settings.lance_db_path}\n"
+        f"[bold]{_t(args, 'stats.path')}:[/]{settings.lance_db_path}\n"
         f"friend_messages: {s.friend_messages}\n"
         f"dialogue_windows: {s.dialogue_windows}\n"
         f"history_images: {s.history_images}\n"
@@ -496,30 +525,30 @@ async def _run_import_images(args: argparse.Namespace) -> int:
     from xuwen.ingestion.image_importer import import_history_images
 
     settings = _load_settings(args.env_file)
-    console.print(f"[bold]开始导入历史图片：[/]{args.export_dir}")
+    console.print(f"[bold]{_t(args, 'images.start', path=args.export_dir)}[/]")
     report = await import_history_images(
         args.export_dir,
         settings,
         plugin_name=args.plugin,
     )
-    tbl = Table(title="图片导入报告", show_lines=False)
-    tbl.add_column("指标")
-    tbl.add_column("值", justify="right")
-    tbl.add_row("图片引用", str(report.total_refs))
-    tbl.add_row("匹配文件", str(report.matched_files))
-    tbl.add_row("缺失/跳过", str(report.missing_files))
-    tbl.add_row("唯一图片", str(report.unique_images))
-    tbl.add_row("生成/复用摘要", str(report.described_images))
-    tbl.add_row("复用重复 sha", str(report.reused_descriptions))
-    tbl.add_row("识别失败跳过", str(report.skipped_failed_descriptions))
-    tbl.add_row("已存在关联", str(report.skipped_existing_rows))
-    tbl.add_row("写入图片索引", str(report.upserted_rows))
+    tbl = Table(title=_t(args, "images.title"), show_lines=False)
+    tbl.add_column(_t(args, "report.metric"))
+    tbl.add_column(_t(args, "report.value"), justify="right")
+    tbl.add_row(_t(args, "images.refs"), str(report.total_refs))
+    tbl.add_row(_t(args, "images.matched"), str(report.matched_files))
+    tbl.add_row(_t(args, "images.missing"), str(report.missing_files))
+    tbl.add_row(_t(args, "images.unique"), str(report.unique_images))
+    tbl.add_row(_t(args, "images.described"), str(report.described_images))
+    tbl.add_row(_t(args, "images.reused"), str(report.reused_descriptions))
+    tbl.add_row(_t(args, "images.failed"), str(report.skipped_failed_descriptions))
+    tbl.add_row(_t(args, "images.existing"), str(report.skipped_existing_rows))
+    tbl.add_row(_t(args, "images.indexed"), str(report.upserted_rows))
     console.print(tbl)
-    await _auto_build_vector_indices(settings)
+    await _auto_build_vector_indices(settings, args.language)
     return 0
 
 
-async def _auto_build_vector_indices(settings: Settings) -> None:
+async def _auto_build_vector_indices(settings: Settings, language: str = DEFAULT_LANGUAGE) -> None:
     """导入完成后自动尝试建索引；小表/已有索引会由 store 内部跳过。"""
     if settings.lance_index_min_rows <= 0:
         return
@@ -530,8 +559,7 @@ async def _auto_build_vector_indices(settings: Settings) -> None:
     built = [t for t, s in index_report.items() if s.startswith("built")]
     if built:
         console.print(
-            f"[dim]·[/] 已自动为 {len(built)} 张表建立向量索引："
-            + ", ".join(built)
+            f"[dim]·[/] {cli_text('index.auto_built', language, count=len(built), tables=', '.join(built))}"
         )
     # 其它状态（skip_small / already_indexed / error）不喧宾夺主，cli index 子命令可详查
 
@@ -542,10 +570,7 @@ async def _run_label(args: argparse.Namespace) -> int:
 
     settings = get_settings()
     if not settings.labeling_enabled:
-        console.print(
-            "[yellow]LABELING_ENABLED=false，已跳过打标。"
-            "如需启用，请在 .env 设置 LABELING_ENABLED=true 并配置 LABEL_API_KEY。[/yellow]"
-        )
+        console.print(f"[yellow]{_t(args, 'label.disabled')}[/yellow]")
         return 1
 
     last_done = [0]
@@ -553,39 +578,36 @@ async def _run_label(args: argparse.Namespace) -> int:
     def progress_cb(done: int, total: int) -> None:
         # 每 batch 一次回调，console 打印当前进度
         last_done[0] = done
-        console.print(f"  · 已打标 {done}/{total}")
+        console.print(f"  · {_t(args, 'import.label_progress', done=done, total=total)}")
 
     console.print(
-        f"[bold]开始打标[/]：模型={settings.label_model}, "
-        f"batch={settings.label_batch_size}, "
-        f"并发={settings.label_max_concurrency}, "
-        f"间隔={settings.label_request_interval_seconds}s"
+        f"[bold]{_t(args, 'label.start', model=settings.label_model, batch=settings.label_batch_size, concurrency=settings.label_max_concurrency, interval=settings.label_request_interval_seconds)}[/]"
     )
     report = await label_all_unlabeled(
         settings,
         progress_cb=progress_cb,
         limit=args.limit,
     )
-    tbl = Table(title="打标报告")
-    tbl.add_column("指标")
-    tbl.add_column("值", justify="right")
-    tbl.add_row("待标 chunk", str(report.total_unlabeled))
-    tbl.add_row("已打标", str(report.labeled))
-    tbl.add_row("失败/退化为 unknown", str(report.failed))
-    tbl.add_row("LLM 调用次数", str(report.batches))
-    tbl.add_row("耗时 (秒)", str(report.duration_seconds))
+    tbl = Table(title=_t(args, "label.report"))
+    tbl.add_column(_t(args, "report.metric"))
+    tbl.add_column(_t(args, "report.value"), justify="right")
+    tbl.add_row(_t(args, "label.pending"), str(report.total_unlabeled))
+    tbl.add_row(_t(args, "label.done"), str(report.labeled))
+    tbl.add_row(_t(args, "label.failed"), str(report.failed))
+    tbl.add_row(_t(args, "label.calls"), str(report.batches))
+    tbl.add_row(_t(args, "report.duration"), str(report.duration_seconds))
     console.print(tbl)
     return 0
 
 
-def _run_plugins(_args: argparse.Namespace) -> int:
+def _run_plugins(args: argparse.Namespace) -> int:
     from xuwen.ingestion.plugins import list_plugins
 
     plugins = list_plugins()
     if not plugins:
-        console.print("[yellow]当前没有注册任何 plugin。[/yellow]")
+        console.print(f"[yellow]{_t(args, 'plugins.empty')}[/yellow]")
         return 1
-    tbl = Table(title="已注册的导入 plugin", show_lines=False)
+    tbl = Table(title=_t(args, "plugins.title"), show_lines=False)
     tbl.add_column("name")
     tbl.add_column("display_name")
     for p in plugins:
@@ -594,7 +616,7 @@ def _run_plugins(_args: argparse.Namespace) -> int:
     return 0
 
 
-def _parse_rebuild_tables(raw: str) -> list[str]:
+def _parse_rebuild_tables(raw: str, language: str = DEFAULT_LANGUAGE) -> list[str]:
     if not raw.strip():
         return []
     mapping = {
@@ -615,7 +637,7 @@ def _parse_rebuild_tables(raw: str) -> list[str]:
     for item in items:
         table = mapping.get(item)
         if table is None:
-            raise SystemExit(f"未知 --rebuild-tables 值：{item}")
+            raise SystemExit(cli_text("error.rebuild_value", language, value=item))
         if table not in out:
             out.append(table)
     return out
@@ -635,8 +657,29 @@ def _delete_lancedb_table_dirs(settings: Settings, tables: list[str]) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = _build_parser()
-    args = parser.parse_args(argv)
+    from xuwen.prompt_language import language_scope
+
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    language: str | None = None
+    env_file: Path | None = None
+    for index, value in enumerate(raw_argv):
+        if value == "--language" and index + 1 < len(raw_argv):
+            language = raw_argv[index + 1]
+        elif value.startswith("--language="):
+            language = value.split("=", 1)[1]
+        elif value == "--env-file" and index + 1 < len(raw_argv):
+            env_file = Path(raw_argv[index + 1])
+        elif value.startswith("--env-file="):
+            env_file = Path(value.split("=", 1)[1])
+    if language is None:
+        language = LanguageSettings(_env_file=env_file or ".env").xuwen_language  # type: ignore[call-arg]
+    parser = _build_parser(language if language in SUPPORTED_LANGUAGES else DEFAULT_LANGUAGE)
+    args = parser.parse_args(raw_argv)
+    with language_scope(args.language):
+        return _dispatch(args, parser)
+
+
+def _dispatch(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     if args.cmd == "import":
         return asyncio.run(_run_import(args))
     if args.cmd == "import-images":
@@ -668,7 +711,7 @@ async def _run_analyze(args: argparse.Namespace) -> int:
 
     settings = _load_settings(args.env_file)
     if args.targets and (args.timeline_only or args.personality_only):
-        console.print("[bold red]--target 不能和 --timeline-only/--personality-only 同时使用[/]")
+        console.print(f"[bold red]{_t(args, 'error.target_conflict')}[/]")
         return 1
     if args.list_blocks or args.inspect_block:
         _, _, blocks = await load_analysis_blocks(
@@ -677,13 +720,15 @@ async def _run_analyze(args: argparse.Namespace) -> int:
             since=args.since,
         )
         if args.list_blocks:
-            table = Table(title=f"关系分析块（共 {len(blocks)} 个）", show_lines=False)
-            table.add_column("序号", justify="right")
-            table.add_column("块 ID")
-            table.add_column("起始时间")
-            table.add_column("消息", justify="right")
-            table.add_column("字符", justify="right")
-            table.add_column("会话", justify="right")
+            table = Table(
+                title=_t(args, "analyze.blocks_title", count=len(blocks)), show_lines=False
+            )
+            table.add_column(_t(args, "analyze.number"), justify="right")
+            table.add_column(_t(args, "analyze.block_id"))
+            table.add_column(_t(args, "analyze.start_time"))
+            table.add_column(_t(args, "analyze.messages"), justify="right")
+            table.add_column(_t(args, "analyze.characters"), justify="right")
+            table.add_column(_t(args, "analyze.sessions"), justify="right")
             for index, block in enumerate(blocks, 1):
                 first_line = block.text.splitlines()[0] if block.text else ""
                 table.add_row(
@@ -703,8 +748,7 @@ async def _run_analyze(args: argparse.Namespace) -> int:
         )
         if target_block is None:
             console.print(
-                f"[bold red]未找到分析块：[/]{args.inspect_block}。"
-                "请确认输入文件、身份配置、--since 和 ANALYSIS_BLOCK_CHAR_BUDGET 与失败时一致。"
+                f"[bold red]{_t(args, 'error.block_missing', block_id=args.inspect_block)}[/]"
             )
             return 1
         console.print_json(
@@ -720,7 +764,7 @@ async def _run_analyze(args: argparse.Namespace) -> int:
         console.print(target_block.text, markup=False)
         return 0
 
-    console.print("[bold]正在分析关系记录...[/]")
+    console.print(f"[bold]{_t(args, 'analyze.running')}[/]")
 
     selected_targets = set(args.targets) if args.targets else None
     if args.timeline_only:
@@ -730,7 +774,8 @@ async def _run_analyze(args: argparse.Namespace) -> int:
 
     def progress(done: int, total: int, stage: str) -> None:
         if total:
-            console.print(f"  {stage}: {done}/{total}")
+            stage_key = f"analyze.stage.{stage}"
+            console.print(f"  {cli_text(stage_key, args.language)}: {done}/{total}")
 
     try:
         report = await analyze_relationship(
@@ -745,13 +790,10 @@ async def _run_analyze(args: argparse.Namespace) -> int:
             progress_cb=progress,
         )
     except AnalysisPipelineError as exc:
-        console.print(f"[bold red]关系分析失败：[/]{exc}")
+        console.print(f"[bold red]{_t(args, 'analyze.failed', error=exc)}[/]")
         return 1
     if report.skipped:
-        console.print(
-            f"[bold yellow]已跳过 {report.skipped} 个模型拒绝或坏 JSON 的分析块。[/]"
-            "详情见输出目录的 failures/ 和 manifest.json。"
-        )
+        console.print(f"[bold yellow]{_t(args, 'analyze.skipped', count=report.skipped)}[/]")
     console.print_json(data=report.to_dict())
     return 0
 
@@ -760,7 +802,7 @@ async def _run_analyze_proactive(args: argparse.Namespace) -> int:
     from xuwen.analysis.proactive_runner import analyze_proactive_tendency
 
     settings = _load_settings(args.env_file)
-    console.print("[bold]正在单独分析主动消息倾向...[/]")
+    console.print(f"[bold]{_t(args, 'proactive.running')}[/]")
     try:
         report = await analyze_proactive_tendency(
             args.paths,
@@ -770,11 +812,11 @@ async def _run_analyze_proactive(args: argparse.Namespace) -> int:
             since=args.since,
         )
     except ValueError as exc:
-        console.print(f"[bold red]主动消息倾向分析失败：[/]{exc}")
+        console.print(f"[bold red]{_t(args, 'proactive.failed', error=exc)}[/]")
         return 1
     console.print_json(data=report.to_dict())
     console.print(
-        "[yellow]分析完成后请运行数据质量检查，再决定是否启用主动消息：[/]\n"
+        f"[yellow]{_t(args, 'proactive.quality_hint')}[/]\n"
         "  uv run python scripts/check_proactive_quality.py"
     )
     return 0
@@ -787,9 +829,9 @@ async def _run_index(args: argparse.Namespace) -> int:
     store.ensure_tables()
     # auto = 让 store 内部按行数自动分层选；显式值则强制覆盖
     index_type = None if args.index_type == "auto" else args.index_type
-    label = index_type or "auto(按行数分层)"
-    force_label = "，强制重建" if args.force else ""
-    console.print(f"[bold]建立向量索引（{label}{force_label}）...[/]")
+    label = index_type or "auto"
+    force_label = _t(args, "index.force") if args.force else ""
+    console.print(f"[bold]{_t(args, 'index.building', label=label, force=force_label)}[/]")
     report = await store.ensure_vector_indices(
         min_rows=args.min_rows,
         index_type=index_type,
@@ -800,12 +842,12 @@ async def _run_index(args: argparse.Namespace) -> int:
     return 0
 
 
-async def _run_optimize(_args: argparse.Namespace) -> int:
+async def _run_optimize(args: argparse.Namespace) -> int:
     settings = get_settings()
     store = MemoryStore(settings)
     await store.connect()
     store.ensure_tables()
-    console.print("[bold]优化所有表（合并增量到索引 + 清理旧版本）...[/]")
+    console.print(f"[bold]{_t(args, 'optimize.running')}[/]")
     report = await store.optimize_all_tables()
     for table, status in report.items():
         console.print(f"  {table}: {status}")

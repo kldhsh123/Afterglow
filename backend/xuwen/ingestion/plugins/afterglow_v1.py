@@ -11,6 +11,7 @@ from typing import Any
 from xuwen.config import Settings
 from xuwen.core.errors import ParseError
 from xuwen.core.models import MessageKind, NormalizedMessage, SenderRole
+from xuwen.error_i18n import error_text
 from xuwen.ingestion.plugins import (
     ImportIdentityCandidate,
     ImportImageRef,
@@ -43,16 +44,16 @@ class AfterglowV1Plugin:
     ) -> list[NormalizedMessage]:
         canonical = _canonical_payload(payload)
         if canonical is None:
-            raise ParseError("JSONL 不符合 Afterglow Chat 格式")
+            raise ParseError(error_text("JSONL does not match the Afterglow Chat format"))
         conversation = canonical.get("conversation")
         if isinstance(conversation, dict):
             conv_type = str(conversation.get("type") or "private").lower()
             if conv_type != "private":
-                raise ParseError("Afterglow v1 目前只支持 private 私聊导入")
+                raise ParseError(error_text("Afterglow v1 currently supports private chats only"))
 
         raw_messages = canonical.get("messages")
         if not isinstance(raw_messages, list):
-            raise ParseError("payload 中缺少 messages 数组")
+            raise ParseError(error_text("The payload is missing the messages array"))
 
         participant_roles = _build_participant_roles(canonical.get("participants"))
         messages: list[NormalizedMessage] = []
@@ -78,7 +79,9 @@ class AfterglowV1Plugin:
         source_is_jsonl = jsonl_records(payload) is not None
         canonical = _canonical_payload(payload)
         if canonical is None:
-            return ImportInspection("unknown", [], 0, "无法识别 Afterglow Chat 格式")
+            return ImportInspection(
+                "unknown", [], 0, error_text("Cannot recognize the Afterglow Chat format")
+            )
         candidates: list[ImportIdentityCandidate] = []
         participants = canonical.get("participants")
         if isinstance(participants, list):
@@ -245,9 +248,7 @@ def _parse_one(
         text=str(raw.get("text") or ""),
         placeholders=placeholders,
         reply_to_id=_optional_str(raw.get("reply_to_id") or raw.get("replyToId")),
-        reply_to_summary=_optional_str(
-            raw.get("reply_to_summary") or raw.get("replyToSummary")
-        ),
+        reply_to_summary=_optional_str(raw.get("reply_to_summary") or raw.get("replyToSummary")),
         recalled=recalled,
         system=system,
         has_media=has_media,

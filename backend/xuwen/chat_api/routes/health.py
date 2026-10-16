@@ -12,6 +12,7 @@ from xuwen.chat_api.schemas import (
     UpdateInfoPayload,
 )
 from xuwen.chat_api.state import AppState, get_state
+from xuwen.content_i18n import content_text
 
 router = APIRouter()
 
@@ -28,19 +29,21 @@ async def readyz(state: AppState = Depends(get_state)) -> ReadinessResponse:
     issues: list[str] = []
     settings = state.settings
     if not settings.openai_api_key.get_secret_value():
-        issues.append("OPENAI_API_KEY 未配置")
+        issues.append(content_text("OPENAI_API_KEY is not configured"))
     if not settings.embedding_api_key.get_secret_value():
-        issues.append("EMBEDDING_API_KEY 未配置")
+        issues.append(content_text("EMBEDDING_API_KEY is not configured"))
     if not (settings.all_self_uids and settings.all_friend_uids):
-        issues.append("SELF_UID / FRIEND_UID 未配置")
+        issues.append(content_text("SELF_UID / FRIEND_UID are not configured"))
     try:
         stats = await state.store.stats()
         if stats.friend_messages == 0:
             issues.append(
-                "向量库为空，请先用 `python -m xuwen.ingestion.cli import <json>` 导入历史聊天"
+                content_text(
+                    "The vector database is empty. Import chat history with `python -m xuwen.ingestion.cli import <json>`"
+                )
             )
     except Exception as e:
-        issues.append(f"LanceDB 访问失败：{type(e).__name__}")
+        issues.append(content_text("Cannot access LanceDB: {p0}", p0=type(e).__name__))
     return ReadinessResponse(ready=not issues, issues=issues)
 
 
@@ -78,7 +81,5 @@ def info(state: AppState = Depends(get_state)) -> AppInfoResponse:
         chat_model=s.chat_model,
         version=__version__,
         has_persona_card=has_card,
-        update=UpdateInfoPayload.model_validate(
-            state.update_checker.snapshot().to_dict()
-        ),
+        update=UpdateInfoPayload.model_validate(state.update_checker.snapshot().to_dict()),
     )

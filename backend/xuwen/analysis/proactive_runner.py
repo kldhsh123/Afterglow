@@ -19,6 +19,7 @@ from xuwen.analysis.storage import AnalysisStorage
 from xuwen.chat_api.llm_client import LLMClient
 from xuwen.config import Settings
 from xuwen.core.models import Session
+from xuwen.error_i18n import error_text
 from xuwen.persona.generator import load_persona_dataset
 
 
@@ -51,7 +52,9 @@ async def analyze_proactive_tendency(
     dataset = await asyncio.to_thread(load_persona_dataset, paths, settings)
     sessions = _filter_sessions(dataset.sessions, since, settings.app_timezone)
     if not sessions:
-        raise ValueError("没有可分析的聊天消息，请检查输入文件和 --since 范围")
+        raise ValueError(
+            error_text("No chat messages to analyze. Check the input files and --since range")
+        )
 
     report = analyze_proactive_openings(
         sessions,
@@ -110,13 +113,10 @@ def _filter_sessions(
         return sessions
     try:
         threshold = int(
-            datetime.strptime(since, "%Y-%m")
-            .replace(tzinfo=_timezone(timezone))
-            .timestamp()
-            * 1000
+            datetime.strptime(since, "%Y-%m").replace(tzinfo=_timezone(timezone)).timestamp() * 1000
         )
     except ValueError as exc:
-        raise ValueError("since 必须是 YYYY-MM 格式") from exc
+        raise ValueError(error_text("since must use YYYY-MM format")) from exc
     output: list[Session] = []
     for session in sessions:
         messages = [message for message in session.messages if message.timestamp_ms >= threshold]

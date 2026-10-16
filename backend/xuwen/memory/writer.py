@@ -17,6 +17,7 @@ import uuid
 from dataclasses import dataclass, field
 
 from xuwen.config import Settings
+from xuwen.content_i18n import content_text
 from xuwen.core.errors import EmbeddingError
 from xuwen.core.time import now_ms
 from xuwen.ingestion.embedder import EmbeddingClient
@@ -105,7 +106,9 @@ class WritebackQueue:
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            logger.warning("writeback ticker 退出异常：%s", type(e).__name__)
+            logger.warning(
+                content_text("Writeback ticker exited with an error: %s"), type(e).__name__
+            )
         self._ticker_task = None
 
         # 等待已经触发的异步 flush 完成
@@ -140,7 +143,7 @@ class WritebackQueue:
         if total >= self.settings.writeback_queue_size:
             self.stats.dropped += 1
             logger.warning(
-                "writeback 总缓冲超限（%d 轮），丢弃一轮", total
+                content_text("Writeback buffer limit exceeded (%d turns); dropping one turn"), total
             )
             return False
 
@@ -206,7 +209,7 @@ class WritebackQueue:
         except Exception as e:
             self.stats.failed += len(turns)
             logger.warning(
-                "writeback flush 失败（%s）：%s，丢弃 %d 轮",
+                content_text("Writeback flush failed (%s): %s; dropping %d turns"),
                 conversation_id,
                 type(e).__name__,
                 len(turns),
@@ -248,7 +251,7 @@ class WritebackQueue:
                 vectors = await self.embedder.embed_texts(texts)
             except EmbeddingError as e:
                 logger.info(
-                    "回写批量 embedding 失败，使用零向量兜底：%s",
+                    content_text("Writeback batch embedding failed; using zero vectors: %s"),
                     type(e).__name__,
                 )
                 vectors = [zero_vec] * len(items)

@@ -13,6 +13,7 @@ from dataclasses import dataclass
 import httpx
 
 from xuwen.config import Settings
+from xuwen.content_i18n import content_text
 from xuwen.core.metrics import MetricsRecorder
 
 logger = logging.getLogger(__name__)
@@ -95,7 +96,10 @@ class WebSearchClient:
             )
             return results
         except Exception as e:
-            logger.warning("联网检索失败，降级为无联网上下文：%s", type(e).__name__)
+            logger.warning(
+                content_text("Web search failed; continuing without web context: %s"),
+                type(e).__name__,
+            )
             _record_web_metric(
                 metrics,
                 query=query,
@@ -109,7 +113,11 @@ class WebSearchClient:
     async def _search_tavily(self, query: str) -> list[WebSearchResult]:
         api_key = self.settings.web_search_api_key.get_secret_value()
         if not api_key:
-            logger.warning("WEB_ACCESS_ENABLED=true 但 WEB_SEARCH_API_KEY 未配置，跳过 Tavily")
+            logger.warning(
+                content_text(
+                    "WEB_ACCESS_ENABLED=true, but WEB_SEARCH_API_KEY is not configured; skipping Tavily"
+                )
+            )
             return []
         base = (self.settings.web_search_base_url or "https://api.tavily.com").rstrip("/")
         resp = await self._client.post(
@@ -165,7 +173,7 @@ def render_web_context(results: list[WebSearchResult]) -> str:
         title = _short(item.title, 80)
         snippet = _short(item.snippet, 220)
         url = _short(item.url, 180)
-        lines.append(f"[{i}] {title}\n来源：{url}\n摘要：{snippet}")
+        lines.append(f"[{i}] {title}\nSource: {url}\nSummary: {snippet}")
     return "\n\n".join(lines)
 
 

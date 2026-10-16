@@ -11,7 +11,9 @@ function buildUrl(path: string): string {
 
 export function authHeaders(): Record<string, string> {
   const settings = useSettingsStore()
+  const { locale } = useLocale()
   const headers: Record<string, string> = {}
+  headers['Accept-Language'] = locale.value
   if (settings.localApiKey) {
     headers['Authorization'] = `Bearer ${settings.localApiKey}`
   }

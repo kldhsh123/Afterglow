@@ -30,7 +30,9 @@ from tenacity import (
 )
 
 from xuwen.config import Settings
+from xuwen.content_i18n import content_text
 from xuwen.core.errors import EmbeddingError
+from xuwen.error_i18n import error_text
 
 logger = logging.getLogger(__name__)
 
@@ -87,10 +89,7 @@ class _AsyncSlidingWindowRateLimiter:
         while True:
             async with self._lock:
                 now = time.monotonic()
-                while (
-                    self._timestamps
-                    and now - self._timestamps[0] >= self.window_seconds
-                ):
+                while self._timestamps and now - self._timestamps[0] >= self.window_seconds:
                     self._timestamps.popleft()
 
                 if len(self._timestamps) < self.max_requests:
@@ -127,9 +126,7 @@ class EmbeddingClient:
             "Content-Type": "application/json",
         }
         max_concurrency = (
-            concurrency
-            if concurrency is not None
-            else settings.embedding_max_concurrency
+            concurrency if concurrency is not None else settings.embedding_max_concurrency
         )
         self._semaphore = asyncio.Semaphore(max(1, max_concurrency))
         self._rate_limiter = _AsyncSlidingWindowRateLimiter(
@@ -171,15 +168,17 @@ class EmbeddingClient:
             async with self._semaphore:
                 return await self._embed_batch(batch)
 
-        results: list[list[list[float]]] = await asyncio.gather(
-            *(_run(b) for b in batches)
-        )
+        results: list[list[list[float]]] = await asyncio.gather(*(_run(b) for b in batches))
         out: list[list[float]] = []
         for batch_result in results:
             out.extend(batch_result)
         if len(out) != len(texts):
             raise EmbeddingError(
-                f"返回向量数量与输入不一致：期望 {len(texts)}，实际 {len(out)}"
+                error_text(
+                    "Embedding count mismatch: expected {p0}, received {p1}",
+                    p0=len(texts),
+                    p1=len(out),
+                )
             )
         return out
 
@@ -204,9 +203,7 @@ class EmbeddingClient:
             async with self._semaphore:
                 return await self._embed_batch(batch)
 
-        results = await asyncio.gather(
-            *(_run(b) for b in batches), return_exceptions=True
-        )
+        results = await asyncio.gather(*(_run(b) for b in batches), return_exceptions=True)
         vectors: list[list[float] | None] = []
         failed = 0
         last_error: BaseException | None = None
@@ -218,7 +215,7 @@ class EmbeddingClient:
                 failed += 1
                 last_error = result
                 logger.warning(
-                    "embedding 批次失败已跳过（第 %d-%d 条）：%s",
+                    content_text("Skipping failed embedding batch (entries %d-%d): %s"),
                     offset,
                     offset + len(batch) - 1,
                     result,
@@ -229,7 +226,11 @@ class EmbeddingClient:
             offset += len(batch)
         if len(vectors) != len(texts):
             raise EmbeddingError(
-                f"返回向量数量与输入不一致：期望 {len(texts)}，实际 {len(vectors)}"
+                error_text(
+                    "Embedding count mismatch: expected {p0}, received {p1}",
+                    p0=len(texts),
+                    p1=len(vectors),
+                )
             )
         return TolerantEmbedResult(
             vectors=vectors,
@@ -238,17 +239,14 @@ class EmbeddingClient:
             last_error=last_error,
         )
 
-    def _split_batches(
-        self, texts: Sequence[str], batch_size: int | None
-    ) -> list[list[str]]:
-        effective_batch = batch_size if batch_size is not None else self.settings.embedding_batch_size
+    def _split_batches(self, texts: Sequence[str], batch_size: int | None) -> list[list[str]]:
+        effective_batch = (
+            batch_size if batch_size is not None else self.settings.embedding_batch_size
+        )
         if self.settings.embedding_input_mode == "single":
             effective_batch = 1
         effective_batch = max(1, effective_batch)
-        return [
-            list(texts[i : i + effective_batch])
-            for i in range(0, len(texts), effective_batch)
-        ]
+        return [list(texts[i : i + effective_batch]) for i in range(0, len(texts), effective_batch)]
 
     async def embed_one(self, text: str) -> list[float]:
         """便捷的单条接口。"""
@@ -259,7 +257,11 @@ class EmbeddingClient:
         """强校验维度。"""
         if len(vector) != self.settings.embedding_dim:
             raise EmbeddingError(
-                f"向量维度不匹配：期望 {self.settings.embedding_dim}，实际 {len(vector)}"
+                error_text(
+                    "Vector dimension mismatch: expected {p0}, received {p1}",
+                    p0=self.settings.embedding_dim,
+                    p1=len(vector),
+                )
             )
 
     # ------------------------------------------------------------------
@@ -286,7 +288,7 @@ class EmbeddingClient:
             with attempt:
                 return await self._call_once(batch)
         # 不会到这里（reraise=True 已抛出）
-        raise EmbeddingError("意外的重试退出")
+        raise EmbeddingError(error_text("Retry loop exited unexpectedly"))
 
     async def _call_once(self, batch: list[str]) -> list[list[float]]:
         # 构造 payload：根据 input_mode 决定 input 是 string 还是 string[]
@@ -317,7 +319,7 @@ class EmbeddingClient:
         except httpx.HTTPError as e:
             # 网络错误：不带响应正文，避免敏感信息泄露
             raise _RetryableEmbeddingError(
-                f"embedding 网络请求失败：{type(e).__name__}",
+                error_text("Embedding network request failed: {p0}", p0=type(e).__name__),
                 detail={"exception_type": type(e).__name__},
             ) from e
 
@@ -326,27 +328,31 @@ class EmbeddingClient:
         request_id = resp.headers.get("x-request-id") or resp.headers.get("request-id")
         if resp.status_code in (429,) or 500 <= resp.status_code < 600:
             logger.warning(
-                "embedding 上游 %d: %s\nembedding 请求诊断: %s",
+                content_text("Embedding provider %d: %s\nEmbedding request diagnostics: %s"),
                 resp.status_code,
                 resp.text[:500],
                 _payload_debug_summary(payload, self._url),
             )
             raise _RetryableEmbeddingError(
-                f"embedding API 暂时不可用（HTTP {resp.status_code}）",
+                error_text(
+                    "The embedding API is temporarily unavailable (HTTP {p0})", p0=resp.status_code
+                ),
                 detail={"status": resp.status_code, "request_id": request_id},
             )
         if resp.status_code >= 400:
             # 4xx 不重试，直接报；不包含响应正文（可能含 input 文本）
             # 但写日志让本地用户能看到上游具体反馈
             logger.error(
-                "embedding 上游 %d: %s\nembedding 请求诊断: %s",
+                content_text("Embedding provider %d: %s\nEmbedding request diagnostics: %s"),
                 resp.status_code,
                 resp.text[:500],
                 _payload_debug_summary(payload, self._url),
             )
             raise EmbeddingError(
-                f"embedding API 客户端错误（HTTP {resp.status_code}），"
-                f"请检查 API key、模型名、配额（详细错误见日志）",
+                error_text(
+                    "Embedding API client error (HTTP {p0}). Check the API key, model name and quota; see the logs for details",
+                    p0=resp.status_code,
+                ),
                 detail={"status": resp.status_code, "request_id": request_id},
             )
 
@@ -355,24 +361,30 @@ class EmbeddingClient:
             data = resp.json()
         except ValueError as e:
             raise EmbeddingError(
-                "embedding API 返回非 JSON 响应（请检查 EMBEDDING_API_URL 是否正确）",
+                error_text(
+                    "The embedding API returned a non-JSON response. Check EMBEDDING_API_URL"
+                ),
                 detail={"status": resp.status_code, "request_id": request_id},
             ) from e
 
         if not isinstance(data, dict) or "data" not in data:
             raise EmbeddingError(
-                "embedding 响应格式异常：缺少 data 字段",
+                error_text("Invalid embedding response: missing data field"),
                 detail={"request_id": request_id},
             )
         items = data["data"]
         if not isinstance(items, list):
             raise EmbeddingError(
-                "embedding 响应 data 字段不是数组",
+                error_text("The embedding response data field is not an array"),
                 detail={"request_id": request_id},
             )
         if len(items) != len(batch):
             raise EmbeddingError(
-                f"embedding 返回条数不匹配：期望 {len(batch)}，实际 {len(items)}",
+                error_text(
+                    "Embedding result count mismatch: expected {p0}, received {p1}",
+                    p0=len(batch),
+                    p1=len(items),
+                ),
                 detail={"request_id": request_id},
             )
 
@@ -380,18 +392,24 @@ class EmbeddingClient:
         for idx, item in enumerate(items):
             if not isinstance(item, dict):
                 raise EmbeddingError(
-                    f"embedding 响应第 {idx} 项不是 dict",
+                    error_text("Embedding response entry {p0} is not an object", p0=idx),
                     detail={"request_id": request_id},
                 )
             vec = item.get("embedding")
             if not isinstance(vec, list):
                 raise EmbeddingError(
-                    f"embedding 响应第 {idx} 项缺少 embedding 字段",
+                    error_text(
+                        "Embedding response entry {p0} is missing the embedding field", p0=idx
+                    ),
                     detail={"request_id": request_id},
                 )
             if len(vec) != self.settings.embedding_dim:
                 raise EmbeddingError(
-                    f"向量维度不匹配：期望 {self.settings.embedding_dim}，实际 {len(vec)}（请检查 EMBEDDING_MODEL 与 EMBEDDING_DIM 是否一致）"
+                    error_text(
+                        "Vector dimension mismatch: expected {p0}, received {p1}. Check EMBEDDING_MODEL and EMBEDDING_DIM",
+                        p0=self.settings.embedding_dim,
+                        p1=len(vec),
+                    )
                 )
             out.append([float(x) for x in vec])
         return out
@@ -437,10 +455,7 @@ def _payload_preview(payload: dict[str, object]) -> dict[str, object]:
     if isinstance(input_value, str):
         preview["input"] = _short_text(input_value, 500)
     elif isinstance(input_value, list):
-        preview["input"] = [
-            _short_text(str(item), 240)
-            for item in input_value[:8]
-        ]
+        preview["input"] = [_short_text(str(item), 240) for item in input_value[:8]]
         if len(input_value) > 8:
             preview["input_truncated_count"] = len(input_value) - 8
     return preview

@@ -24,11 +24,12 @@ from pathlib import Path
 from typing import Any
 
 from xuwen.config import Settings
+from xuwen.content_i18n import content_text
 
 
 def _log(line: str) -> None:
     """把进度信息打到后端控制台。"""
-    print(f"[导入] {line}", file=sys.stdout, flush=True)
+    print(content_text("[Import] {p0}", p0=line), file=sys.stdout, flush=True)
 
 
 @dataclass
@@ -84,10 +85,7 @@ class ImportTaskManager:
         注：返回类型写 builtins.list 是因为上面的 `list()` 方法在类作用域内
         遮蔽了内建名，直接写 list[ImportTask] 会被解析成方法而报错。
         """
-        return [
-            t for t in self._tasks.values()
-            if t.status not in ("done", "failed", "cancelled")
-        ]
+        return [t for t in self._tasks.values() if t.status not in ("done", "failed", "cancelled")]
 
     async def cancel(self, task_id: str) -> bool:
         handle = self._handles.get(task_id)
@@ -185,13 +183,11 @@ async def _rebuild_proactive_profile_from_store(
         await active_store.connect()
         active_store.ensure_tables()
 
-    rows = await active_store.list_dialogue_windows(
-        limit=settings.proactive_profile_window_limit
-    )
+    rows = await active_store.list_dialogue_windows(limit=settings.proactive_profile_window_limit)
     profile = compute_proactive_profile_from_window_rows(
         rows,
         friend_name=settings.friend_name or "TA",
-        self_name=settings.self_name or "我",
+        self_name=settings.self_name or content_text("User"),
         min_gap_minutes=settings.proactive_learning_min_gap_minutes,
         timezone=settings.app_timezone,
     )
@@ -214,7 +210,11 @@ async def _heartbeat(
         elapsed = int(time.time() - start_ts)
         mins, secs = divmod(elapsed, 60)
         hrs, mins = divmod(mins, 60)
-        tag = f"已用时 {hrs}:{mins:02d}:{secs:02d}" if hrs else f"已用时 {mins}:{secs:02d}"
+        tag = (
+            content_text("Elapsed {p0}:{p1:02d}:{p2:02d}", p0=hrs, p1=mins, p2=secs)
+            if hrs
+            else content_text("Elapsed {p0}:{p1:02d}", p0=mins, p1=secs)
+        )
         mgr.update(task_id, stage=f"{base_stage} · {tag}")
 
 
@@ -253,7 +253,7 @@ async def _process_one_file(
     """
     from xuwen.ingestion.importer import import_history
 
-    base_stage = f"正在处理 {display_name}（{idx + 1}/{total}）"
+    base_stage = content_text("Processing {p0} ({p1}/{p2})", p0=display_name, p1=idx + 1, p2=total)
     _log(base_stage)
     file_start_progress = 0.05 + 0.80 * (idx / max(total, 1))
     file_end_progress = 0.05 + 0.80 * ((idx + 1) / max(total, 1))
@@ -281,10 +281,14 @@ async def _process_one_file(
         )
         if done >= total_chunks:
             state.phase = "upsert_wait"
-            stage = f"{base_stage} · 向量化完成，正在写入数据库…"
+            stage = content_text(
+                "{p0} · Embedding complete; writing to the database…", p0=base_stage
+            )
         else:
             state.phase = "embed"
-            stage = f"{base_stage} · 向量化中 {done}/{total_chunks} 条"
+            stage = content_text(
+                "{p0} · Embedding {p1}/{p2}", p0=base_stage, p1=done, p2=total_chunks
+            )
         mgr.update(task_id, progress=file_progress, stage=stage)
 
     def _on_label(done: int, total_labels: int) -> None:
@@ -296,7 +300,7 @@ async def _process_one_file(
         file_progress = file_embed_end + (file_end_progress - file_embed_end) * (
             done / total_labels
         )
-        stage = f"{base_stage} · 打标中 {done}/{total_labels} 条"
+        stage = content_text("{p0} · Labeling {p1}/{p2}", p0=base_stage, p1=done, p2=total_labels)
         mgr.update(task_id, progress=file_progress, stage=stage)
 
     def _on_stage(msg: str) -> None:
@@ -318,18 +322,30 @@ async def _process_one_file(
         """
         if total_sessions <= 0:
             return
-        progress = file_start_progress + (
-            split_progress_end - file_start_progress
-        ) * (done / total_sessions)
+        progress = file_start_progress + (split_progress_end - file_start_progress) * (
+            done / total_sessions
+        )
         mgr.update(task_id, progress=progress)
 
     def _stage_for_heartbeat() -> str:
         if state.phase == "label" and state.label_total > 0:
-            return f"{base_stage} · 打标中 {state.label_done}/{state.label_total} 条"
+            return content_text(
+                "{p0} · Labeling {p1}/{p2}",
+                p0=base_stage,
+                p1=state.label_done,
+                p2=state.label_total,
+            )
         if state.phase == "upsert_wait":
-            return f"{base_stage} · 向量化完成，正在写入数据库…"
+            return content_text(
+                "{p0} · Embedding complete; writing to the database…", p0=base_stage
+            )
         if state.chunk_total > 0:
-            return f"{base_stage} · 向量化中 {state.chunk_done}/{state.chunk_total} 条"
+            return content_text(
+                "{p0} · Embedding {p1}/{p2}",
+                p0=base_stage,
+                p1=state.chunk_done,
+                p2=state.chunk_total,
+            )
         if state.phase == "pre_embed" and state.pre_embed_msg:
             # 前置阶段（解析/清洗/切分等）：保留 _on_stage 最近的文案，避免被心跳覆盖回 base_stage
             return f"{base_stage} · {state.pre_embed_msg}"
@@ -344,7 +360,9 @@ async def _process_one_file(
             mins, secs = divmod(elapsed, 60)
             hrs, mins = divmod(mins, 60)
             tag = (
-                f"已用时 {hrs}:{mins:02d}:{secs:02d}" if hrs else f"已用时 {mins}:{secs:02d}"
+                content_text("Elapsed {p0}:{p1:02d}:{p2:02d}", p0=hrs, p1=mins, p2=secs)
+                if hrs
+                else content_text("Elapsed {p0}:{p1:02d}", p0=mins, p1=secs)
             )
             mgr.update(task_id, stage=f"{_stage_for_heartbeat()} · {tag}")
 
@@ -381,9 +399,14 @@ async def run_import_task(task_id: str, settings: Settings) -> None:
     if task is None:
         return
 
-    _log(f"任务 {task_id} 启动，共 {len(task.files)} 个文件")
+    _log(content_text("Task {p0} started with {p1} files", p0=task_id, p1=len(task.files)))
     try:
-        mgr.update(task_id, status="importing", stage="正在导入聊天记录…", progress=0.02)
+        mgr.update(
+            task_id,
+            status="importing",
+            stage=content_text("Importing chat history…"),
+            progress=0.02,
+        )
         reports: list[dict[str, Any]] = []
         warnings: list[str] = []
         total = len(task.files)
@@ -404,15 +427,21 @@ async def run_import_task(task_id: str, settings: Settings) -> None:
                 report_dict = {"raw": str(report)}
             reports.append({"file": display_name, "report": report_dict})
             _log(
-                f"  → 完成：可向量化朋友消息 {getattr(report, 'friend_chunks', 0)}，"
-                f"对话窗口 {getattr(report, 'window_chunks', 0)}，"
-                f"响应 pair {getattr(report, 'response_pairs', 0)}"
+                content_text(
+                    "  → Complete: {p0} friend chunks, {p1} dialogue windows, {p2} response pairs",
+                    p0=getattr(report, "friend_chunks", 0),
+                    p1=getattr(report, "window_chunks", 0),
+                    p2=getattr(report, "response_pairs", 0),
+                )
             )
 
         # ===== 阶段 2：persona 画像 =====
         if task.files:
             persona_paths = [Path(path) for path in task.files]
-            stage = f"合并 {len(persona_paths)} 个文件生成人格画像与作息分析…"
+            stage = content_text(
+                "Merging {p0} files to generate the persona and daily rhythm profiles…",
+                p0=len(persona_paths),
+            )
             _log(stage)
             mgr.update(task_id, status="persona", stage=stage, progress=0.90)
             hb = asyncio.create_task(_heartbeat(task_id, stage, time.time()))
@@ -420,7 +449,9 @@ async def run_import_task(task_id: str, settings: Settings) -> None:
             try:
                 persona_stats = await _run_persona_analysis(persona_paths, settings)
             except Exception as e:
-                warning = f"画像分析失败（已跳过）：{type(e).__name__}: {e}"
+                warning = content_text(
+                    "Persona analysis failed (skipped): {p0}: {p1}", p0=type(e).__name__, p1=e
+                )
                 _log(f"  → {warning}")
                 warnings.append(warning)
                 reports.append({"persona_error": f"{type(e).__name__}: {e}"})
@@ -432,14 +463,18 @@ async def run_import_task(task_id: str, settings: Settings) -> None:
                     pass
             if persona_stats:
                 _log(
-                    f"  → 画像完成：合并 {persona_stats['source_files']} 个文件，"
-                    f"去重后 {persona_stats['unique_messages']} 条消息，"
-                    f"朋友消息 {persona_stats['friend_messages']}，"
-                    f"会话 {persona_stats['sessions']}，作息：{persona_stats['circadian_summary']}"
+                    content_text(
+                        "  → Persona complete: {p0} files merged, {p1} unique messages, {p2} friend messages, {p3} sessions, daily rhythm: {p4}",
+                        p0=persona_stats["source_files"],
+                        p1=persona_stats["unique_messages"],
+                        p2=persona_stats["friend_messages"],
+                        p3=persona_stats["sessions"],
+                        p4=persona_stats["circadian_summary"],
+                    )
                 )
                 reports.append({"persona": persona_stats})
 
-        stage = "基于全部导入记录重建主动开聊画像…"
+        stage = content_text("Rebuilding the proactive profile from all imported records…")
         _log(stage)
         mgr.update(task_id, stage=stage, progress=0.97)
         try:
@@ -452,15 +487,21 @@ async def run_import_task(task_id: str, settings: Settings) -> None:
                     }
                 }
             )
-            _log(f"  → 主动开聊画像完成：{proactive_summary}")
+            _log(content_text("  → Proactive profile complete: {p0}", p0=proactive_summary))
         except Exception as e:
-            warning = f"主动开聊画像重建失败（已跳过）：{type(e).__name__}: {e}"
+            warning = content_text(
+                "Proactive profile rebuild failed (skipped): {p0}: {p1}", p0=type(e).__name__, p1=e
+            )
             _log(f"  → {warning}")
             warnings.append(warning)
             reports.append({"proactive_profile_error": f"{type(e).__name__}: {e}"})
 
-        final_stage = "导入完成（有警告）" if warnings else "导入完成"
-        _log(f"任务 {task_id} {final_stage}")
+        final_stage = (
+            content_text("Import complete (with warnings)")
+            if warnings
+            else content_text("Import complete")
+        )
+        _log(content_text("Task {p0} {p1}", p0=task_id, p1=final_stage))
         mgr.update(
             task_id,
             stage=final_stage,
@@ -470,20 +511,20 @@ async def run_import_task(task_id: str, settings: Settings) -> None:
             report={"files": reports},
         )
     except asyncio.CancelledError:
-        _log(f"任务 {task_id} 已取消，已处理的记录保留")
+        _log(content_text("Task {p0} cancelled; processed records were preserved", p0=task_id))
         mgr.update(
             task_id,
             status="cancelled",
-            stage="已取消（已处理的记录已保留）",
+            stage=content_text("Cancelled (processed records were preserved)"),
         )
         raise
     except Exception as e:
-        _log(f"任务 {task_id} 失败：{type(e).__name__}: {e}")
+        _log(content_text("Task {p0} failed: {p1}: {p2}", p0=task_id, p1=type(e).__name__, p2=e))
         mgr.update(
             task_id,
             status="failed",
             error=f"{type(e).__name__}: {e}",
-            stage="导入失败",
+            stage=content_text("Import failed"),
         )
 
 

@@ -20,8 +20,10 @@ from typing import Any
 
 from xuwen.chat_api.vision_client import VisionClient
 from xuwen.config import Settings
+from xuwen.content_i18n import content_text
 from xuwen.core.errors import IngestionError, ParseError
 from xuwen.core.models import HistoryImageChunk, NormalizedMessage, Session
+from xuwen.error_i18n import error_text
 from xuwen.ingestion.cleaner import Cleaner
 from xuwen.ingestion.embedder import EmbeddingClient
 from xuwen.ingestion.parser import detect_plugin, load_qq_json
@@ -38,6 +40,9 @@ from xuwen.memory.store import MemoryStore
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
 _PROMPT_VERSION = "v1"
 _FAILED_DESCRIPTION_PREFIXES = (
+    "[Image: recognition failed",
+    "[Image: recognition timed out",
+    "[Image: no description",
     "[图片：识别失败",
     "[图片：识别超时",
     "[图片：无描述",
@@ -85,9 +90,11 @@ async def import_history_images(
 ) -> ImageImportReport:
     settings.require_identity()
     if not settings.vision_enabled:
-        raise IngestionError("未启用视觉理解。请设置 VISION_ENABLED=true。")
+        raise IngestionError(error_text("Vision is disabled. Set VISION_ENABLED=true"))
     if not settings.vision_api_url or not settings.vision_api_key.get_secret_value():
-        raise IngestionError("请配置 VISION_API_URL / VISION_API_KEY 后再导入图片。")
+        raise IngestionError(
+            error_text("Configure VISION_API_URL / VISION_API_KEY before importing images")
+        )
 
     root = Path(export_dir)
     payloads = _load_chat_payloads(root)
@@ -122,7 +129,9 @@ async def import_history_images(
         ext = _image_ext(path)
         mime = _mime_for_ext(ext)
         _copy_to_image_cache(settings, sha=sha, ext=ext, raw=raw)
-        before, after = _context_for_message(session_index[msg.message_id], msg.message_id, settings)
+        before, after = _context_for_message(
+            session_index[msg.message_id], msg.message_id, settings
+        )
         resolved.append(
             _ResolvedImageRef(
                 message=msg,
@@ -161,9 +170,7 @@ async def import_history_images(
             existing_rows,
         )
         pending = [
-            r
-            for r, cid in zip(resolved, chunk_ids, strict=False)
-            if cid not in reusable_existing
+            r for r, cid in zip(resolved, chunk_ids, strict=False) if cid not in reusable_existing
         ]
 
         descriptions = await _describe_unique_images(
@@ -188,9 +195,9 @@ async def import_history_images(
         # store 与普通 importer 保持一致，不主动关闭。
 
     unique_shas = {r.sha for r in resolved}
-    reused = sum(1 for r in pending if r.sha in descriptions) - len({
-        r.sha for r in pending if r.sha in descriptions
-    })
+    reused = sum(1 for r in pending if r.sha in descriptions) - len(
+        {r.sha for r in pending if r.sha in descriptions}
+    )
     return ImageImportReport(
         total_refs=len(image_refs),
         matched_files=len(resolved),
@@ -206,7 +213,7 @@ async def import_history_images(
 
 def _load_chat_payloads(root: Path) -> list[dict[str, Any]]:
     if not root.is_dir():
-        raise IngestionError(f"不是目录：{root}")
+        raise IngestionError(error_text("Not a directory: {p0}", p0=root))
     candidates = sorted(
         path
         for path in root.rglob("*")
@@ -225,14 +232,16 @@ def _load_chat_payloads(root: Path) -> list[dict[str, Any]]:
             payloads.append(payload)
     if errors and payloads:
         logger.warning(
-            "图片导入已跳过 %d 个无法解析的 JSONL：%s",
+            content_text("Image import skipped %d invalid JSONL files: %s"),
             len(errors),
             "；".join(errors[:5]),
         )
     elif errors:
-        raise IngestionError("目录中存在无法解析的 JSONL：" + "；".join(errors[:5]))
+        raise IngestionError(
+            error_text("The directory contains invalid JSONL: {p0}", p0="；".join(errors[:5]))
+        )
     if not payloads:
-        raise IngestionError("图片导入目录中没有可识别的聊天文件")
+        raise IngestionError(error_text("No recognizable chat files in the image import directory"))
     return payloads
 
 
@@ -279,7 +288,9 @@ def _find_image_file(
     return None
 
 
-def _index_messages(sessions: list[Session]) -> tuple[dict[str, NormalizedMessage], dict[str, Session]]:
+def _index_messages(
+    sessions: list[Session],
+) -> tuple[dict[str, NormalizedMessage], dict[str, Session]]:
     msg_index: dict[str, NormalizedMessage] = {}
     session_index: dict[str, Session] = {}
     for session in sessions:
@@ -349,7 +360,9 @@ async def _describe_unique_images(
             descriptions[sha] = existing
             continue
         data_url = _data_url_for_file(ref.path, ref.mime, settings)
-        description = _usable_image_description((await vision_client.describe_images([data_url]))[0])
+        description = _usable_image_description(
+            (await vision_client.describe_images([data_url]))[0]
+        )
         if description:
             descriptions[sha] = description
     return descriptions
@@ -391,7 +404,7 @@ def _usable_image_description(description: str) -> str:
 def _data_url_for_file(path: Path, mime: str, settings: Settings) -> str:
     raw = path.read_bytes()
     if len(raw) > settings.vision_max_image_bytes:
-        raise IngestionError(f"图片过大：{path.name}")
+        raise IngestionError(error_text("Image too large: {p0}", p0=path.name))
     encoded = base64.b64encode(raw).decode("ascii")
     return f"data:{mime};base64,{encoded}"
 

@@ -90,9 +90,13 @@ for (const project of ['frontend', 'backend/web_ui_src']) {
   active.setLocale('en')
   assert.equal(active.isChinese.value, false)
   assert.equal(active.t(chat ? 'chat.title' : 'startImport', chat ? { name: 'Alex' } : { count: 3 }), chat ? 'Conversation with Alex' : 'Start import (3 files)')
+  active.setLocale('zh-CN')
+  assert.equal(active.t('missing.translation.key'), '文案暂缺')
+  active.setLocale('en')
   const noStorage = initialize(['en'], undefined, true)
   noStorage.setLocale('zh-CN')
   assert.equal(noStorage.locale.value, 'zh-CN')
+  assert.equal(active.t('missing.translation.key'), active.locale.value === 'zh-CN' ? '文案暂缺' : 'Text unavailable')
   console.log(`${project}: catalogs, templates, detection, switching and persistence passed`)
 }
 
@@ -162,7 +166,8 @@ let chinese = false
 const interpolate = (value, params) => value.replace(/\{(\w+)\}/g, (_, key) => params[key])
 const { translateBackendText } = evaluate(path.join(configSrc, 'useConfigMessages.ts'), {}, name => {
   if (name.endsWith('zh-CN')) return { default: zh }
-  return { useLocale: () => ({ isChinese: { get value() { return chinese } }, t: (key, params = {}) => interpolate(en[key], params) }) }
+  if (name.endsWith('/en')) return { default: en }
+  return { useLocale: () => ({ isChinese: { get value() { return chinese } }, t: (key, params = {}) => interpolate((chinese ? zh : en)[key], params) }) }
 }).useConfigMessages()
 for (const key of Object.keys(zh).filter(key => key.startsWith('backend'))) {
   const params = Object.fromEntries([...zh[key].matchAll(/\{(\w+)\}/g)].map(match => [match[1], 'value.[]()+?中文']))
@@ -172,6 +177,11 @@ for (const key of Object.keys(zh).filter(key => key.startsWith('backend'))) {
 assert.equal(translateBackendText('正在处理 记录.json（1/3） · 正在清洗与去重 42 条消息 · 已用时 0:12'),
   'Processing 记录.json (1/3) · Cleaning and deduplicating 42 messages · Elapsed 0:12')
 assert.equal(translateBackendText('provider 自定义 error'), 'provider 自定义 error')
+assert.equal(
+  translateBackendText('未授权，请检查并输入后端启动时打印到控制台的访问token。'),
+  'Unauthorized. Check the access token printed in the backend startup console and enter it here.',
+)
 chinese = true
 assert.equal(translateBackendText('连接成功，模型 custom 可用'), '连接成功，模型 custom 可用')
+assert.equal(translateBackendText('Connected successfully. Model custom is available.'), '连接成功，模型 custom 可用')
 console.log('Backend results and import stages: dynamic parameters, language switching and unknown details passed')

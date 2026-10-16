@@ -23,16 +23,15 @@ from typing import Any
 import jieba
 
 from xuwen.core.models import MessageKind, NormalizedMessage, Session
+from xuwen.error_i18n import error_text
 
 # jieba 启动时会加载词典，第一次调用偏慢；提前初始化让导入阶段就完成
 jieba.initialize()
 
 # 中文标点
-_PUNCTUATION = "，。！？、；：""''…—（）《》【】"
+_PUNCTUATION = "，。！？、；：''…—（）《》【】"
 # emoji 与表情占位（粗略匹配 Unicode 表情区段）
-_EMOJI_RE = re.compile(
-    r"[\U0001F300-\U0001FAFF\U0001F600-\U0001F64F☀-➿⌀-⏿]"
-)
+_EMOJI_RE = re.compile(r"[\U0001F300-\U0001FAFF\U0001F600-\U0001F64F☀-➿⌀-⏿]")
 _PLACEHOLDER_RE = re.compile(r"\[(图片|语音|视频|文件|表情|动画表情|撤回)\]")
 # 兼容未重新导入的历史数据：腾讯可能把表情写成任意中英文方括号名称。
 # 与导入清洗规则一致，方括号内 1-12 个字符一律不参与 persona 文本统计。
@@ -43,16 +42,75 @@ _LONG_BASE64_RE = re.compile(r"^[A-Za-z0-9_-]{15,}$")
 # jieba 分词忽略的"虚词/无信息词"集合
 _STOPWORDS = {
     # 语言学虚词
-    "的", "了", "是", "在", "我", "你", "他", "她", "它", "也", "就",
-    "都", "和", "与", "或", "把", "被", "让", "去", "来", "啊", "呢",
-    "吧", "啦", "哦", "嘛", "嗯", "诶", "哈", "呀", "哇", "唉",
+    "的",
+    "了",
+    "是",
+    "在",
+    "我",
+    "你",
+    "他",
+    "她",
+    "它",
+    "也",
+    "就",
+    "都",
+    "和",
+    "与",
+    "或",
+    "把",
+    "被",
+    "让",
+    "去",
+    "来",
+    "啊",
+    "呢",
+    "吧",
+    "啦",
+    "哦",
+    "嘛",
+    "嗯",
+    "诶",
+    "哈",
+    "呀",
+    "哇",
+    "唉",
     # 高频但不刻画风格的中性词（语气填充 / 通用动词 / 疑问代词 / QQ 元数据噪声）
-    "一下", "看看", "怎么", "什么", "可以", "不是", "知道", "时候",
-    "现在", "东西", "准备", "回复", "已经", "还是", "应该", "然后",
-    "这种", "那种", "这个", "那个", "这样", "那样", "这里", "那里",
-    "出来", "起来", "过来", "过去", "出去",
+    "一下",
+    "看看",
+    "怎么",
+    "什么",
+    "可以",
+    "不是",
+    "知道",
+    "时候",
+    "现在",
+    "东西",
+    "准备",
+    "回复",
+    "已经",
+    "还是",
+    "应该",
+    "然后",
+    "这种",
+    "那种",
+    "这个",
+    "那个",
+    "这样",
+    "那样",
+    "这里",
+    "那里",
+    "出来",
+    "起来",
+    "过来",
+    "过去",
+    "出去",
     # QQ 分享卡片字段名（type_17 / json 类消息泄漏）
-    "title", "desc", "summary", "preview", "content", "url",
+    "title",
+    "desc",
+    "summary",
+    "preview",
+    "content",
+    "url",
 }
 
 
@@ -70,8 +128,8 @@ class LengthStats:
 
     mean: float
     median: float
-    short_ratio: float   # < 8 字
-    long_ratio: float    # > 30 字
+    short_ratio: float  # < 8 字
+    long_ratio: float  # > 30 字
 
 
 @dataclass(slots=True, frozen=True)
@@ -79,10 +137,10 @@ class PunctuationStats:
     """标点习惯。"""
 
     counts: dict[str, int] = field(default_factory=dict)
-    ellipsis_ratio: float = 0.0       # 含 "…" 或 "..." 的消息比例
-    question_ratio: float = 0.0       # 含 "？" / "?" 的消息比例
-    exclaim_ratio: float = 0.0        # 含 "！" / "!" 的消息比例
-    no_punct_ratio: float = 0.0       # 完全无标点的消息比例
+    ellipsis_ratio: float = 0.0  # 含 "…" 或 "..." 的消息比例
+    question_ratio: float = 0.0  # 含 "？" / "?" 的消息比例
+    exclaim_ratio: float = 0.0  # 含 "！" / "!" 的消息比例
+    no_punct_ratio: float = 0.0  # 完全无标点的消息比例
 
 
 @dataclass(slots=True, frozen=True)
@@ -138,7 +196,7 @@ def analyze_persona(
 ) -> PersonaReport:
     """对一组 sessions 做画像分析，返回 PersonaReport。"""
     if json_emoji_mode not in {"raw", "normalized"}:
-        raise ValueError("json_emoji_mode 必须是 raw 或 normalized")
+        raise ValueError(error_text("json_emoji_mode must be raw or normalized"))
     flat: list[NormalizedMessage] = [m for s in sessions for m in s.messages]
     friend_msgs = [m for m in flat if m.is_friend and _is_useful_for_persona(m)]
 
@@ -174,9 +232,7 @@ def _is_useful_for_persona(m: NormalizedMessage) -> bool:
     return bool(m.text.strip())
 
 
-def _top_terms(
-    messages: list[NormalizedMessage], n: int, json_emoji_mode: str
-) -> list[TermStat]:
+def _top_terms(messages: list[NormalizedMessage], n: int, json_emoji_mode: str) -> list[TermStat]:
     """高频词（基于 jieba 分词，过滤停用词与短词）。"""
     counter: Counter[str] = Counter()
     for m in messages:
@@ -196,9 +252,7 @@ def _top_terms(
     return [TermStat(term=t, count=c) for t, c in counter.most_common(n)]
 
 
-def _top_phrases(
-    messages: list[NormalizedMessage], n: int, json_emoji_mode: str
-) -> list[TermStat]:
+def _top_phrases(messages: list[NormalizedMessage], n: int, json_emoji_mode: str) -> list[TermStat]:
     """高频短语（2-4 字符 n-gram，候选朋友"口头禅"）。"""
     counter: Counter[str] = Counter()
     for m in messages:
@@ -281,9 +335,7 @@ def _media_stats(messages: list[NormalizedMessage]) -> MediaStats:
     )
 
 
-def _sample_pairs(
-    sessions: list[Session], n: int, json_emoji_mode: str
-) -> list[DialogueSample]:
+def _sample_pairs(sessions: list[Session], n: int, json_emoji_mode: str) -> list[DialogueSample]:
     """抽取 self → friend 的相邻对作为典型样本。
 
     多样性策略：

@@ -21,8 +21,17 @@ from xuwen.ingestion.chunk_cache import AdaptiveChunkCache
 logger = logging.getLogger(__name__)
 
 _TOPIC_SHIFT_MARKERS = (
-    "对了", "话说", "突然想起", "还有个事", "另一个事", "说起来", "换个话题",
-    "顺便", "不过", "但是", "然后呢",
+    "对了",
+    "话说",
+    "突然想起",
+    "还有个事",
+    "另一个事",
+    "说起来",
+    "换个话题",
+    "顺便",
+    "不过",
+    "但是",
+    "然后呢",
 )
 _JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
 
@@ -66,10 +75,7 @@ async def build_adaptive_windows(
         仅缓存模型成功的批次，退回启发式的批次下次仍会重试模型。
     输出窗口的顺序按 processable session 原序排列（gather 保序）。
     """
-    processable = [
-        s for s in sessions
-        if [m for m in s.messages if m.kind != MessageKind.SYSTEM]
-    ]
+    processable = [s for s in sessions if [m for m in s.messages if m.kind != MessageKind.SYSTEM]]
     total = len(processable)
     if total == 0:
         return []
@@ -109,9 +115,7 @@ async def build_adaptive_windows(
         return out
 
     # asyncio.gather 保留输入顺序，确保 windows 按 session 原序拼接
-    per_session_windows = await asyncio.gather(
-        *[_process_one(s) for s in processable]
-    )
+    per_session_windows = await asyncio.gather(*[_process_one(s) for s in processable])
     return [w for ws in per_session_windows for w in ws]
 
 
@@ -123,11 +127,7 @@ async def _segments_for_session(
     model: str,
     cache: AdaptiveChunkCache | None = None,
 ) -> list[_TurnSegment]:
-    if (
-        settings.adaptive_chunk_model_enabled
-        and llm is not None
-        and model
-    ):
+    if settings.adaptive_chunk_model_enabled and llm is not None and model:
         try:
             segments = await _model_segments_batched(
                 turns, settings, llm=llm, model=model, cache=cache
@@ -180,8 +180,7 @@ async def _model_segments_batched(
         if not batch_segments:
             batch_segments = _heuristic_segments(batch, settings)
         segments.extend(
-            _TurnSegment(offset + seg.start_idx, offset + seg.end_idx)
-            for seg in batch_segments
+            _TurnSegment(offset + seg.start_idx, offset + seg.end_idx) for seg in batch_segments
         )
     return _normalize_segments(segments, len(turns))
 
@@ -217,9 +216,9 @@ async def _model_segments(
             {
                 "role": "system",
                 "content": (
-                    "你是聊天记录切分助手。你只输出 JSON，不要 markdown。"
-                    "你只能返回边界，不能改写、总结或补充原文。"
-                    "目标是把连续聊天切成主题完整、适合 RAG 检索的片段。"
+                    "You segment chat history in any language. Return JSON only, no Markdown. "
+                    "Return only boundaries; never rewrite, summarize or add to source messages. "
+                    "Split continuous chat into coherent topics suitable for RAG retrieval."
                 ),
             },
             {"role": "user", "content": prompt},
@@ -239,23 +238,23 @@ async def _model_segments(
 
 def _build_boundary_prompt(turns: list[_Turn], settings: Settings) -> str:
     lines = [
-        "请根据下面的聊天 turn 返回切分边界。",
-        f"目标长度约 {settings.adaptive_chunk_target_chars} 字，最大约 {settings.adaptive_chunk_max_chars} 字。",
-        "尽量让一个片段包含完整小话题/一问一答，不要把强相关上下文切开。",
-        "如果话题明显变化，可以提前切。",
+        "Return segment boundaries for the chat turns below.",
+        f"Target length: about {settings.adaptive_chunk_target_chars} characters; maximum about {settings.adaptive_chunk_max_chars}.",
+        "Keep complete small topics and question/answer pairs together; do not split closely related context.",
+        "An obvious topic change may end a segment early.",
         "",
-        "【聊天 turn】",
+        "[Chat turns]",
     ]
     for idx, turn in enumerate(turns):
-        role = "用户" if turn.role == "self" else "TA" if turn.role == "friend" else turn.role
+        role = "User" if turn.role == "self" else "TA" if turn.role == "friend" else turn.role
         text = " / ".join(m.text.strip() for m in turn.messages if m.text.strip())
         lines.append(f"{idx}. seq={turn.start_seq}-{turn.end_seq} {role}: {_short(text, 180)}")
     lines.extend(
         [
             "",
-            "输出 JSON 格式：",
-            '{"segments":[{"start_turn":0,"end_turn":3,"topic":"短标签","mood":"短标签"}]}',
-            "start_turn/end_turn 使用上面 turn 编号，闭区间；segments 按顺序覆盖主要内容。",
+            "Return JSON:",
+            '{"segments":[{"start_turn":0,"end_turn":3,"topic":"short label","mood":"short label"}]}',
+            "start_turn/end_turn are inclusive turn indices above. Cover the main content in order.",
         ]
     )
     return "\n".join(lines)

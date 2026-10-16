@@ -1,5 +1,8 @@
 const en = {
+  backendLanguage: 'Backend language',
+  backendLanguageHelp: 'Controls startup messages, proactive messages and the default CLI/API language (XUWEN_LANGUAGE). Defaults to English. Restart the backend after saving. Page language is separate.',
   backendMissingUrl: 'Enter an API URL',
+  backendConfigUnauthorized: 'Unauthorized. Check the access token printed in the backend startup console and enter it here.',
   backendMissingKey: 'Enter an API key',
   backendMissingModel: 'Enter a model name',
   backendInvalidKey: 'The API key is invalid or expired. Check that you copied the complete key from your provider and that it has not been compromised.',
@@ -18,6 +21,7 @@ const en = {
   backendTransport: 'Network transport error ({name}): {detail}',
   backendNetwork: 'Network error ({name}): {detail}',
   backendChatSuccess: 'Connected successfully. Model {model} is available.',
+  backendChatInvalid: 'The service returned an invalid chat response. Check the API URL and protocol.',
   backendEmbeddingSuccess: 'Connected successfully. Vector dimensions: {dim}.',
   backendEmbeddingInvalid: 'The service returned an invalid embedding response.',
   backendEmbeddingDimension: 'Dimension mismatch: you entered {expected}, but the provider returned {actual}. Set vector dimensions to {actual} or choose a model supporting {expected} dimensions.',

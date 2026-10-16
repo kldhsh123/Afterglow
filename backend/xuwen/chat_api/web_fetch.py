@@ -21,8 +21,10 @@ from bs4 import BeautifulSoup
 
 from xuwen.chat_api.llm_client import GenerationParams, LLMClient
 from xuwen.config import Settings
+from xuwen.content_i18n import content_text
 from xuwen.core.errors import LLMError
 from xuwen.core.metrics import MetricsRecorder
+from xuwen.error_i18n import error_text
 
 logger = logging.getLogger(__name__)
 
@@ -141,7 +143,9 @@ class WebFetchClient:
             )
             return result
         except Exception as e:
-            logger.warning("网页读取失败，跳过 URL 上下文：%s", type(e).__name__)
+            logger.warning(
+                content_text("Webpage fetch failed; skipping URL context: %s"), type(e).__name__
+            )
             _record_fetch_metric(
                 metrics,
                 trace_id=trace_id,
@@ -307,7 +311,10 @@ async def resolve_fetch_urls(
         )
         return urls
     except (LLMError, ValueError, json.JSONDecodeError) as e:
-        logger.warning("网页访问意图判断失败，跳过裸域名读取：%s", type(e).__name__)
+        logger.warning(
+            content_text("URL intent detection failed; skipping bare-domain fetch: %s"),
+            type(e).__name__,
+        )
         _record_intent_metric(
             metrics,
             trace_id=trace_id,
@@ -324,12 +331,12 @@ async def ensure_safe_url(url: str) -> None:
     """拒绝本机、内网、链路本地等不适合后端访问的地址。"""
     parsed = urlparse(url)
     if parsed.scheme.lower() not in {"http", "https"}:
-        raise UnsafeURL("只允许 http/https URL")
+        raise UnsafeURL(error_text("Only http/https URLs are allowed"))
     host = parsed.hostname
     if not host:
-        raise UnsafeURL("URL 缺少 host")
+        raise UnsafeURL(error_text("The URL is missing a host"))
     if host.lower().strip(".") in _BLOCKED_HOSTS:
-        raise UnsafeURL("不允许访问本机地址")
+        raise UnsafeURL(error_text("Localhost addresses are not allowed"))
 
     try:
         parsed_ip = ipaddress.ip_address(host)
@@ -341,7 +348,7 @@ async def ensure_safe_url(url: str) -> None:
 
     infos = await asyncio.to_thread(socket.getaddrinfo, host, None, type=socket.SOCK_STREAM)
     if not infos:
-        raise UnsafeURL("域名无法解析")
+        raise UnsafeURL(error_text("Cannot resolve the domain name"))
     for info in infos:
         sockaddr = info[4]
         if not sockaddr:
@@ -363,11 +370,7 @@ def extract_readable_text(
         for tag in soup(["script", "style", "noscript", "svg", "canvas"]):
             tag.decompose()
         title = " ".join((soup.title.string or "").split()) if soup.title else ""
-        chunks = [
-            chunk.strip()
-            for chunk in soup.get_text("\n").splitlines()
-            if chunk.strip()
-        ]
+        chunks = [chunk.strip() for chunk in soup.get_text("\n").splitlines() if chunk.strip()]
         readable = "\n".join(chunks)
         return title, _short(readable, max_chars)
     return "", _short(" ".join(text.split()), max_chars)
@@ -379,9 +382,9 @@ def render_url_context(results: list[WebFetchResult]) -> str:
     lines = []
     for i, item in enumerate(results, 1):
         lines.append(
-            f"[{i}] { _short(item.title, 100) }\n"
-            f"URL：{_short(item.url, 180)}\n"
-            f"正文摘录：{_short(item.text, 1200)}"
+            f"[{i}] {_short(item.title, 100)}\n"
+            f"URL: {_short(item.url, 180)}\n"
+            f"Content excerpt: {_short(item.text, 1200)}"
         )
     return "\n\n".join(lines)
 
@@ -425,8 +428,7 @@ def _record_intent_metric(
         latency_ms,
         error=error if status == "error" else None,
         detail=(
-            f"trace={trace_id},reason={reason},"
-            f"candidates={candidate_count},results={result_count}"
+            f"trace={trace_id},reason={reason},candidates={candidate_count},results={result_count}"
         ),
     )
 
@@ -436,20 +438,19 @@ def _build_url_intent_messages(text: str, candidates: list[str]) -> list[dict[st
         {
             "role": "system",
             "content": (
-                "你是严格的网页访问意图判断器，只输出 JSON。"
-                "任务：判断用户是否要求读取/打开/查看候选网站内容。"
-                "如果只是闲聊、提到域名、购买域名、邮箱、代码或无访问需求，should_fetch=false。"
-                "输出格式：{\"should_fetch\": true|false, \"urls\": [\"https://...\"]}。"
-                "urls 只能从候选 URL 中选择，不要编造新 URL。"
+                "Classify web-reading intent in any language. Return JSON only. "
+                "Decide whether the user asks to read, open or inspect candidate websites. "
+                "Use should_fetch=false for casual mentions, domain purchases, email, code or no request to access content. "
+                'Return: {"should_fetch": true|false, "urls": ["https://..."]}。'
+                "Select urls only from the candidate URLs; never invent URLs."
             ),
         },
         {
             "role": "user",
             "content": (
-                "用户消息：\n"
+                "User message:\n"
                 f"{text}\n\n"
-                "候选 URL：\n"
-                + "\n".join(f"- {u}" for u in candidates)
+                "Candidate URLs:\n" + "\n".join(f"- {u}" for u in candidates)
             ),
         },
     ]
@@ -501,7 +502,7 @@ def _assert_public_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> None
         or ip.is_reserved
         or ip.is_unspecified
     ):
-        raise UnsafeURL("不允许访问内网或特殊地址")
+        raise UnsafeURL(error_text("Private or special-use addresses are not allowed"))
 
 
 def _dedupe_urls(urls: list[str]) -> list[str]:
