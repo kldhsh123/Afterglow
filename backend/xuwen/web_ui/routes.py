@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import secrets
 import time
 from pathlib import Path
@@ -167,6 +168,9 @@ def get_values(settings: Settings = Depends(_settings_dep)) -> dict[str, Any]:
     schema = build_schema(_example_path())
     secret_keys = {f.key for f in schema.fields if f.secret}
 
+    # Runtime defaults are visible, but are not saved provider choices.
+    saved_keys = {key.upper() for key in load_env(_env_path(settings)).keys()}
+    process_keys = {key.upper() for key in os.environ}
     out: dict[str, Any] = {}
     for f in schema.fields:
         value = _effective_value(settings, f.key)
@@ -179,7 +183,13 @@ def get_values(settings: Settings = Depends(_settings_dep)) -> dict[str, Any]:
                 "preview": _mask_secret(value),
             }
         else:
-            out[f.key] = {"set": True, "value": value}
+            explicitly_set = f.key.lower() in settings.model_fields_set
+            configured = (
+                f.key in saved_keys
+                or f.key in process_keys
+                or explicitly_set
+            )
+            out[f.key] = {"set": True, "value": value, "configured": configured}
     return {"values": out}
 
 

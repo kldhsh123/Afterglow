@@ -171,7 +171,7 @@ export interface ImportTaskState {
 export const api = {
   ping: () => jsonRequest<{ ok: boolean; ts: number }>('/ping'),
   status: () => jsonRequest<SetupStatus>('/status'),
-  values: () => jsonRequest<{ values: Record<string, { set: boolean; value?: string; preview?: string }> }>('/values'),
+  values: () => jsonRequest<{ values: Record<string, { set: boolean; value?: string; preview?: string; configured?: boolean }> }>('/values'),
   putValues: (values: Record<string, string>) =>
     jsonRequest<UpdateValuesResult>('/values', {
       method: 'PUT',

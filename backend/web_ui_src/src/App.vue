@@ -14,14 +14,18 @@ import {
 } from './api'
 import { useLocale } from './useLocale'
 import { applyEnglishDefaults } from './englishDefaults'
+import { useConfigMessages } from './useConfigMessages'
 
 const { isChinese, t, locale, setLocale } = useLocale()
+const { translateBackendText } = useConfigMessages()
 
 const step = ref(0)
 const totalSteps = 8
 const setupStatus = ref<SetupStatus | null>(null)
 const configuredFields = ref(new Set<string>())
 const existingValuesLoaded = ref(false)
+const configuredServiceFields = new Set<string>()
+const inheritedServiceValues: Record<string, string> = {}
 
 // ---- 访问令牌 ----
 const tokenInput = ref(getToken())
@@ -108,7 +112,7 @@ const crossRerankerPresets = shallowRef<Preset[]>([])
 // Load saved values first; changing UI language must not replace an existing provider.
 watch(locale, () => {
   if (!isChinese.value && existingValuesLoaded.value) {
-    applyEnglishDefaults(form, configuredFields.value, chatPresets.value.find(p => p.id === 'gemini'))
+    applyEnglishDefaults(form, configuredServiceFields, chatPresets.value.find(p => p.id === 'gemini'), inheritedServiceValues)
   }
 })
 
@@ -273,7 +277,7 @@ async function checkToken() {
     crossRerankerPresets.value = presetsData.cross_reranker
     existingValuesLoaded.value = valuesLoaded
     if (!isChinese.value && existingValuesLoaded.value) {
-      applyEnglishDefaults(form, configuredFields.value, chatPresets.value.find(p => p.id === 'gemini'))
+      applyEnglishDefaults(form, configuredServiceFields, chatPresets.value.find(p => p.id === 'gemini'), inheritedServiceValues)
     }
     step.value = firstIncompleteStep(status)
     // 访问令牌校验成功后才尝试恢复未完成的导入任务，
@@ -330,7 +334,11 @@ async function loadExistingValues() {
   ])
   try {
     const data = await api.values()
+    configuredServiceFields.clear()
+    for (const key of Object.keys(inheritedServiceValues)) delete inheritedServiceValues[key]
     for (const [k, v] of Object.entries(data.values)) {
+      if (v.set && v.configured !== false) configuredServiceFields.add(k)
+      if (v.configured === false && v.value !== undefined) inheritedServiceValues[k] = v.value
       if (v.set) configuredFields.value.add(k)
       if (!v.set || v.value === undefined || v.value === null) continue
       if (!(k in form)) continue
@@ -831,6 +839,7 @@ async function saveConfig(opts: { silent?: boolean } = {}): Promise<boolean> {
     if (result.backup) backupPath.value = result.backup
     const nextConfigured = new Set(configuredFields.value)
     for (const [key, value] of Object.entries(values)) {
+      configuredServiceFields.add(key)
       if (value.trim()) nextConfigured.add(key)
       else nextConfigured.delete(key)
     }
@@ -986,7 +995,7 @@ const currentLabelPresetApplyUrl = computed(() => {
 const importStageMain = computed(() => {
   const s = importTask.value?.stage || ''
   const idx = s.lastIndexOf(' · 已用时 ')
-  return idx >= 0 ? s.slice(0, idx) : s
+  return translateBackendText(idx >= 0 ? s.slice(0, idx) : s)
 })
 const importStageElapsed = computed(() => {
   const s = importTask.value?.stage || ''
@@ -1151,7 +1160,7 @@ onMounted(async () => {
               />
             </label>
             <p v-if="tokenError" class="text-sm text-warning flex items-center gap-1.5">
-              <AlertCircle :size="14" /> {{ tokenError }}
+              <AlertCircle :size="14" /> {{ translateBackendText(tokenError) }}
             </p>
             <button
               class="w-full py-2.5 rounded-full bg-accent text-paper-soft
@@ -1196,7 +1205,7 @@ onMounted(async () => {
                 <span>{{ inspecting ? t('uploadingAndParsing') : t('chooseChatFiles') }}</span>
               </label>
               <p v-if="inspectError" class="text-xs text-warning flex items-center gap-1">
-                <AlertCircle :size="12" /> {{ inspectError }}
+                <AlertCircle :size="12" /> {{ translateBackendText(inspectError) }}
               </p>
 
               <!-- 已上传文件 -->
@@ -1214,7 +1223,7 @@ onMounted(async () => {
                   <FileText :size="14" class="text-ink-soft dark:text-night-text-soft flex-shrink-0" />
                   <span class="truncate flex-1">{{ f.name }}</span>
                   <span class="text-ink-soft dark:text-night-text-soft whitespace-nowrap">
-                    {{ f.format_label || f.format || '?' }}
+                    {{ translateBackendText(f.format_label || f.format || '?') }}
                     · {{ f.total_messages || 0 }} {{ t('messages') }}
                   </span>
                   <button type="button" @click="removeUploaded(i)"
@@ -1410,7 +1419,7 @@ onMounted(async () => {
                 :class="chatTest.ok ? 'text-accent dark:text-night-accent' : 'text-warning'">
                 <CheckCircle2 v-if="chatTest.ok" :size="14" />
                 <AlertCircle v-else :size="14" />
-                <span>{{ chatTest.message?.trim() || t('unknownErrorCheckYourNetworkProxyAnd') }}</span>
+                <span>{{ translateBackendText(chatTest.message?.trim() || t('unknownErrorCheckYourNetworkProxyAnd')) }}</span>
               </div>
             </div>
             <!-- 允许跳过：连通测试失败时给一个"确认无误强制继续"的出口 -->
@@ -1496,7 +1505,7 @@ onMounted(async () => {
                 :class="embTest.ok ? 'text-accent dark:text-night-accent' : 'text-warning'">
                 <CheckCircle2 v-if="embTest.ok" :size="14" />
                 <AlertCircle v-else :size="14" />
-                <span>{{ embTest.message?.trim() || t('unknownErrorCheckYourNetworkProxyAnd') }}</span>
+                <span>{{ translateBackendText(embTest.message?.trim() || t('unknownErrorCheckYourNetworkProxyAnd')) }}</span>
               </div>
               <button v-if="embTest && !embTest.ok && embTest.extra?.actual_dim"
                 class="text-xs px-3 py-1 rounded-full border border-accent/40 text-accent
@@ -1590,7 +1599,7 @@ onMounted(async () => {
                     :class="labelTest.ok ? 'text-accent dark:text-night-accent' : 'text-warning'">
                     <CheckCircle2 v-if="labelTest.ok" :size="12" />
                     <AlertCircle v-else :size="12" />
-                    <span>{{ labelTest.message?.trim() || t('unknownErrorCheckYourNetworkProxyAnd') }}</span>
+                    <span>{{ translateBackendText(labelTest.message?.trim() || t('unknownErrorCheckYourNetworkProxyAnd')) }}</span>
                   </div>
                 </div>
                 <!-- 打标服务独立的跳过开关；仅在启用打标且校验失败时出现 -->
@@ -2093,13 +2102,13 @@ onMounted(async () => {
                     <div class="text-sm truncate">{{ f.name }}</div>
                     <div class="text-xs text-ink-soft dark:text-night-text-soft">
                       {{ (f.size / 1024 / 1024).toFixed(2) }} MB ·
-                      {{ f.format_label || f.format || t('unrecognized') }}
+                      {{ translateBackendText(f.format_label || f.format || t('unrecognized')) }}
                       · {{ f.total_messages || 0 }} {{ t('messages') }}
                     </div>
                   </div>
                 </div>
                 <p v-if="saveError" class="text-sm text-warning flex items-center gap-1.5">
-                  <AlertCircle :size="14" /> {{ saveError }}
+                  <AlertCircle :size="14" /> {{ translateBackendText(saveError) }}
                 </p>
                 <button class="w-full py-2.5 rounded-full bg-accent text-paper-soft hover:bg-accent/90
                                disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center justify-center gap-2"
@@ -2155,7 +2164,7 @@ onMounted(async () => {
                 <div class="mt-1 text-xs text-ink-soft dark:text-night-text-soft text-right font-mono">
                   {{ Math.round(importTask.progress * 100) }}%
                 </div>
-                <p v-if="importTask.error" class="mt-2 text-sm text-warning">{{ importTask.error }}</p>
+                <p v-if="importTask.error" class="mt-2 text-sm text-warning">{{ translateBackendText(importTask.error) }}</p>
               </div>
               <button v-if="!['done','failed','cancelled'].includes(importTask.status)"
                 class="text-xs text-ink-soft dark:text-night-text-soft hover:text-warning"
@@ -2205,7 +2214,7 @@ onMounted(async () => {
               </div>
             </label>
             <p v-if="saveError" class="text-sm text-warning flex items-center gap-1.5">
-              <AlertCircle :size="14" /> {{ saveError }}
+              <AlertCircle :size="14" /> {{ translateBackendText(saveError) }}
             </p>
             <div class="rounded-lg p-3 bg-paper dark:bg-night-bg border border-ink/5 dark:border-night-text/10
                         text-xs text-ink-soft dark:text-night-text-soft leading-relaxed">
