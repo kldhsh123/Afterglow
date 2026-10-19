@@ -1,2 +1,6 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Keep the Vite HTML entry and generated page identical across checkouts.
+backend/web_ui_src/index.html text eol=lf
+backend/xuwen/web_ui/static/index.html text eol=lf

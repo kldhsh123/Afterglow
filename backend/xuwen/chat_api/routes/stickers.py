@@ -19,6 +19,7 @@ from xuwen.chat_api.sticker_store import (
     StickerError,
     StickerStore,
 )
+from xuwen.error_i18n import error_text
 
 router = APIRouter(prefix="/v1/stickers", tags=["stickers"])
 
@@ -96,7 +97,9 @@ def create_sticker(
 ) -> StickerResponse:
     store = _get_store(state)
     if store.get(req.name) is not None:
-        raise HTTPException(status_code=409, detail=f"表情包 {req.name!r} 已存在")
+        raise HTTPException(
+            status_code=409, detail=error_text("Sticker {p0!r} already exists", p0=req.name)
+        )
     try:
         sticker = store.add(
             name=req.name,
@@ -134,7 +137,7 @@ def delete_sticker(name: str, state: AppState = Depends(get_state)) -> dict[str,
     store = _get_store(state)
     ok = store.delete(name)
     if not ok:
-        raise HTTPException(status_code=404, detail="表情包不存在")
+        raise HTTPException(status_code=404, detail=error_text("Sticker not found"))
     return {"status": "deleted", "name": name}
 
 
@@ -143,7 +146,7 @@ def get_sticker_image(name: str, state: AppState = Depends(get_state)) -> Respon
     store = _get_store(state)
     path = store.image_path(name)
     if path is None:
-        raise HTTPException(status_code=404, detail="表情包不存在")
+        raise HTTPException(status_code=404, detail=error_text("Sticker not found"))
     ext = path.suffix.lstrip(".").lower()
     mime = _MIME_BY_EXT.get(ext, "application/octet-stream")
     return Response(

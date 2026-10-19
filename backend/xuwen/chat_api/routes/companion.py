@@ -43,11 +43,18 @@ from xuwen.companion.response_policy import (
     decide_response_policy,
     refine_decision_with_llm,
 )
+from xuwen.content_i18n import content_text
 from xuwen.core.errors import RetrievalError
 from xuwen.core.models import RetrievalQuery, RetrievalResult
 from xuwen.core.time import local_now
 from xuwen.memory.writer import WritebackTurn
 from xuwen.persona.prompt import build_chat_messages
+from xuwen.prompt_language import (
+    fallback_conversation_language,
+    output_language,
+    proactive_language_instruction,
+    structured_output_instruction,
+)
 
 router = APIRouter(prefix="/v1/companion", tags=["companion"])
 logger = logging.getLogger(__name__)
@@ -77,6 +84,18 @@ _BARE_USER_STATE_OPENINGS = {
     "在吗",
 }
 _LOW_INFORMATION_TOPIC_HOOKS = {
+    "how are you",
+    "how have you been",
+    "are you there",
+    "still awake",
+    "are you still up",
+    "what are you doing",
+    "have you eaten",
+    "good morning",
+    "good night",
+    "that topic",
+    "our previous topic",
+    "a little thing",
     "最近怎么样",
     "在吗",
     "还没睡",
@@ -95,6 +114,15 @@ _LOW_INFORMATION_TOPIC_HOOKS = {
     "小事",
     "有个小事",
 }
+
+_ASSUMED_USER_STATE_EN_RE = re.compile(
+    r"\b(?:you(?:'re| are)? (?:still )?(?:awake|up|online)|"
+    r"you (?:haven't|have not) (?:slept|gone to bed)|"
+    r"are you (?:still )?(?:awake|up|there|online)|"
+    r"why (?:are you still (?:awake|up)|aren't you asleep)|"
+    r"what are you (?:doing|up to)|i (?:saw|see) you(?:'re| are)? online)\b",
+    re.I,
+)
 
 
 @dataclass(slots=True, frozen=True)
@@ -385,12 +413,12 @@ async def _generate_proactive_response(
     retrieval_query = "\n".join(
         part
         for part in [
-            "检索目标：找一个适合主动开聊的具体记忆钩子；优先最近未展开的话题、用户提过的计划/状态、共同梗或轻量关心点。",
-            f"主动话题触发：{req.reason}",
-            f"当前状态：{base_life.current_activity}",
-            f"可聊话题：{base_life.topic_seed}",
-            f"内部背景：{req.private_context}" if req.private_context else "",
-            f"话题方向：{req.topic_hint}" if req.topic_hint else "",
+            "Retrieval goal: find a concrete memory hook for a proactive opening. Prefer recent unfinished topics, plans or states mentioned by the user, shared jokes or a light point of care.",
+            f"Proactive trigger: {req.reason}",
+            f"Current activity: {base_life.current_activity}",
+            f"Topic seed: {base_life.topic_seed}",
+            f"Internal background: {req.private_context}" if req.private_context else "",
+            f"Topic direction: {req.topic_hint}" if req.topic_hint else "",
             analysis_context,
         ]
         if part
@@ -414,7 +442,10 @@ async def _generate_proactive_response(
             )
             return result
         except RetrievalError as e:
-            logger.warning("主动话题检索失败，降级到无 RAG 模式：%s", e.message)
+            logger.warning(
+                content_text("Proactive topic retrieval failed; continuing without RAG: %s"),
+                e.message,
+            )
             state.metrics.record(
                 "companion.retrieval",
                 (time.perf_counter() - _retrieval_start) * 1000,
@@ -512,7 +543,9 @@ async def _generate_proactive_response(
             )
         except TimeoutError:
             logger.warning(
-                "主动聊天互动策略小模型超时 %.1fs，沿用规则层决策",
+                content_text(
+                    "Proactive response-policy model timed out after %.1fs; retaining the rule decision"
+                ),
                 state.settings.response_policy_timeout_seconds,
             )
             state.metrics.record(
@@ -563,18 +596,17 @@ async def _generate_proactive_response(
     )
     proactive_user_message = (
         _proactive_context_text(req)
-        + "。请主动开启一个自然话题。"
-        "要求：短、像真实私聊、不要解释系统任务；"
-        f"{_render_cached_context_instruction(cached_context_text)}"
-        f"{_render_proactive_topic_hook_instruction(topic_hook)}"
-        "必须包含一个用户容易接住的可回复点，优先从记忆或关系上下文里挑轻量话题钩子；"
-        "不要只输出低信息量纯 ping、单字短缩写、纯亲昵称呼或纯占位。"
-        "不要只陈述自己的状态；自己的状态只能当铺垫，后面必须接想说的事、问题或邀请。"
-        "不要把 life 状态直接复述成消息。"
-        "只能输出一条单句消息，不能换行、不能用空行拆成多条。"
-        "你不知道用户当前是否在线、是否没睡、是否正在看消息，所以不要断言用户当前状态、活动或已读。"
-        "可以轻描淡写用自己的当前状态，或用“你要是醒着/有空的话”这种条件句；"
-        "不要编造现实见面或承诺。"
+        + "\nINTERNAL PROACTIVE TRIGGER, not a new user message. Start a natural private conversation. "
+        + proactive_language_instruction(state.settings.xuwen_language)
+        + _render_cached_context_instruction(cached_context_text)
+        + _render_proactive_topic_hook_instruction(topic_hook)
+        + "Keep it short: one sentence, one message, no newlines. Include an easy reply point, "
+        "preferably a light memory/relationship topic. No bare ping, nickname, abbreviation or "
+        "placeholder. Your own state may set the scene but must lead to something to say, a question "
+        "or an invitation; do not recite the life state. You have no live presence/read/activity "
+        "signals about the user. Never assume they are online, awake or reading. Conditional wording "
+        "such as 'if you have time' is fine. Do not fabricate real meetings or commitments. "
+        "Output only the message; never explain the task."
     )
     web_query = "\n".join(part for part in [req.topic_hint, req.private_context] if part)
     web_context = ""
@@ -593,6 +625,7 @@ async def _generate_proactive_response(
         current_user_message=proactive_user_message,
         web_context=web_context,
     )
+    messages[0]["content"] += "\n\n" + proactive_language_instruction(state.settings.xuwen_language)
 
     start = time.perf_counter()
     text = sanitize_assistant_text(
@@ -605,6 +638,7 @@ async def _generate_proactive_response(
             metrics=state.metrics,
         ),
         valid_sticker_names=available_sticker_names(state.settings),
+        fallback_empty=False,
     )
     state.metrics.record(
         "companion.proactive",
@@ -716,26 +750,18 @@ async def _rewrite_proactive_opening(
 ) -> str:
     rewrite_parts = [
         _proactive_context_text(req),
-        f"上一版主动开场不合格：{original_text!r}",
+        f"Rejected opening: {original_text!r}",
     ]
     if judgement.reason:
-        rewrite_parts.append(f"质量判断：{judgement.reason}")
+        rewrite_parts.append(f"Quality judgment: {judgement.reason}")
     if judgement.rewrite_instruction:
-        rewrite_parts.append(f"重写方向：{judgement.rewrite_instruction}")
+        rewrite_parts.append(f"Rewrite direction: {judgement.rewrite_instruction}")
     if cached_context_text:
-        rewrite_parts.append(f"最近上下文缓存：\n{cached_context_text}")
+        rewrite_parts.append(f"Recent conversation: \n{cached_context_text}")
     if topic_hook.found:
-        rewrite_parts.append(f"可用话题钩子：{topic_hook.hook}")
+        rewrite_parts.append(f"Available topic hook: {topic_hook.hook}")
     rewrite_parts.append(
-        "请重写成一句新的主动开场。硬性要求："
-        "1）短、像真实私聊；"
-        "2）必须有一个用户容易接住的可回复点，优先使用记忆/关系上下文里的轻量话题；"
-        "3）不要推断用户当前在线、没睡、在看消息或在干嘛；"
-        "4）不要只发低信息量纯 ping、单字短缩写、纯亲昵称呼或纯占位；"
-        "5）不要只陈述自己的状态；自己的状态后面必须接想说的事、问题或邀请；"
-        "6）可以用“你要是醒着/有空的话”这种条件句。"
-        "7）只能输出一条单句消息，不能换行、不能用空行拆成多条。"
-        "只输出最终消息。"
+        "INTERNAL PROACTIVE REWRITE, not a new user message. Rewrite the opening as one short natural sentence, no newlines. Use the configured proactive language, including when the context or candidate uses a different language. Include an easy reply point from context. Do not assume current user presence, wakefulness, reading or activity. No bare ping, abbreviation, nickname or placeholder. Your own state must lead to a topic, question or invitation. Conditional wording is fine. Output only the final message."
     )
     rewrite_user_message = "\n".join(rewrite_parts)
     messages = build_chat_messages(
@@ -746,6 +772,7 @@ async def _rewrite_proactive_opening(
         current_user_message=rewrite_user_message,
         web_context=web_context,
     )
+    messages[0]["content"] += "\n\n" + proactive_language_instruction(state.settings.xuwen_language)
     start = time.perf_counter()
     try:
         rewritten = sanitize_assistant_text(
@@ -758,6 +785,7 @@ async def _rewrite_proactive_opening(
                 metrics=state.metrics,
             ),
             valid_sticker_names=available_sticker_names(state.settings),
+            fallback_empty=False,
         )
         state.metrics.record(
             "companion.proactive.rewrite",
@@ -765,7 +793,10 @@ async def _rewrite_proactive_opening(
             detail=state.settings.chat_model,
         )
     except Exception:
-        logger.warning("主动开场重写失败，使用保守 fallback", exc_info=True)
+        logger.warning(
+            content_text("Proactive opening rewrite failed; using a conservative fallback"),
+            exc_info=True,
+        )
         debug["fallback_used"] = True
         debug["fallback_reason"] = "rewrite_failed"
         return _fallback_proactive_opening(
@@ -773,6 +804,7 @@ async def _rewrite_proactive_opening(
             relationship_context=relationship_context,
             retrieved=retrieved,
             topic_hook=topic_hook,
+            language=state.settings.xuwen_language,
         )
     rewritten_judgement = await _judge_proactive_opening(
         state=state,
@@ -797,6 +829,7 @@ async def _rewrite_proactive_opening(
         relationship_context=relationship_context,
         retrieved=retrieved,
         topic_hook=topic_hook,
+        language=state.settings.xuwen_language,
     )
 
 
@@ -817,25 +850,27 @@ async def _extract_proactive_topic_hook(
 
     retrieved_text = _render_retrieved_for_topic_hook(retrieved)
     prompt = (
-        "你是主动聊天的话题钩子选择器，只判断“有没有适合主动开场的可聊点”，不要生成聊天正文。\n"
-        "优先级：最近上下文缓存 > 关系记忆 > RAG 片段。\n"
-        "合格钩子应该具体但不暴露原句：可以是计划进展、上次未聊完的话题、用户提过的近况、一个轻量问题。\n"
-        "不合格：单字/暗号/亲昵称呼/纯问候/在吗/睡了吗/还没睡/用户当前在线状态/AI 自己状态/过度私密原文/只适合作为回复的半句话。\n"
-        "如果上下文只有低信息闲聊或不适合主动提起，就 found=false。\n"
-        "hook 要写成不超过 18 个中文字符的泛化短语，不要复制用户原句，不要带引号。\n"
-        "只输出 JSON，不要 markdown。格式："
-        '{"found": true|false, "hook": "短话题", "source": "context_cache|relationship|retrieval|none", "reason": "简短原因"}'
-        "\n\n"
-        f"最近上下文缓存：\n{_short_for_judge(cached_context_text, 1800) or '（无）'}\n\n"
-        f"关系记忆：\n{_short_for_judge(relationship_context, 1000) or '（无）'}\n\n"
-        f"RAG 片段：\n{_short_for_judge(retrieved_text, 1800) or '（无）'}"
+        "Select a topic hook for a proactive opening; do not write the chat message.\n"
+        "Priority: recent conversation > relationship memory > retrieved excerpts. A hook should be "
+        "specific without exposing quotations: a plan update, unfinished topic, recent event or light question. "
+        "Reject codes, nicknames, bare greetings/pings, sleep checks, claimed user presence, the AI's "
+        "own state, overly private quotations or fragments suitable only as replies. If unsupported, "
+        "return found=false. Write hook as a short generalized phrase in the configured output language, "
+        "at most 80 characters. Do not copy user wording or add quotation marks. "
+        "Return JSON only: "
+        '{"found":false,"hook":"","source":"none","reason":"brief reason"}. '
+        "source must be context_cache/relationship/retrieval/none.\n"
+        f"Recent conversation:\n{_short_for_judge(cached_context_text, 1800) or '(none)'}\n"
+        f"Relationship memory:\n{_short_for_judge(relationship_context, 1000) or '(none)'}\n"
+        f"Retrieved excerpts:\n{_short_for_judge(retrieved_text, 1800) or '(none)'}"
     )
     try:
         raw = await state.response_policy_llm.complete_chat(
             [
                 {
                     "role": "system",
-                    "content": "你只选择主动聊天话题钩子，不生成聊天正文。必须输出可被 json.loads 解析的 JSON。",
+                    "content": "Select only a proactive conversation topic hook, not a chat message. Return JSON parseable by json.loads(). "
+                    + structured_output_instruction(state.settings.xuwen_language),
                 },
                 {"role": "user", "content": prompt},
             ],
@@ -849,7 +884,10 @@ async def _extract_proactive_topic_hook(
             metrics=state.metrics,
         )
     except Exception:
-        logger.warning("主动话题钩子小模型判断失败，使用本地保守兜底", exc_info=True)
+        logger.warning(
+            content_text("Topic-hook model failed; using a conservative local fallback"),
+            exc_info=True,
+        )
         return local_fallback
     parsed = _parse_proactive_topic_hook(raw)
     if parsed.found or parsed.reason != "topic_hook_parse_failed":
@@ -915,19 +953,13 @@ def _render_retrieved_for_topic_hook(retrieved: RetrievalResult) -> str:
 def _render_cached_context_instruction(cached_context_text: str) -> str:
     if not cached_context_text:
         return ""
-    return (
-        "最近上下文缓存如下，只能用来找一个可接续的话题，不要照抄原句或暴露缓存存在：\n"
-        f"{cached_context_text}\n"
-    )
+    return f"Recent conversation (find a continuation; do not copy quotations or disclose the cache):\n{cached_context_text}\n"
 
 
 def _render_proactive_topic_hook_instruction(topic_hook: _ProactiveTopicHook) -> str:
     if not topic_hook.found:
-        return "当前没有可靠记忆话题钩子；不要硬编具体往事，使用保守但可回复的轻量开场。"
-    return (
-        f"本轮可用话题钩子：{topic_hook.hook}。"
-        "主动开场必须围绕这个钩子，但不要照抄缓存原文，也不要解释钩子来源。"
-    )
+        return "No reliable memory topic. Do not invent past events; choose a conservative, easy-to-answer opening. "
+    return f"Available topic hook: {topic_hook.hook}. Build the opening around it without quoting the cache or explaining its source. "
 
 
 async def _judge_proactive_opening(
@@ -945,35 +977,30 @@ async def _judge_proactive_opening(
         return _ProactiveOpeningJudgement(
             should_rewrite=True,
             reason=hard_reason,
-            rewrite_instruction="改成不推断用户当前状态、并带一个可回复点的主动开场。",
+            rewrite_instruction="Use an opening with an easy reply point without assuming the current user state.",
         )
     judge_prompt = (
-        "你是聊天产品的主动开场质量审查器。判断候选消息是否适合作为“主动发起聊天”的第一句话。\n"
-        "注意：当前没有用户新消息，也没有用户在线、已读、没睡、正在看手机等实时 presence 信号。\n"
-        "合格标准：像自然私聊；只能是一条单句消息；可以很短；但必须能开启对话，不能只是中途回复、状态播报、低信息量 ping、"
-        "纯称呼、纯占位；不能断言用户当前状态、活动或已读；最好有一个问题、邀请、想说的事，"
-        "或来自记忆/关系上下文的轻量话题钩子。多行、空行分条、直接复述 life 状态都不合格。\n"
-        "通用例子："
-        "不合格：'刚准备睡但还在刷手机'（只是状态播报）；"
-        "不合格：'在吗'（低信息 ping）；"
-        "不合格：'还没睡'（没有 presence 依据）；"
-        "合格：'你有空的话，我想问你个小事'；"
-        "合格：'我刚想到上次那个话题，想接着问问你'。\n"
-        "只输出 JSON，不要 markdown。格式："
-        '{"should_rewrite": true|false, "reason": "简短原因", "rewrite_instruction": "如果需要重写，给一句方向"}'
-        "\n\n"
-        f"候选消息：{text!r}\n"
-        f"触发背景：{_proactive_context_text(req)}\n"
-        f"AI 当前状态：{life.current_activity}；可聊话题：{life.topic_seed}；可用性：{life.availability}\n"
-        f"主动话题钩子：{topic_hook.hook if topic_hook.found else '（无）'}\n"
-        f"关系记忆摘要：{_short_for_judge(relationship_context, 700)}"
+        "Judge whether the candidate is a suitable FIRST message for a proactive private conversation. "
+        "There is no new user message or live online/read/sleep/activity signal. A good opening is "
+        "one natural short sentence with a reply point: a question, invitation, something to share or "
+        "light context-based topic. Reject mid-conversation replies, state-only reports, bare pings, "
+        "nicknames, placeholders, claimed user state, multiple lines/messages or recited life state. "
+        "For example, 'Still scrolling before bed' is state-only; 'Are you there?' is a bare ping; "
+        "'You are still awake' assumes presence. 'If you have time, can I ask a quick question?' and "
+        "'I remembered our earlier topic and wanted to ask something' are suitable structures. "
+        "Judge in any language. Return JSON only: "
+        '{"should_rewrite":false,"reason":"brief reason","rewrite_instruction":"direction if needed"}.\n'
+        f"Candidate: {text!r}\nTrigger: {_proactive_context_text(req)}\n"
+        f"Character activity: {life.current_activity}; topic: {life.topic_seed}; availability: {life.availability}\n"
+        f"Topic hook: {topic_hook.hook if topic_hook.found else '(none)'}\n"
+        f"Relationship summary: {_short_for_judge(relationship_context, 700)}"
     )
     try:
         raw = await state.response_policy_llm.complete_chat(
             [
                 {
                     "role": "system",
-                    "content": "你只做质量判断，不生成聊天正文。必须输出可被 json.loads 解析的 JSON。",
+                    "content": "Judge quality only; do not generate chat text. Return JSON parseable by json.loads().",
                 },
                 {"role": "user", "content": judge_prompt},
             ],
@@ -987,11 +1014,16 @@ async def _judge_proactive_opening(
             metrics=state.metrics,
         )
     except Exception:
-        logger.warning("主动开场小模型质量判断失败，禁止直接发送原文", exc_info=True)
+        logger.warning(
+            content_text(
+                "Proactive opening quality model failed; preventing direct delivery of the original text"
+            ),
+            exc_info=True,
+        )
         return _ProactiveOpeningJudgement(
             should_rewrite=True,
             reason="judge_failed",
-            rewrite_instruction="重写成单句、有可回复点、且不复述状态的主动开场。",
+            rewrite_instruction="Rewrite as a single-sentence proactive opening with an easy reply point, without restating the current state.",
         )
     return _parse_proactive_opening_judgement(raw)
 
@@ -1003,13 +1035,13 @@ def _parse_proactive_opening_judgement(raw: str) -> _ProactiveOpeningJudgement:
         return _ProactiveOpeningJudgement(
             should_rewrite=True,
             reason="judge_parse_failed",
-            rewrite_instruction="质量判断失败，改成单句、有可回复点的主动开场。",
+            rewrite_instruction="Quality judgment failed. Use one sentence with an easy reply point.",
         )
     if not isinstance(data, dict):
         return _ProactiveOpeningJudgement(
             should_rewrite=True,
             reason="judge_not_object",
-            rewrite_instruction="质量判断失败，改成单句、有可回复点的主动开场。",
+            rewrite_instruction="Quality judgment failed. Use one sentence with an easy reply point.",
         )
     return _ProactiveOpeningJudgement(
         should_rewrite=bool(data.get("should_rewrite")),
@@ -1038,6 +1070,11 @@ def _proactive_opening_hard_violation(text: str) -> str:
         return "assumes_user_current_state"
     if any(pattern in compact for pattern in _ASSUMED_USER_STATE_PATTERNS):
         return "assumes_user_current_state"
+    normalized = text.replace("’", "'")
+    for match in _ASSUMED_USER_STATE_EN_RE.finditer(normalized):
+        prefix = normalized[max(0, match.start() - 24) : match.start()]
+        if not re.search(r"\b(?:if|in case|when|whenever)\s+$", prefix, re.I):
+            return "assumes_user_current_state"
     return ""
 
 
@@ -1058,23 +1095,33 @@ def _fallback_proactive_opening(
     relationship_context: str = "",
     retrieved: RetrievalResult | None = None,
     topic_hook: _ProactiveTopicHook | None = None,
+    language: str | None = None,
 ) -> str:
-    if topic_hook is not None and topic_hook.found and topic_hook.hook:
-        return f"你有空的话，我想接着问问{topic_hook.hook}"
+    language = language or output_language()
+    hook = topic_hook.hook if topic_hook is not None and topic_hook.found else ""
+    if hook and fallback_conversation_language(hook) == language:
+        return content_text(
+            "If you have a moment, can we pick up on {hook}?", language=language
+        ).format(hook=hook)
     hook = _relationship_topic_hook(relationship_context)
-    if hook:
-        return f"你有空的话，我想问问你之前说的{hook}后来怎么样了"
+    if hook and fallback_conversation_language(hook) == language:
+        return content_text("If you have time, how did {hook} turn out?", language=language).format(
+            hook=hook
+        )
     if life.availability in {"busy", "away", "unavailable"}:
-        return "我刚忙里偷闲想到个小事，想跟你说一下"
-    return "你有空的话，我想问你个小事"
+        return content_text(
+            "I have a moment now and thought of something to tell you", language=language
+        )
+    return content_text("If you have a moment, can I ask you something?", language=language)
 
 
 def _relationship_topic_hook(relationship_context: str) -> str:
     for raw in relationship_context.splitlines():
         line = raw.strip()
-        if not line or "用户说" not in line:
+        marker = re.search(r"用户说|\bUser (?:said|says|mentioned)\b", line, re.I)
+        if marker is None:
             continue
-        _, _, tail = line.partition("用户说")
+        tail = line[marker.end() :]
         tail = tail.lstrip("：: ，,")
         tail = _clean_topic_hook(tail)
         if tail and not _is_low_information_hook(tail):
@@ -1088,8 +1135,9 @@ def _clean_topic_hook(text: str) -> str:
     cleaned = re.sub(r"\s+", " ", cleaned).strip(" -—:：，,。；;「」“”\"'‘’")
     if len(cleaned) < 4:
         return ""
-    if len(cleaned) > 24:
-        cleaned = cleaned[:24].rstrip()
+    if len(cleaned) > 80:
+        prefix = cleaned[:80]
+        cleaned = prefix.rsplit(" ", 1)[0] if " " in prefix else prefix
     return cleaned
 
 
@@ -1109,12 +1157,12 @@ def _proactive_scope_id(conversation_id: str | None, caller_id: str | None) -> s
 
 
 def _proactive_context_text(req: ProactiveRequest) -> str:
-    parts = [f"主动话题触发：{req.reason}"]
+    parts = [f"Proactive trigger: {req.reason}"]
     if req.private_context:
-        parts.append(f"内部触发背景（不是用户消息）：{req.private_context}")
+        parts.append(f"Internal trigger background (not a user message): {req.private_context}")
     if req.topic_hint:
-        parts.append(f"话题方向：{req.topic_hint}")
-    return "；".join(parts)
+        parts.append(f"Topic direction: {req.topic_hint}")
+    return "; ".join(parts)
 
 
 def _life_to_dict(life: LifeSnapshot) -> dict[str, str | int]:

@@ -67,7 +67,7 @@ def test_parse_proactive_opening_judgement_fail_closed_on_bad_json() -> None:
 
 
 def test_proactive_opening_fallback_does_not_assume_user_state() -> None:
-    fallback = _fallback_proactive_opening(_life())
+    fallback = _fallback_proactive_opening(_life(), language="zh-CN")
 
     assert "你还没睡" not in fallback
     assert "看到你" not in fallback
@@ -79,6 +79,7 @@ def test_proactive_opening_fallback_uses_relationship_hook() -> None:
     fallback = _fallback_proactive_opening(
         _life(),
         relationship_context="- [2026-05-28] (note, 1) 用户说：最近在准备考试",
+        language="zh-CN",
     )
 
     assert "准备考试" in fallback
@@ -94,6 +95,7 @@ def test_proactive_opening_fallback_prefers_topic_hook() -> None:
             hook="明天办手续",
             source="context_cache",
         ),
+        language="zh-CN",
     )
 
     assert fallback == "你有空的话，我想接着问问明天办手续"

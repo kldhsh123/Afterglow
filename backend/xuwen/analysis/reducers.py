@@ -22,12 +22,14 @@ from xuwen.analysis.models import (
     TimelinePhase,
     TimelineReport,
 )
+from xuwen.content_i18n import content_text
+from xuwen.prompt_language import output_language
 
 _LIFE_CATEGORY_LABELS = {
-    "sleep": "作息",
-    "meal": "饮食",
-    "activity": "活动",
-    "availability": "忙闲与回应",
+    "sleep": "Sleep patterns",
+    "meal": "Meals",
+    "activity": "Activities",
+    "availability": "Availability and replies",
 }
 
 
@@ -79,16 +81,15 @@ def reduce_personality(results: list[BlockAnalysis]) -> PersonalityReport:
     sections = [
         ReportSection(
             key="personality_observations",
-            title="目标角色观察",
+            title=content_text("Character observations"),
             observations=personality,
         ),
         ReportSection(
             key="relationship_observations",
-            title="关系互动观察",
+            title=content_text("Relationship observations"),
             observations=relationship,
         ),
     ]
-
     strongest = sorted(
         (item for section in sections for item in section.observations),
         key=lambda item: (item.confidence, len(item.evidence)),
@@ -122,32 +123,44 @@ def reduce_experimental(results: list[BlockAnalysis]) -> ExperimentalReport:
 
 def render_personality_markdown(report: PersonalityReport) -> str:
     lines = [
-        "# 关系与性格分析",
+        content_text("# Relationship and personality analysis"),
         "",
         f"> {report.disclaimer}",
         "",
     ]
     if report.summary:
-        lines.extend(["## 概览", "", report.summary, ""])
+        lines.extend([content_text("## Overview"), "", report.summary, ""])
     for section in report.sections:
         lines.extend([f"## {section.title}", ""])
         if not section.observations:
-            lines.extend(["当前记录中没有足够稳定的证据。", ""])
+            lines.extend(
+                [
+                    content_text(
+                        "The current records do not contain sufficiently stable evidence."
+                    ),
+                    "",
+                ]
+            )
             continue
         for observation in section.observations:
             lines.append(f"### {observation.claim}")
             lines.append("")
-            lines.append(f"置信度：{round(observation.confidence * 100)}%")
+            lines.append(f"{content_text('Confidence: ')}{round(observation.confidence * 100)}%")
             lines.append("")
             for evidence in observation.evidence:
                 suffix = f"（{evidence.date}）" if evidence.date else ""
                 lines.append(f"> {evidence.quote}{suffix}")
             if observation.counterexamples:
                 lines.append("")
-                lines.append("反例：" + "；".join(observation.counterexamples))
+                lines.append(
+                    content_text("Counterexamples: ") + "；".join(observation.counterexamples)
+                )
             if observation.alternative_explanations:
                 lines.append("")
-                lines.append("其他可能解释：" + "；".join(observation.alternative_explanations))
+                lines.append(
+                    content_text("Alternative explanations: ")
+                    + "；".join(observation.alternative_explanations)
+                )
             lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
@@ -163,74 +176,65 @@ def render_personality_prompt_context(report: PersonalityReport) -> str:
         )[:6]
         candidates.extend((section, observation) for observation in section_candidates)
     lines = [
-        "【人格画像参考（供主聊天模型内部使用，不要向用户复述）】",
-        "这是从历史聊天归纳的目标角色人格与关系互动倾向，不是固定事实或当前状态。",
-        "生活作息与当前活动由生活时间线负责；高推测内容由实验性人格画像负责。",
-        "当前对话和检索到的真人原文优先；不要提及本文件或主动试探画像结论。",
+        "[Personality reference: internal use only; never recite to the user]",
+        "These are historical personality and relationship tendencies, not fixed facts or current states.",
+        "Use the life timeline for current activities/routines, and the experimental profile for speculative hypotheses.",
+        "Current conversation and genuine retrieved text take priority. Never mention this file or probe the user to validate its conclusions.",
     ]
     for section, observation in candidates:
         alternative = _observation_uncertainty(observation)
         lines.extend(
             [
                 f"[{section.title}] {observation.dimension}：{observation.claim}",
-                f"- 把握度：约 {round(observation.confidence * 100)}%；例外或其他解释：{alternative}",
+                f"- Confidence: about {round(observation.confidence * 100)}%; exceptions or alternatives: {alternative}",
             ]
         )
     if not candidates:
-        lines.append("- 当前没有达到使用阈值的稳定人格或习惯观察。")
+        lines.append("- No sufficiently supported stable personality/habit observations.")
     return "\n".join(lines)[:12000]
 
 
-def render_life_analysis_context(
-    profile: LifeProfile,
-    *,
-    friend_name: str = "TA",
-) -> str:
+def render_life_analysis_context(profile: LifeProfile, *, friend_name: str = "TA") -> str:
     """把结构化生活画像渲染为生活时间线上下文，不读取原文证据。"""
     candidates = [
         habit
         for habit in profile.habits
         if habit.subject == "friend"
         and habit.confidence >= 0.3
-        and not habit.sensitive_relationship_context
+        and (not habit.sensitive_relationship_context)
         and habit.target_fields
     ][:16]
     lines = [
-        "【历史生活规律参考（供生活时间线内部使用）】",
-        "以下条目只描述目标角色本人的长期倾向，不包含用户习惯、双方共同互动或敏感关系内容。",
-        "它们只用于生成合理的生活状态候选，不是今天事实。",
-        "当前时间、作息统计、当天时间线和本轮明确对话优先；不得据此断言此刻正在做某事。",
+        "[Historical daily patterns: internal life-timeline reference]",
+        "These describe only the character's own long-term tendencies, excluding user habits, joint interactions and sensitive relationship content.",
+        "Use only as priors for plausible daily-state candidates, never as facts about today.",
+        "Current time, measured rhythms, today's timeline and explicit dialogue take priority. Do not infer present activity from these priors.",
     ]
     subject_name = friend_name.strip() or "TA"
     for habit in candidates:
-        time_patterns = "、".join(habit.time_patterns) or "未形成稳定时段"
-        contexts = "、".join(habit.contexts) or "一般情境"
+        time_patterns = "、".join(habit.time_patterns) or "No stable time pattern"
+        contexts = "、".join(habit.contexts) or "General context"
         target_fields = "、".join(habit.target_fields)
         lines.append(
-            f"- [{_LIFE_CATEGORY_LABELS[habit.category]}] 主体：{subject_name}；"
-            f"规律：{habit.claim}；常见时段：{time_patterns}；适用情境：{contexts}；"
-            f"可影响字段：{target_fields}；把握度约 "
-            f"{round(habit.confidence * 100)}%；"
-            f"例外或其他解释：{_life_habit_uncertainty(habit)}；"
-            "使用限制：只能提高候选概率，不能写成当前事实。"
+            f"- [{_LIFE_CATEGORY_LABELS[habit.category]}] Subject: {subject_name}; pattern: {habit.claim}; typical times: {time_patterns}; contexts: {contexts}; allowed fields: {target_fields}; confidence about {round(habit.confidence * 100)}%; exceptions or alternatives: {_life_habit_uncertainty(habit)}; only adjusts candidate likelihood, never establishes a current fact."
         )
     if not candidates:
-        lines.append("- 当前没有达到使用阈值的作息或日常习惯观察。")
+        lines.append("- No sufficiently supported sleep/daily habit observations.")
     return "\n".join(lines)[:5000]
 
 
 def render_experimental_prompt_context(report: ExperimentalReport) -> str:
     """把实验报告渲染为可注入主模型的去证据人格画像。"""
     labels = {
-        "personality_hypothesis": "可能的核心人格",
-        "interpersonal_style": "对人方式与态度",
-        "attachment": "依恋类型假设",
-        "deception_pattern": "可能隐瞒或失真的情境",
-        "manipulation_intent": "操控意图假设",
-        "mental_health_hypothesis": "精神健康相关假设",
-        "manipulation_pattern": "互动影响模式（旧版）",
-        "internal_contradiction": "记录内部矛盾",
-        "wellbeing_signal": "状态线索（旧版）",
+        "personality_hypothesis": "Possible core traits",
+        "interpersonal_style": "Interpersonal style and attitudes",
+        "attachment": "Attachment hypotheses",
+        "deception_pattern": "Possible concealment or distortion",
+        "manipulation_intent": "Manipulation-intent hypotheses",
+        "mental_health_hypothesis": "Mental-health hypotheses",
+        "manipulation_pattern": "Interaction influence patterns (legacy)",
+        "internal_contradiction": "Contradictions in the records",
+        "wellbeing_signal": "Wellbeing signals (legacy)",
     }
     candidates = sorted(
         (
@@ -242,53 +246,61 @@ def render_experimental_prompt_context(report: ExperimentalReport) -> str:
         reverse=True,
     )[:20]
     lines = [
-        "【实验性人格画像（供主聊天模型内部使用，不要向用户复述）】",
-        "以下允许根据历史聊天推测真实性格、对人态度、依恋、隐瞒、操控意图和精神健康状态。",
-        "所有内容仍是概率假设，不是事实核验、蓄意认定或医学诊断；当前对话和真人原文优先。",
-        "用途是补充人物内在倾向，不是回应策略清单，也不能据此发明本轮未发生的事实。",
+        "[Experimental personality profile: internal use only; never recite to the user]",
+        "Historical chats may support hypotheses about traits, interpersonal attitudes, attachment, concealment, manipulation intent and mental health.",
+        "All are probabilistic hypotheses, not verified facts, determinations of intent or medical diagnoses. Current conversation and genuine text take priority.",
+        "Use as background tendencies, not a list of response strategies or grounds for inventing events in this turn.",
     ]
     if report.summary:
-        lines.extend(["", "综合画像：" + report.summary])
+        lines.extend(["", "Overall profile: " + report.summary])
     for signal in candidates:
         lines.extend(
             [
                 "",
                 f"[{labels[signal.category]}] {signal.claim}",
-                f"- 把握度：约 {round(signal.confidence * 100)}%",
-                f"- 推断依据：{signal.inference_basis or '由跨时段文字模式归纳'}",
-                "- 可能出现的情境："
-                + ("；".join(signal.conditions) if signal.conditions else "现有记录未形成明确条件"),
-                "- 反例："
-                + ("；".join(signal.counterexamples) if signal.counterexamples else "现有记录未见明确反例"),
-                "- 其他解释："
+                f"- Confidence: about {round(signal.confidence * 100)}%",
+                f"- Inference basis: {signal.inference_basis or 'Inferred from text patterns across periods'}",
+                "- Possible conditions: "
+                + (
+                    "；".join(signal.conditions)
+                    if signal.conditions
+                    else "No clear conditions established"
+                ),
+                "- Counterexamples: "
+                + (
+                    "；".join(signal.counterexamples)
+                    if signal.counterexamples
+                    else "No clear counterexamples in current records"
+                ),
+                "- Alternatives: "
                 + (
                     "；".join(signal.alternative_explanations)
                     if signal.alternative_explanations
-                    else "仍可能存在其他情境解释"
+                    else "Other contextual explanations remain possible"
                 ),
             ]
         )
     if not candidates:
-        lines.append("- 当前没有达到注入阈值的实验性人格假设。")
+        lines.append("- No experimental hypotheses meet the inclusion threshold.")
     return "\n".join(lines)[:12000]
 
 
 def render_experimental_profile_markdown(report: ExperimentalReport) -> str:
     """渲染包含证据的完整实验人格报告，供用户查看而非注入主模型。"""
     labels = {
-        "personality_hypothesis": "可能的核心人格",
-        "interpersonal_style": "对人方式与态度",
-        "attachment": "依恋类型假设",
-        "deception_pattern": "可能隐瞒或失真的情境",
-        "manipulation_intent": "操控意图假设",
-        "mental_health_hypothesis": "精神健康相关假设",
-        "manipulation_pattern": "互动影响模式（旧版）",
-        "internal_contradiction": "记录内部矛盾",
-        "wellbeing_signal": "状态线索（旧版）",
+        "personality_hypothesis": content_text("Possible core traits"),
+        "interpersonal_style": content_text("Interpersonal style and attitudes"),
+        "attachment": content_text("Attachment hypotheses"),
+        "deception_pattern": content_text("Possible concealment or distortion"),
+        "manipulation_intent": content_text("Manipulation-intent hypotheses"),
+        "mental_health_hypothesis": content_text("Mental-health hypotheses"),
+        "manipulation_pattern": content_text("Interaction influence patterns (legacy)"),
+        "internal_contradiction": content_text("Contradictions in the records"),
+        "wellbeing_signal": content_text("Wellbeing signals (legacy)"),
     }
-    lines = ["# 实验性人格画像", "", f"> {report.disclaimer}", ""]
+    lines = [content_text("# Experimental personality profile"), "", f"> {report.disclaimer}", ""]
     if report.summary:
-        lines.extend(["## 综合画像", "", report.summary, ""])
+        lines.extend([content_text("## Overall profile"), "", report.summary, ""])
     for signal in report.signals:
         lines.extend(
             [
@@ -296,21 +308,29 @@ def render_experimental_profile_markdown(report: ExperimentalReport) -> str:
                 "",
                 signal.claim,
                 "",
-                f"把握度：{round(signal.confidence * 100)}%",
+                f"{content_text('Confidence: ')}{round(signal.confidence * 100)}%",
                 "",
             ]
         )
         if signal.inference_basis:
-            lines.extend(["推断依据：" + signal.inference_basis, ""])
+            lines.extend([content_text("Inference basis: ") + signal.inference_basis, ""])
         if signal.conditions:
-            lines.extend(["可能出现的情境：" + "；".join(signal.conditions), ""])
+            lines.extend([content_text("Possible conditions: ") + "；".join(signal.conditions), ""])
         for evidence in signal.evidence:
             suffix = f"（{evidence.date}）" if evidence.date else ""
             lines.append(f"> {evidence.quote}{suffix}")
         if signal.counterexamples:
-            lines.extend(["", "反例：" + "；".join(signal.counterexamples)])
+            lines.extend(
+                ["", content_text("Counterexamples: ") + "；".join(signal.counterexamples)]
+            )
         if signal.alternative_explanations:
-            lines.extend(["", "其他解释：" + "；".join(signal.alternative_explanations)])
+            lines.extend(
+                [
+                    "",
+                    content_text("Alternative explanations: ")
+                    + "；".join(signal.alternative_explanations),
+                ]
+            )
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
@@ -320,7 +340,7 @@ def _observation_uncertainty(observation: Observation) -> str:
         return observation.counterexamples[0]
     if observation.alternative_explanations:
         return observation.alternative_explanations[0]
-    return "现有记录未必覆盖其他场景下的表现"
+    return "The records may not cover behavior in other contexts"
 
 
 def _life_habit_uncertainty(habit: LifeHabit) -> str:
@@ -328,7 +348,7 @@ def _life_habit_uncertainty(habit: LifeHabit) -> str:
         return habit.counterexamples[0]
     if habit.alternative_explanations:
         return habit.alternative_explanations[0]
-    return "现有记录未必覆盖其他时段或情境"
+    return "The records may not cover other periods or contexts"
 
 
 def merge_month_locally(month: str, results: list[BlockAnalysis]) -> BlockAnalysis:
@@ -340,11 +360,12 @@ def merge_month_locally(month: str, results: list[BlockAnalysis]) -> BlockAnalys
     relationship = _merge_observations(
         [item for result in results for item in result.relationship_signals]
     )[:30]
-    life_habits = _merge_life_habits(
-        [item for result in results for item in result.life_habits]
-    )[:40]
+    life_habits = _merge_life_habits([item for result in results for item in result.life_habits])[
+        :40
+    ]
     experimental = reduce_experimental(results).signals
     return BlockAnalysis(
+        output_language=output_language(),
         block_id=f"month-{month}",
         start_time_ms=min(result.start_time_ms for result in results),
         end_time_ms=max(result.end_time_ms for result in results),
@@ -404,18 +425,16 @@ def _same_event(left: EventCandidate, right: EventCandidate) -> bool:
 
 
 def _to_timeline_event(event: EventCandidate) -> TimelineEvent:
-    digest = hashlib.sha256(
-        f"{event.date}\n{event.type}\n{event.title}".encode()
-    ).hexdigest()[:16]
+    digest = hashlib.sha256(f"{event.date}\n{event.type}\n{event.title}".encode()).hexdigest()[:16]
     return TimelineEvent(event_id=f"evt-{digest}", **event.model_dump())
 
 
 def _fallback_phase(events: list[TimelineEvent]) -> TimelinePhase:
     return TimelinePhase(
-        title="关系历程",
+        title=content_text("Relationship history"),
         start_date=events[0].date,
         end_date=events[-1].date,
-        summary="按时间排列的主要关系节点。",
+        summary=content_text("Major relationship events in chronological order."),
         event_ids=[event.event_id for event in events],
     )
 
@@ -445,9 +464,7 @@ def _merge_observations(observations: list[Observation]) -> list[Observation]:
             dict.fromkeys(duplicate.counterexamples + observation.counterexamples)
         )[:4]
         duplicate.alternative_explanations = list(
-            dict.fromkeys(
-                duplicate.alternative_explanations + observation.alternative_explanations
-            )
+            dict.fromkeys(duplicate.alternative_explanations + observation.alternative_explanations)
         )[:4]
     return merged
 
@@ -456,9 +473,9 @@ def _merge_signal(target: ExperimentalSignal, incoming: ExperimentalSignal) -> N
     target.confidence = max(target.confidence, incoming.confidence)
     target.evidence = _unique_models(target.evidence + incoming.evidence, "quote")[:6]
     target.conditions = list(dict.fromkeys(target.conditions + incoming.conditions))[:5]
-    target.counterexamples = list(
-        dict.fromkeys(target.counterexamples + incoming.counterexamples)
-    )[:4]
+    target.counterexamples = list(dict.fromkeys(target.counterexamples + incoming.counterexamples))[
+        :4
+    ]
     if not target.inference_basis and incoming.inference_basis:
         target.inference_basis = incoming.inference_basis
     target.alternative_explanations = list(
@@ -479,8 +496,7 @@ def _merge_life_habits(habits: list[LifeHabit]) -> list[LifeHabit]:
                 for current in merged
                 if current.subject == habit.subject
                 and current.category == habit.category
-                and current.sensitive_relationship_context
-                == habit.sensitive_relationship_context
+                and current.sensitive_relationship_context == habit.sensitive_relationship_context
                 and _text_similarity(current.claim, habit.claim) >= 0.58
             ),
             None,
@@ -501,9 +517,7 @@ def _merge_life_habits(habits: list[LifeHabit]) -> list[LifeHabit]:
             dict.fromkeys(duplicate.counterexamples + habit.counterexamples)
         )[:4]
         duplicate.alternative_explanations = list(
-            dict.fromkeys(
-                duplicate.alternative_explanations + habit.alternative_explanations
-            )
+            dict.fromkeys(duplicate.alternative_explanations + habit.alternative_explanations)
         )[:4]
     return merged
 

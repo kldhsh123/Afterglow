@@ -16,6 +16,7 @@ from datetime import timedelta
 from xuwen.config import Settings
 from xuwen.core.models import MessageKind, MessageWindow, NormalizedMessage, Session
 from xuwen.core.time import is_session_break
+from xuwen.error_i18n import error_text
 
 
 def split_sessions(
@@ -81,7 +82,7 @@ def build_windows(
 
 def _finalize_session(msgs: list[NormalizedMessage]) -> Session:
     if not msgs:
-        raise ValueError("空 session 不应被 finalize")
+        raise ValueError(error_text("Cannot finalize an empty session"))
     start_ts = msgs[0].timestamp_ms
     end_ts = msgs[-1].timestamp_ms
     sid = _session_id(start_ts, end_ts, msgs[0].message_id)

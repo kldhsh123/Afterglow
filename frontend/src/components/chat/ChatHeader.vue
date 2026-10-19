@@ -5,13 +5,15 @@ import { useSettingsStore } from '@/stores/settings'
 import { useChatStore } from '@/stores/chat'
 import { cancelChatTurn } from '@/api/chat'
 import { Settings, RotateCcw, Moon, Sun } from 'lucide-vue-next'
+import { setLocale, useLocale } from '@/composables/useLocale'
 
 const settings = useSettingsStore()
+const { t, locale } = useLocale()
 const chat = useChatStore()
 const router = useRouter()
 
-const friendLabel = computed(() => settings.friendName || '朋友')
-const title = computed(() => `与 ${friendLabel.value} 的对话`)
+const friendLabel = computed(() => settings.friendName || t('remaining.friend'))
+const title = computed(() => t('chat.title', { name: friendLabel.value }))
 
 function toggleTheme() {
   if (settings.theme === 'dark') settings.theme = 'light'
@@ -20,7 +22,7 @@ function toggleTheme() {
 }
 
 function newConversation() {
-  if (!confirm('开启一段新对话？当前对话会被清空（向量库里的回写依旧保留）。')) return
+  if (!confirm(t('chat.newConversationConfirm'))) return
   const oldConversationId = chat.conversationId
   window.dispatchEvent(new CustomEvent('afterglow:new-conversation'))
   chat.clear()
@@ -36,11 +38,11 @@ function goSettings() {
 
 <template>
   <header
-    class="sticky top-0 z-20 px-4 py-3 flex items-center justify-between
+    class="sticky top-0 z-20 px-4 py-3 flex flex-wrap sm:flex-nowrap items-center justify-between gap-y-2
            backdrop-blur-md bg-paper/70 dark:bg-night-bg/60
            border-b border-ink/5 dark:border-night-text/10"
   >
-    <div class="flex items-center gap-3 min-w-0">
+    <div class="flex items-center gap-3 min-w-0 basis-full sm:basis-auto sm:flex-1">
       <div class="w-10 h-10 rounded-full bg-accent-soft/40 dark:bg-night-accent-soft/30
                   flex items-center justify-center font-serif text-lg
                   text-accent dark:text-night-accent shrink-0">
@@ -49,15 +51,25 @@ function goSettings() {
       <div class="min-w-0">
         <h1 class="text-base font-medium truncate">{{ title }}</h1>
         <p class="text-xs text-ink-soft dark:text-night-text-soft truncate">
-          {{ settings.appSlogan }}
+          {{ settings.appSlogan === '把曾经对你好的话，续成往后的陪伴' ? t('onboarding.slogan') : settings.appSlogan }}
         </p>
       </div>
     </div>
-    <div class="flex items-center gap-1">
+    <div class="flex items-center justify-end gap-1 w-full sm:w-auto shrink-0">
+      <label class="sr-only" for="language-switcher">{{ t('common.language') }}</label>
+      <select
+        id="language-switcher"
+        v-model="locale"
+        @change="setLocale(locale)"
+        class="h-8 rounded-lg bg-paper/60 dark:bg-night-bg/60 border border-ink/10 dark:border-night-text/10 px-1.5 text-xs text-ink-soft dark:text-night-text-soft"
+      >
+        <option value="zh-CN">{{ t('common.chinese') }}</option>
+        <option value="en">{{ t('common.english') }}</option>
+      </select>
       <button
         class="p-2 rounded-full text-ink-soft hover:text-ink dark:text-night-text-soft
                dark:hover:text-night-text transition-colors"
-        :title="settings.isDark ? '切换为明色' : '切换为暗色'"
+        :title="settings.isDark ? t('chat.switchToLight') : t('chat.switchToDark')"
         @click="toggleTheme"
       >
         <component :is="settings.isDark ? Sun : Moon" :size="18" />
@@ -65,7 +77,7 @@ function goSettings() {
       <button
         class="p-2 rounded-full text-ink-soft hover:text-ink dark:text-night-text-soft
                dark:hover:text-night-text transition-colors"
-        title="开启新对话"
+        :title="t('chat.newConversation')"
         @click="newConversation"
       >
         <RotateCcw :size="18" />
@@ -73,7 +85,7 @@ function goSettings() {
       <button
         class="p-2 rounded-full text-ink-soft hover:text-ink dark:text-night-text-soft
                dark:hover:text-night-text transition-colors"
-        title="设置"
+        :title="t('common.settings')"
         @click="goSettings"
       >
         <Settings :size="18" />

@@ -20,15 +20,17 @@ from typing import Any
 
 from xuwen.chat_api.vision_client import VisionClient
 from xuwen.config import Settings
+from xuwen.content_i18n import content_text
 from xuwen.core.errors import IngestionError, ParseError
 from xuwen.core.models import HistoryImageChunk, NormalizedMessage, Session
+from xuwen.error_i18n import error_text
 from xuwen.ingestion.cleaner import Cleaner
 from xuwen.ingestion.embedder import EmbeddingClient
 from xuwen.ingestion.parser import detect_plugin, load_qq_json
 from xuwen.ingestion.plugins import (
+    CHAT_FILE_SUFFIXES,
     ImageReferenceImportPlugin,
     ImportImageRef,
-    jsonl_records,
     select_plugin,
 )
 from xuwen.ingestion.splitter import split_sessions
@@ -38,6 +40,9 @@ from xuwen.memory.store import MemoryStore
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
 _PROMPT_VERSION = "v1"
 _FAILED_DESCRIPTION_PREFIXES = (
+    "[Image: recognition failed",
+    "[Image: recognition timed out",
+    "[Image: no description",
     "[图片：识别失败",
     "[图片：识别超时",
     "[图片：无描述",
@@ -85,19 +90,23 @@ async def import_history_images(
 ) -> ImageImportReport:
     settings.require_identity()
     if not settings.vision_enabled:
-        raise IngestionError("未启用视觉理解。请设置 VISION_ENABLED=true。")
+        raise IngestionError(error_text("Vision is disabled. Set VISION_ENABLED=true"))
     if not settings.vision_api_url or not settings.vision_api_key.get_secret_value():
-        raise IngestionError("请配置 VISION_API_URL / VISION_API_KEY 后再导入图片。")
+        raise IngestionError(
+            error_text("Configure VISION_API_URL / VISION_API_KEY before importing images")
+        )
 
     root = Path(export_dir)
-    payloads = _load_chat_payloads(root)
+    sources = _load_chat_sources(root)
     parsed: list[NormalizedMessage] = []
-    image_refs: list[ImportImageRef] = []
-    for payload in payloads:
+    image_refs: list[tuple[ImportImageRef, Path]] = []
+    for source_path, payload in sources:
         plugin = select_plugin(payload, preferred=plugin_name)
         parsed.extend(plugin.parse(payload, settings))
         if isinstance(plugin, ImageReferenceImportPlugin):
-            image_refs.extend(plugin.extract_image_refs(payload))
+            image_refs.extend(
+                (ref, source_path.parent) for ref in plugin.extract_image_refs(payload)
+            )
     parsed.sort(key=lambda message: (message.timestamp_ms, message.seq))
     cleaned = Cleaner(settings).clean_many(parsed)
     sessions = split_sessions(cleaned, settings)
@@ -106,11 +115,17 @@ async def import_history_images(
 
     resolved: list[_ResolvedImageRef] = []
     missing = 0
-    for ref in image_refs:
+    for ref, source_dir in image_refs:
         msg = msg_index.get(ref.message_id)
         if msg is None:
             continue
-        path = _find_image_file(root, image_files, ref.image_name)
+        path = _find_image_file(
+            root,
+            image_files,
+            ref.image_name,
+            source_dir=source_dir,
+            allow_global_fallback=not msg.raw_type.startswith(("telegram_", "discord_")),
+        )
         if path is None:
             missing += 1
             continue
@@ -122,7 +137,9 @@ async def import_history_images(
         ext = _image_ext(path)
         mime = _mime_for_ext(ext)
         _copy_to_image_cache(settings, sha=sha, ext=ext, raw=raw)
-        before, after = _context_for_message(session_index[msg.message_id], msg.message_id, settings)
+        before, after = _context_for_message(
+            session_index[msg.message_id], msg.message_id, settings
+        )
         resolved.append(
             _ResolvedImageRef(
                 message=msg,
@@ -161,9 +178,7 @@ async def import_history_images(
             existing_rows,
         )
         pending = [
-            r
-            for r, cid in zip(resolved, chunk_ids, strict=False)
-            if cid not in reusable_existing
+            r for r, cid in zip(resolved, chunk_ids, strict=False) if cid not in reusable_existing
         ]
 
         descriptions = await _describe_unique_images(
@@ -188,9 +203,9 @@ async def import_history_images(
         # store 与普通 importer 保持一致，不主动关闭。
 
     unique_shas = {r.sha for r in resolved}
-    reused = sum(1 for r in pending if r.sha in descriptions) - len({
-        r.sha for r in pending if r.sha in descriptions
-    })
+    reused = sum(1 for r in pending if r.sha in descriptions) - len(
+        {r.sha for r in pending if r.sha in descriptions}
+    )
     return ImageImportReport(
         total_refs=len(image_refs),
         matched_files=len(resolved),
@@ -205,14 +220,18 @@ async def import_history_images(
 
 
 def _load_chat_payloads(root: Path) -> list[dict[str, Any]]:
+    return [payload for _, payload in _load_chat_sources(root)]
+
+
+def _load_chat_sources(root: Path) -> list[tuple[Path, dict[str, Any]]]:
     if not root.is_dir():
-        raise IngestionError(f"不是目录：{root}")
+        raise IngestionError(error_text("Not a directory: {p0}", p0=root))
     candidates = sorted(
         path
         for path in root.rglob("*")
-        if path.is_file() and path.suffix.lower() in {".json", ".jsonl", ".ndjson"}
+        if path.is_file() and path.suffix.lower() in CHAT_FILE_SUFFIXES
     )
-    payloads: list[dict[str, Any]] = []
+    sources: list[tuple[Path, dict[str, Any]]] = []
     errors: list[str] = []
     for path in candidates:
         try:
@@ -221,23 +240,21 @@ def _load_chat_payloads(root: Path) -> list[dict[str, Any]]:
             if path.suffix.lower() in {".jsonl", ".ndjson"}:
                 errors.append(f"{path.relative_to(root)}：{e}")
             continue
-        has_message_records = (
-            jsonl_records(payload) is not None
-            or isinstance(payload.get("messages"), list)
-        )
-        if has_message_records and detect_plugin(payload) is not None:
-            payloads.append(payload)
-    if errors and payloads:
+        if detect_plugin(payload) is not None:
+            sources.append((path, payload))
+    if errors and sources:
         logger.warning(
-            "图片导入已跳过 %d 个无法解析的 JSONL：%s",
+            content_text("Image import skipped %d invalid JSONL files: %s"),
             len(errors),
             "；".join(errors[:5]),
         )
     elif errors:
-        raise IngestionError("目录中存在无法解析的 JSONL：" + "；".join(errors[:5]))
-    if not payloads:
-        raise IngestionError("图片导入目录中没有可识别的聊天 JSON / JSONL")
-    return payloads
+        raise IngestionError(
+            error_text("The directory contains invalid JSONL: {p0}", p0="；".join(errors[:5]))
+        )
+    if not sources:
+        raise IngestionError(error_text("No recognizable chat files in the image import directory"))
+    return sources
 
 
 def _safe_name(value: str) -> str:
@@ -259,31 +276,44 @@ def _find_image_file(
     root: Path,
     image_files: dict[str, list[Path]],
     image_name: str,
+    *,
+    source_dir: Path | None = None,
+    allow_global_fallback: bool = True,
 ) -> Path | None:
+    root = root.resolve()
+    source_dir = (source_dir or root).resolve()
     relative = image_name.replace("\\", "/").strip().lstrip("/")
     if relative:
-        candidate = (root / relative).resolve()
-        try:
-            candidate.relative_to(root.resolve())
-        except ValueError:
-            candidate = root
-        if candidate.is_file() and candidate.suffix.lower() in _IMAGE_EXTS:
-            return candidate
+        bases = (source_dir, root) if allow_global_fallback else (source_dir,)
+        for base in dict.fromkeys(bases):
+            candidate = (base / relative).resolve()
+            if (
+                candidate.is_relative_to(root)
+                and candidate.is_file()
+                and candidate.suffix.lower() in _IMAGE_EXTS
+            ):
+                return candidate
 
     name = _safe_name(image_name)
     if not name:
         return None
     lowered = name.lower()
-    exact = image_files.get(lowered)
-    if exact:
-        return exact[0]
-    for indexed_name, candidates in image_files.items():
-        if indexed_name.endswith(f"_{lowered}") and candidates:
-            return candidates[0]
-    return None
+    candidates = image_files.get(lowered) or [
+        path
+        for indexed_name, paths in image_files.items()
+        if indexed_name.endswith(f"_{lowered}")
+        for path in paths
+    ]
+    safe = list(dict.fromkeys(p.resolve() for p in candidates if p.resolve().is_relative_to(root)))
+    local = [p for p in safe if p.is_relative_to(source_dir)]
+    # 兼容共享 resources 目录，但不在多个同名文件中静默选首项。
+    matches = (local or safe) if allow_global_fallback else local
+    return matches[0] if len(matches) == 1 else None
 
 
-def _index_messages(sessions: list[Session]) -> tuple[dict[str, NormalizedMessage], dict[str, Session]]:
+def _index_messages(
+    sessions: list[Session],
+) -> tuple[dict[str, NormalizedMessage], dict[str, Session]]:
     msg_index: dict[str, NormalizedMessage] = {}
     session_index: dict[str, Session] = {}
     for session in sessions:
@@ -353,7 +383,9 @@ async def _describe_unique_images(
             descriptions[sha] = existing
             continue
         data_url = _data_url_for_file(ref.path, ref.mime, settings)
-        description = _usable_image_description((await vision_client.describe_images([data_url]))[0])
+        description = _usable_image_description(
+            (await vision_client.describe_images([data_url]))[0]
+        )
         if description:
             descriptions[sha] = description
     return descriptions
@@ -395,7 +427,7 @@ def _usable_image_description(description: str) -> str:
 def _data_url_for_file(path: Path, mime: str, settings: Settings) -> str:
     raw = path.read_bytes()
     if len(raw) > settings.vision_max_image_bytes:
-        raise IngestionError(f"图片过大：{path.name}")
+        raise IngestionError(error_text("Image too large: {p0}", p0=path.name))
     encoded = base64.b64encode(raw).decode("ascii")
     return f"data:{mime};base64,{encoded}"
 

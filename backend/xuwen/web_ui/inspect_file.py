@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from xuwen.error_i18n import error_text
 from xuwen.ingestion.parser import detect_plugin, load_qq_json
 from xuwen.ingestion.plugins import InspectableImportPlugin
 
@@ -33,18 +34,20 @@ def inspect_chat_file(path: Path) -> InspectResult:
         if plugin is None:
             return InspectResult(
                 format="unknown",
-                format_label="未知格式",
+                format_label=error_text("Unknown format"),
                 candidates=[],
                 total_messages=0,
-                error="无法识别格式：没有导入 plugin 能识别该聊天文件。",
+                error=error_text("Unknown format: no import plugin recognizes this chat file."),
             )
         if not isinstance(plugin, InspectableImportPlugin):
             return InspectResult(
                 format="unknown",
-                format_label="未知格式",
+                format_label=error_text("Unknown format"),
                 candidates=[],
                 total_messages=0,
-                error=f"{plugin.display_name} plugin 未提供身份嗅探能力。",
+                error=error_text(
+                    "Plugin {name} does not support identity inspection.", name=plugin.display_name
+                ),
             )
         inspection = plugin.inspect(payload)
         return InspectResult(
@@ -60,7 +63,7 @@ def inspect_chat_file(path: Path) -> InspectResult:
     except Exception as e:
         return InspectResult(
             format="unknown",
-            format_label="未知格式",
+            format_label=error_text("Unknown format"),
             candidates=[],
             total_messages=0,
             error=str(e),

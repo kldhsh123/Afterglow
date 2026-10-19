@@ -244,6 +244,13 @@ class ImportReport:
     upserted_response_pairs: int
     duration_seconds: float
     notes: list[str] = field(default_factory=list)
+    failed_friend: int = 0
+    failed_window: int = 0
+    failed_response_pairs: int = 0
+
+    @property
+    def failed_chunks(self) -> int:
+        return self.failed_friend + self.failed_window + self.failed_response_pairs
 
 
 @dataclass(slots=True)

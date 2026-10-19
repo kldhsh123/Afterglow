@@ -19,6 +19,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from xuwen.error_i18n import error_text
+
 # 备份子目录：跟 .env 同级建一个隐藏目录集中放备份
 _BACKUP_DIRNAME = ".env-backups"
 
@@ -214,7 +216,7 @@ def list_backups(env_path: Path) -> list[Path]:
 def restore_backup(env_path: Path, backup_path: Path) -> Path:
     """把指定备份还原为当前 .env。还原前会再做一次备份，避免误回滚。"""
     if not backup_path.exists():
-        raise FileNotFoundError(f"备份文件不存在：{backup_path}")
+        raise FileNotFoundError(error_text("Backup file not found: {p0}", p0=backup_path))
     # 先把当前 .env 再备份一份（rollback-of-rollback）
     if env_path.exists():
         backup_dir = _backup_dir(env_path)

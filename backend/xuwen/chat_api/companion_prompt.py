@@ -16,39 +16,33 @@ from xuwen.persona.style_profile import (
     render_style_profile_for_query,
 )
 
-_PERSONA_CARD_BOUNDARY = """【画像使用边界】
-persona 画像是长期统计参考，不是今天发生的事实。
-回复优先级：当前生活状态 > 关系记忆 > 本轮检索到的真实回复样本 > persona 画像。
-不要凭画像或历史片段发明今天在想谁、怀疑用户、正在打游戏、现实见面、emoji 或亲密动作。"""
+_PERSONA_CARD_BOUNDARY = (
+    "[Persona boundaries]\nThe persona is a long-term statistical reference, not evidence of "
+    "today's events.\nPriority: current life state > relationship memory > genuine retrieved "
+    "replies > persona.\nDo not infer today's thoughts, suspicions, games, real meetings, emoji or"
+    " physical intimacy from old material."
+)
 
-_LIFE_MARKER_INSTRUCTION = """【生活状态自更新（内部协议，不要向用户解释）】
-如果在这一轮回复中你的真实生活状态发生了变化（如吃饭/出门/睡觉/换活动/心情转变），
-在回复正文之后**追加**一个隐藏标记块，用一句自然语言说明变化：
+_LIFE_MARKER_INSTRUCTION = (
+    "[Life state updates: hidden internal protocol]\nIf this reply establishes an actual change in"
+    " the character's virtual state (meal, going out, sleep, activity or mood), append one hidden"
+    " block AFTER the chat text:\n<life-event>A short natural-language description of the "
+    "established change</life-event>\nUse the language of the conversation. Do not invent a change"
+    " just to refresh state.\nEmit the entire block at the end, never scattered through the reply."
+    " No JSON.\nDescribe only changes supported by the adopted reply. The backend strips the block"
+    " and normalizes it."
+)
 
-<life-event>准备去吃饭，接下来一会儿不方便立即回复</life-event>
-
-规则：
-- 没有真实变化时不要输出标记块；不要为了刷新状态而编造改变。
-- 标记块只能放在回复最后，且整体一次性输出，不要分散在正文中。
-- 只描述这轮回复已经明确成立的状态变化，不要写 JSON，不要补充回复正文未支持的事实。
-- 标记块会被后端剥离，再交给生活时间线模型归一化；用户看不到。"""
-
-_SCHEDULE_HINT_INSTRUCTION = """【定时任务（内部协议，不要向用户解释）】
-如果用户在本轮明确要求你"届时提醒/叫醒/通知"——例如：
-- "明天早上7点叫我起床"
-- "每天9点提醒我喝水"
-- "周一帮我提醒开会"
-- "10 分钟后告诉我一声"
-
-在正常回复之后**追加**一个隐藏标记块，用【自然中文】描述意图，不要自己计算时间格式：
-
-<schedule-hint>明天早上7点叫我起床</schedule-hint>
-
-规则：
-- 只在用户【明确请求】定时任务时才输出；闲聊或顺口提到时间不算。
-- 一轮可以有多个 `<schedule-hint>` 块（用户一次说了多个任务）。
-- 标记块里**只写自然语言**，不要写 ISO 时间 / cron / RRULE——后端有专门的小模型负责解析。
-- 标记块会被后端剥离，用户看不到；正文里请正常用自然语气答复用户已收到这个请求。"""
+_SCHEDULE_HINT_INSTRUCTION = (
+    "[Scheduled tasks: hidden internal protocol]\nOnly if the user explicitly asks to be reminded,"
+    " woken or notified at a time, append a hidden block after the normal reply:\n<schedule-"
+    "hint>The user's scheduling request in their original language</schedule-hint>\nPreserve the "
+    "user's natural time expression, task and recurrence. Do not translate it into Chinese or "
+    "English, and do not calculate ISO times, cron or RRULE yourself. A separate extractor "
+    "handles that.\nCasual mentions of time are not scheduling requests. Multiple explicit tasks "
+    "may use separate blocks.\nThe backend strips these blocks. In the visible reply, acknowledge "
+    "the request naturally."
+)
 
 
 def empty_retrieval_result() -> RetrievalResult:
@@ -131,8 +125,7 @@ def load_personality_prompt_context(settings: Settings) -> str:
 def load_experimental_prompt_context(settings: Settings) -> str:
     """仅在双开关开启时读取去证据的实验人格画像。"""
     if not (
-        settings.analysis_experimental_enabled
-        and settings.analysis_experimental_prompt_enabled
+        settings.analysis_experimental_enabled and settings.analysis_experimental_prompt_enabled
     ):
         return ""
     path = Path(settings.analysis_data_dir) / "experimental" / "prompt_context.md"
@@ -189,8 +182,8 @@ def render_life_memory_context_from_recent(
     """
     if not recent:
         return ""
-    self_name = settings.self_name or "用户"
-    friend_name = settings.friend_name or "TA"
+    self_name = settings.self_name or "User"
+    friend_name = settings.friend_name or "Friend"
     lines: list[str] = []
     # 取最近 max_items 条，按时间序展示
     for msg in recent[-max_items:]:
@@ -205,17 +198,17 @@ def render_life_memory_context_from_recent(
 
 
 def _life_memory_line(chunk: ScoredChunk, settings: Settings) -> str:
-    self_name = settings.self_name or "用户"
-    friend_name = settings.friend_name or "TA"
+    self_name = settings.self_name or "User"
+    friend_name = settings.friend_name or "Friend"
     if chunk.kind == "response_pair":
         user_text = str(chunk.metadata.get("text") or "").strip()
         friend_reply = str(chunk.metadata.get("friend_reply") or "").strip()
         if user_text and friend_reply:
-            return f"- 当 {self_name} 说「{_short(user_text)}」时，{friend_name} 曾回「{_short(friend_reply)}」"
+            return f"- When {self_name} said: {_short(user_text)!r}, {friend_name} replied: {_short(friend_reply)!r}"
     text = (chunk.metadata.get("dialogue_snippet") or chunk.text or "").strip()
     if not text:
         return ""
-    return f"- 历史片段：{_short(str(text), 140)}"
+    return f"- Historical excerpt: {_short(str(text), 140)}"
 
 
 def _short(text: str, limit: int = 80) -> str:
@@ -235,22 +228,16 @@ def _render_aliases_block(settings: Settings) -> str:
     if not (len(friend_names) > 1 or len(self_names) > 1):
         return ""
 
-    lines = ["【你和对方的别名（重要，否则会闹笑话）】"]
+    lines = ["[Name aliases: different names for the same people]"]
     if len(friend_names) > 1:
-        primary = friend_names[0]
-        others = "、".join(friend_names[1:])
         lines.append(
-            f"- 你（{primary}）也会被用户这样称呼：{others}。"
-            "看到这些名字时不要追问\"...是谁\"，那都是叫你。"
+            f"- You ({friend_names[0]}) are also called: {', '.join(friend_names[1:])}. These names refer to you; do not ask who they are."
         )
     if len(self_names) > 1:
-        primary = self_names[0]
-        others = "、".join(self_names[1:])
         lines.append(
-            f"- 用户（{primary}）也可能被叫成：{others}。"
-            "你可以根据语境选用其中一个名字回应；不要刻意频繁切换。"
+            f"- The user ({self_names[0]}) is also called: {', '.join(self_names[1:])}. Choose names naturally without frequent forced changes."
         )
     lines.append(
-        "- 历史记忆里如果出现这些别名，都按真人对话理解，不要把同一个人当成两个人。"
+        "- Treat these aliases as the same people in historical conversation, not separate individuals."
     )
     return "\n".join(lines)

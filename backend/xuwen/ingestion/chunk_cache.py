@@ -14,6 +14,8 @@ import logging
 from pathlib import Path
 from typing import TypeGuard
 
+from xuwen.content_i18n import content_text
+
 logger = logging.getLogger(__name__)
 
 
@@ -33,7 +35,11 @@ class AdaptiveChunkCache:
         try:
             raw = self.path.read_text(encoding="utf-8")
         except OSError:
-            logger.warning("切分缓存读取失败，按空缓存继续：%s", self.path, exc_info=True)
+            logger.warning(
+                content_text("Cannot read the chunk cache; continuing with an empty cache: %s"),
+                self.path,
+                exc_info=True,
+            )
             return
         for line in raw.splitlines():
             line = line.strip()
@@ -67,7 +73,13 @@ class AdaptiveChunkCache:
             with self.path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps({"k": key, "v": segments}, ensure_ascii=False) + "\n")
         except OSError:
-            logger.warning("切分缓存写入失败（本批结果仅本次运行有效）：%s", self.path, exc_info=True)
+            logger.warning(
+                content_text(
+                    "Cannot write the chunk cache; this batch will only be reused in the current run: %s"
+                ),
+                self.path,
+                exc_info=True,
+            )
 
 
 def _valid_segments(value: object) -> TypeGuard[list[list[int]]]:

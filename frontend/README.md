@@ -1,3 +1,5 @@
+[中文文档](https://kldhsh123.github.io/Afterglow/zh/development.html) | [English documentation](https://kldhsh123.github.io/Afterglow/en/development.html)
+
 # Afterglow（续温）前端
 
 > 把曾经对你好的话，续成往后的陪伴。
@@ -52,6 +54,38 @@ src/
 ├── types/           # 与后端对应的类型定义
 └── views/           # 路由页面（HomeView / SettingsView）
 ```
+
+## 多语言维护
+
+聊天前端使用 `src/locales/zh-CN.ts` 和 `src/locales/en.ts`；配置向导使用
+`backend/web_ui_src/src/locales/` 下的同名文件，每种语言一个文件。
+组件通过各自的 `useLocale()` 调用 `t(key, params)`；列表文案使用 `list(key)`。
+切换时需要更新的翻译映射放进 `computed`，避免在组件初始化时固定语言。
+
+首次访问时，只要浏览器语言列表包含 `zh`（简体或繁体）就使用中文，其他语言使用英文。
+手动选择优先于浏览器语言，分别保存在 `afterglow.locale` 和 `afterglow.config.locale`。
+顶部、首次引导、配置完成页均提供语言下拉框。中文配置向导显示服务商预设；英文隐藏预设和申请链接，
+并在读取已有配置后为未填写的服务填充 Google 聊天、OpenAI 向量及辅助模型默认值。
+切换语言不会替换已有服务配置，不会翻译聊天记录、用户名称、自定义文本或后端原始错误详情。
+
+安装聊天前端依赖后，可在仓库根目录执行：
+
+```sh
+node scripts/check_locales.cjs
+```
+
+该检查覆盖翻译键与插值参数一致性、中文模板硬编码、浏览器语言检测、手动选择保存和存储不可用时的行为。
+发布前分别运行 `frontend` 的 `pnpm build` 和 `backend/web_ui_src` 的 `npm run build`。
+配置向导产物会自动写入 `backend/xuwen/web_ui/static/`。
+
+英文默认值维护位置：`backend/web_ui_src/src/englishDefaults.ts`。
+地址必须包含服务商要求的完整基础路径：OpenAI 是 `https://api.openai.com/v1`，Google 是
+`https://generativelanguage.googleapis.com/v1beta/openai`；应用只追加业务端点，不会自动补 `/v1`。
+Google 模型优先使用后端 Gemini 预设，向量默认为 `text-embedding-3-small`（1536 维），辅助模型使用 `gpt-4.1-mini`。
+可选服务不会因填充默认值而自动开启，API key 始终由用户填写。
+
+参考：[OpenAI 向量文档](https://developers.openai.com/api/docs/guides/embeddings)、
+[GPT-4.1 Mini 接口能力](https://developers.openai.com/api/docs/models/gpt-4.1-mini)。
 
 ## License
 

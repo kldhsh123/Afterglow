@@ -4,10 +4,12 @@
 import { computed, ref } from 'vue'
 import { ArrowUpCircle, ExternalLink, X } from 'lucide-vue-next'
 import type { UpdateInfo } from '@/types/api'
+import { useLocale } from '@/composables/useLocale'
 
 const props = defineProps<{
   update: UpdateInfo | null
 }>()
+const { t } = useLocale()
 
 const STORAGE_KEY = 'xuwen.update.dismissed.v1'
 const DISMISS_TTL_MS = 7 * 24 * 60 * 60 * 1000 // 7 天内不再提示同一版本
@@ -69,9 +71,9 @@ function dismiss() {
       <ArrowUpCircle :size="18" class="mt-0.5 shrink-0 text-accent" />
       <div class="flex-1 min-w-0">
         <p class="font-medium">
-          Afterglow {{ update.latest_version }} 已发布
+          {{ t('common.updatePublished', { version: update.latest_version ?? '' }) }}
           <span class="ml-2 text-xs text-ink-soft dark:text-night-text-soft font-normal">
-            当前 v{{ update.current_version }}
+            {{ t('common.currentVersion', { version: update.current_version }) }}
           </span>
         </p>
         <p
@@ -88,21 +90,21 @@ function dismiss() {
             rel="noopener noreferrer"
             class="inline-flex items-center gap-1 text-accent hover:underline"
           >
-            <span>查看变更</span>
+            <span>{{ t('common.viewChanges') }}</span>
             <ExternalLink :size="12" />
           </a>
           <button
             class="text-ink-soft dark:text-night-text-soft hover:text-ink dark:hover:text-night-text"
             @click="dismiss"
           >
-            暂不更新
+            {{ t('common.postponeUpdate') }}
           </button>
         </div>
       </div>
       <button
         class="p-1 rounded-full hover:bg-ink/5 dark:hover:bg-night-text/10 shrink-0"
-        aria-label="关闭"
-        title="同版本 7 天内不再提示"
+        :aria-label="t('common.dismiss')"
+        :title="t('common.postponeHint')"
         @click="dismiss"
       >
         <X :size="14" />

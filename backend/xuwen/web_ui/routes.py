@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import secrets
 import time
 from pathlib import Path
@@ -16,6 +17,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, SecretStr, ValidationError
 
 from xuwen.config import ChatApiProtocol, Settings
+from xuwen.error_i18n import error_text
 from xuwen.web_ui.connectivity import (
     TestResult,
     test_embedding,
@@ -104,8 +106,7 @@ def status(settings: Settings = Depends(_settings_dep)) -> dict[str, Any]:
         and _effective_value(settings, "FRIEND_UID")
     )
     chat_ok = bool(
-        _effective_value(settings, "OPENAI_API_KEY")
-        and _effective_value(settings, "CHAT_MODEL")
+        _effective_value(settings, "OPENAI_API_KEY") and _effective_value(settings, "CHAT_MODEL")
     )
     embedding_ok = bool(
         _effective_value(settings, "EMBEDDING_API_KEY")
@@ -167,6 +168,9 @@ def get_values(settings: Settings = Depends(_settings_dep)) -> dict[str, Any]:
     schema = build_schema(_example_path())
     secret_keys = {f.key for f in schema.fields if f.secret}
 
+    # Runtime defaults are visible, but are not saved provider choices.
+    saved_keys = {key.upper() for key in load_env(_env_path(settings)).keys()}
+    process_keys = {key.upper() for key in os.environ}
     out: dict[str, Any] = {}
     for f in schema.fields:
         value = _effective_value(settings, f.key)
@@ -179,7 +183,9 @@ def get_values(settings: Settings = Depends(_settings_dep)) -> dict[str, Any]:
                 "preview": _mask_secret(value),
             }
         else:
-            out[f.key] = {"set": True, "value": value}
+            explicitly_set = f.key.lower() in settings.model_fields_set
+            configured = f.key in saved_keys or f.key in process_keys or explicitly_set
+            out[f.key] = {"set": True, "value": value, "configured": configured}
     return {"values": out}
 
 
@@ -224,9 +230,7 @@ def put_values(
 
     # 用合并后的 dict 试构造 Settings（assign 行必有 key，条件里排除 None 让类型收窄）
     merged: dict[str, Any] = {
-        ln.key: ln.value
-        for ln in doc.lines
-        if ln.kind == "assign" and ln.key is not None
+        ln.key: ln.value for ln in doc.lines if ln.kind == "assign" and ln.key is not None
     }
     try:
         Settings(**{k.lower(): v for k, v in merged.items()})
@@ -396,7 +400,11 @@ async def inspect_upload(
                     dest.unlink(missing_ok=True)
                     raise HTTPException(
                         status_code=413,
-                        detail=f"{safe_name} 超过最大允许大小（{_MAX_UPLOAD_BYTES // (1024 * 1024)}MB）",
+                        detail=error_text(
+                            "{p0} exceeds the maximum size ({p1}MB)",
+                            p0=safe_name,
+                            p1=_MAX_UPLOAD_BYTES // (1024 * 1024),
+                        ),
                     )
                 out.write(chunk)
         result = inspect_chat_file(dest)
@@ -409,8 +417,7 @@ async def inspect_upload(
         "format_label": result.format_label,
         "total_messages": result.total_messages,
         "candidates": [
-            {"name": c.name, "uid": c.uid, "role_hint": c.role_hint}
-            for c in result.candidates
+            {"name": c.name, "uid": c.uid, "role_hint": c.role_hint} for c in result.candidates
         ],
         "error": result.error,
     }
@@ -447,7 +454,11 @@ async def upload_files(
                     dest.unlink(missing_ok=True)
                     raise HTTPException(
                         status_code=413,
-                        detail=f"{safe_name} 超过最大允许大小（{_MAX_UPLOAD_BYTES // (1024 * 1024)}MB）",
+                        detail=error_text(
+                            "{p0} exceeds the maximum size ({p1}MB)",
+                            p0=safe_name,
+                            p1=_MAX_UPLOAD_BYTES // (1024 * 1024),
+                        ),
                     )
                 out.write(chunk)
 
@@ -461,10 +472,10 @@ async def upload_files(
                     "saved_as": str(dest),
                     "size": size,
                     "format": "unknown",
-                    "format_label": "未知格式",
+                    "format_label": error_text("Unknown format"),
                     "total_messages": 0,
                     "candidates": [],
-                    "error": f"嗅探失败：{e}",
+                    "error": error_text("File inspection failed: {reason}", reason=e),
                 }
             )
             continue
@@ -478,8 +489,7 @@ async def upload_files(
                 "format_label": ir.format_label,
                 "total_messages": ir.total_messages,
                 "candidates": [
-                    {"name": c.name, "uid": c.uid, "role_hint": c.role_hint}
-                    for c in ir.candidates
+                    {"name": c.name, "uid": c.uid, "role_hint": c.role_hint} for c in ir.candidates
                 ],
                 "error": ir.error,
             }
@@ -505,7 +515,7 @@ async def start_import(
     防止前端疯狂点击触发多个后台 task 并发写库。
     """
     if not payload.files:
-        raise HTTPException(status_code=400, detail="未提供文件")
+        raise HTTPException(status_code=400, detail=error_text("No files provided"))
 
     mgr = get_manager()
     active = mgr.list_active()
@@ -526,10 +536,12 @@ async def start_import(
         except ValueError:
             raise HTTPException(
                 status_code=400,
-                detail=f"非法路径：{raw}（仅允许 uploads 目录内的文件）",
+                detail=error_text(
+                    "Invalid path: {p0}. Only files inside uploads are allowed", p0=raw
+                ),
             ) from None
         if not p.exists():
-            raise HTTPException(status_code=404, detail=f"文件不存在：{raw}")
+            raise HTTPException(status_code=404, detail=error_text("File not found: {p0}", p0=raw))
         paths.append(p)
 
     task = mgr.create(paths, payload.file_names)
@@ -552,7 +564,7 @@ def list_import_tasks() -> dict[str, Any]:
 def get_task(task_id: str) -> dict[str, Any]:
     task = get_manager().get(task_id)
     if task is None:
-        raise HTTPException(status_code=404, detail="任务不存在")
+        raise HTTPException(status_code=404, detail=error_text("Task not found"))
     return task.to_dict()
 
 
@@ -611,7 +623,9 @@ def post_restore(
     if target is None:
         raise HTTPException(
             status_code=404,
-            detail=f"指定的备份不在备份目录中：{payload.name}",
+            detail=error_text(
+                "The requested backup is outside the backup directory: {p0}", p0=payload.name
+            ),
         )
     restored = restore_backup(env_path, target)
     return {"ok": True, "restored": str(restored), "restart_required": True}

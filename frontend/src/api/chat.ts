@@ -1,3 +1,5 @@
+import { useLocale } from '@/composables/useLocale'
+const { t } = useLocale()
 import { authHeaders, jsonRequest, streamUrl } from '@/api/client'
 import type {
   ChatCompletionRequest,
@@ -140,7 +142,7 @@ function parseEvent(raw: string, handlers: StreamHandlers): void {
       parsed = JSON.parse(payload)
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e)
-      throw new ChatStreamError(`服务端返回了格式错误的 SSE 数据：${detail}`)
+      throw new ChatStreamError(t('feedback.invalidSse', { detail }))
     }
     if (parsed?.error?.message) {
       if (typeof parsed.error.trace_id === 'string') handlers.onTrace?.(parsed.error.trace_id)

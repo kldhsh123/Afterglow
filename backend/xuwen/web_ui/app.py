@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import os
 import secrets
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -26,11 +27,24 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp
 
+from xuwen.api_i18n import request_language
+from xuwen.chat_api.middleware import install_exception_handlers
+from xuwen.cli_i18n import DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES, cli_text
 from xuwen.config import Settings
+from xuwen.error_i18n import error_text
+from xuwen.prompt_language import language_scope
 from xuwen.web_ui.first_run import FirstRunStatus, check_first_run
 from xuwen.web_ui.routes import router as config_router
 
 logger = logging.getLogger(__name__)
+
+
+def _startup_language(settings: Settings | None = None) -> str:
+    if settings is not None:
+        return settings.xuwen_language
+    value = os.getenv("XUWEN_LANGUAGE", DEFAULT_LANGUAGE)
+    return value if value in SUPPORTED_LANGUAGES else DEFAULT_LANGUAGE
+
 
 # 这些路径在配置 UI 内无需鉴权：探活 + 静态资源
 _OPEN_PATHS: set[str] = {
@@ -71,6 +85,21 @@ class ConfigUiAuth(BaseHTTPMiddleware):
         request: Request,
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
+        raw_settings = getattr(request.app.state, "settings", None)
+        settings = raw_settings if isinstance(raw_settings, Settings) else self.settings
+        # EventSource cannot set Accept-Language to the manually selected UI locale.
+        language = request_language(
+            request.query_params.get("language") or request.headers.get("accept-language"),
+            default=settings.xuwen_language,
+        )
+        with language_scope(language):
+            return await self._dispatch(request, call_next)
+
+    async def _dispatch(
+        self,
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
         # 读 app.state.settings：put_values 后会被替换，确保 xuwen_api_key 等改动立即生效。
         # starlette State.__getattr__ 返回 Any 导致 Pylance 推断不出 Settings 类型，显式校验。
         raw_settings = getattr(request.app.state, "settings", None)
@@ -84,7 +113,9 @@ class ConfigUiAuth(BaseHTTPMiddleware):
                     content={
                         "error": {
                             "code": "config_ui.localhost_only",
-                            "message": "配置 UI 仅允许本机访问。要远程访问请走 SSH 隧道或在 .env 关闭 CONFIG_UI_LOCALHOST_ONLY。",
+                            "message": error_text(
+                                "The configuration UI only allows local access. Use an SSH tunnel or disable CONFIG_UI_LOCALHOST_ONLY in .env for remote access."
+                            ),
                         }
                     },
                 )
@@ -92,11 +123,13 @@ class ConfigUiAuth(BaseHTTPMiddleware):
         # 路径处理：mount 后 path 仍带前缀，剥一下方便判断
         prefix = settings.config_ui_path_prefix.rstrip("/")
         raw_path = request.url.path
-        path = raw_path[len(prefix):] if raw_path.startswith(prefix) else raw_path
+        path = raw_path[len(prefix) :] if raw_path.startswith(prefix) else raw_path
         if not path.startswith("/"):
             path = "/" + path
         # 静态资源：放行常见前端构建产物路径（assets/、*.js、*.css、*.svg、*.ico、*.png）
-        if path.startswith("/assets/") or path.endswith((".js", ".css", ".svg", ".ico", ".png", ".woff", ".woff2")):
+        if path.startswith("/assets/") or path.endswith(
+            (".js", ".css", ".svg", ".ico", ".png", ".woff", ".woff2")
+        ):
             return await call_next(request)
         if path in _OPEN_PATHS:
             return await call_next(request)
@@ -113,7 +146,9 @@ class ConfigUiAuth(BaseHTTPMiddleware):
                 content={
                     "error": {
                         "code": "config_ui.auth",
-                        "message": "未授权，请检查并输入后端启动时打印到控制台的访问token。",
+                        "message": error_text(
+                            "Unauthorized. Check the access token printed in the backend startup console and enter it here."
+                        ),
                     }
                 },
             )
@@ -167,6 +202,7 @@ def create_config_app(
     )
     # 直接挂在子 app 的 state 上，避免依赖父 app lifespan 完成后的 .xuwen
     app.state.settings = settings
+    install_exception_handlers(app)
 
     app.add_middleware(ConfigUiAuth, settings=settings, setup_token=setup_token)
 
@@ -207,6 +243,7 @@ def create_config_app(
                     return FileResponse(str(p))
             return Response(status_code=404)
     else:
+
         @app.get("/", include_in_schema=False)
         async def _index_missing() -> JSONResponse:
             return JSONResponse(
@@ -215,8 +252,9 @@ def create_config_app(
                     "error": {
                         "code": "config_ui.not_built",
                         "message": (
-                            "配置 UI 静态资源未构建。请在 backend/web_ui_src/ 下运行 "
-                            "pnpm install && pnpm build。"
+                            error_text(
+                                "The configuration UI assets have not been built. Run pnpm install && pnpm build in backend/web_ui_src/."
+                            )
                         ),
                     }
                 },
@@ -233,39 +271,41 @@ def _log_startup_banner(
     first_run: FirstRunStatus,
     base_url: str,
 ) -> None:
+    language = _startup_language(settings)
     full_url = base_url.rstrip("/") + settings.config_ui_path_prefix + "/"
     if first_run.is_first_run:
         logger.warning(
-            "首次配置模式：缺失 %s，已自动启用配置 UI。访问 %s（token：%s）",
-            first_run.describe(),
-            full_url,
-            setup_token,
+            cli_text(
+                "startup.first_run_log",
+                language,
+                missing=first_run.describe(),
+                url=full_url,
+                token=setup_token,
+            ),
         )
         print(
             f"\n========================================\n"
-            f"  检测到首次配置（缺少 {first_run.describe()}）\n"
-            f"  已自动启用配置 UI（仅本次会话）\n"
+            f"  {cli_text('startup.first_run_title', language, missing=first_run.describe())}\n"
+            f"  {cli_text('startup.first_run_enabled', language)}\n"
             f"\n"
-            f"  浏览器访问：{full_url}\n"
-            f"  访问 token（{token_source}）：{setup_token}\n"
+            f"  {cli_text('startup.browser', language, url=full_url)}\n"
+            f"  {cli_text('startup.token', language, source=token_source, token=setup_token)}\n"
             f"\n"
-            f"  把这串 token 粘到向导第 1 步的输入框即可。\n"
-            f"  配置完成并重启后，此提示将消失。\n"
+            f"  {cli_text('startup.paste', language)}\n"
+            f"  {cli_text('startup.restart', language)}\n"
             f"========================================\n",
             flush=True,
         )
     else:
         logger.warning(
-            "配置 UI 已启用。访问 %s（token：%s）",
-            full_url,
-            setup_token,
+            cli_text("startup.enabled_log", language, url=full_url, token=setup_token),
         )
         print(
             f"\n========================================\n"
-            f"  Afterglow 配置 UI 已启用\n"
-            f"  浏览器访问：{full_url}\n"
-            f"  访问 token（{token_source}）：{setup_token}\n"
-            f"  把这串 token 粘到向导第 1 步的输入框即可。\n"
+            f"  {cli_text('startup.enabled_title', language)}\n"
+            f"  {cli_text('startup.browser', language, url=full_url)}\n"
+            f"  {cli_text('startup.token', language, source=token_source, token=setup_token)}\n"
+            f"  {cli_text('startup.paste', language)}\n"
             f"========================================\n",
             flush=True,
         )

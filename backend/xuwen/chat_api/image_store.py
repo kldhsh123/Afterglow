@@ -18,6 +18,7 @@ from pathlib import Path
 
 from xuwen.config import Settings
 from xuwen.core.errors import XuwenError
+from xuwen.error_i18n import error_text
 
 # data:image/<mime>;base64,<payload>
 _DATA_URL_RE = re.compile(r"^data:image/(?P<mime>[a-zA-Z0-9.+-]+);base64,(?P<data>.+)$")
@@ -62,19 +63,21 @@ def validate_data_url(data_url: str, settings: Settings) -> tuple[str, bytes]:
     """
     m = _DATA_URL_RE.match(data_url.strip())
     if not m:
-        raise ImageError("仅支持 data:image/<type>;base64,... 形式的图片")
+        raise ImageError(error_text("Images must use data:image/<type>;base64,... format"))
     mime = m.group("mime").lower()
     if mime not in _MIME_TO_EXT:
         raise ImageError(
-            f"不支持的图片格式：{mime}（仅支持 png/jpeg/gif/webp/bmp）"
+            error_text("Unsupported image format: {p0}. Supported: png/jpeg/gif/webp/bmp", p0=mime)
         )
     try:
         raw = base64.b64decode(m.group("data"), validate=True)
     except Exception as e:
-        raise ImageError("图片 base64 解码失败") from e
+        raise ImageError(error_text("Failed to decode image base64 data")) from e
     if len(raw) > settings.vision_max_image_bytes:
         mb = settings.vision_max_image_bytes / (1024 * 1024)
-        raise ImageError(f"图片过大（>{mb:.1f}MB），请压缩后再发")
+        raise ImageError(
+            error_text("Image too large (>{p0:.1f}MB). Compress it before sending", p0=mb)
+        )
     return mime, raw
 
 
@@ -103,7 +106,7 @@ def read_bytes(sha: str, settings: Settings) -> bytes:
     """按 sha 读取原图字节。"""
     path = find_by_sha(sha, settings)
     if path is None:
-        raise ImageError(f"找不到图片：{sha}")
+        raise ImageError(error_text("Image not found: {p0}", p0=sha))
     return path.read_bytes()
 
 
@@ -111,7 +114,7 @@ def data_url_for(sha: str, settings: Settings) -> str:
     """把磁盘上的图片重新打包成 data url。"""
     path = find_by_sha(sha, settings)
     if path is None:
-        raise ImageError(f"找不到图片：{sha}")
+        raise ImageError(error_text("Image not found: {p0}", p0=sha))
     ext = path.suffix.lstrip(".").lower()
     mime = "jpeg" if ext == "jpg" else ext
     raw = path.read_bytes()

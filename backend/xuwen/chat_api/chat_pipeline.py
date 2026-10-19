@@ -21,7 +21,9 @@ from xuwen.companion.life import (
 )
 from xuwen.companion.response_policy import ResponseDecision
 from xuwen.config import Settings
+from xuwen.content_i18n import content_text
 from xuwen.core.metrics import MetricsRecorder
+from xuwen.prompt_language import fallback_conversation_language
 
 logger = logging.getLogger(__name__)
 
@@ -172,11 +174,16 @@ def schedule_life_events(
                 )
         except TimeoutError:
             logger.warning(
-                "life event 归一化超时 %.1fs，保留原状态",
+                content_text(
+                    "Life-event normalization timed out after %.1fs; preserving the current state"
+                ),
                 life.settings.life_timeout_seconds,
             )
         except Exception:
-            logger.warning("life event 归一化失败，保留原状态", exc_info=True)
+            logger.warning(
+                content_text("Life-event normalization failed; preserving the current state"),
+                exc_info=True,
+            )
 
     task = asyncio.create_task(_apply_async())
     if pending_tasks is not None:
@@ -197,7 +204,10 @@ def available_sticker_names(settings: Settings) -> frozenset[str] | None:
         store = StickerStore(settings)
         return frozenset(s.name for s in store.available_for_ai())
     except Exception:
-        logger.warning("收集可用 sticker 名字失败，跳过 sticker 校验", exc_info=True)
+        logger.warning(
+            content_text("Cannot collect registered sticker names; skipping sticker validation"),
+            exc_info=True,
+        )
         return None
 
 
@@ -205,27 +215,28 @@ def available_sticker_names(settings: Settings) -> frozenset[str] | None:
 # 但 "嗯" 跟 sticker 的语气完全不匹配（撒娇/玩梗时尤其奇怪）。
 # 这里按 reply_mode 给一个更贴合本轮模式的短句。
 _STICKER_REJECT_FALLBACK_BY_MODE: dict[str, str] = {
-    "clingy": "嘿嘿",
-    "intimate": "嘿嘿",
-    "playful": "哈哈",
-    "tease": "哈哈",
-    "joking": "草",
-    "chaotic": "……",
-    "serious": "嗯嗯",
-    "calm": "嗯嗯",
-    "topic_shift": "嗯",
-    "image": "唔",
-    "sticker": "唔",
+    "clingy": "Hehe",
+    "intimate": "Hehe",
+    "playful": "Haha",
+    "tease": "Haha",
+    "joking": "Lol",
+    "chaotic": "…",
+    "serious": "I'm listening",
+    "calm": "Mm-hmm",
+    "topic_shift": "Hmm",
+    "image": "Hmm",
+    "sticker": "Hmm",
     "silence": "",
 }
 
 
-def fallback_for_rejected_sticker(reply_mode: str) -> str:
+def fallback_for_rejected_sticker(reply_mode: str, *, user_text: str = "") -> str:
     """模型只输出了不存在的 sticker，被剥离后该用什么短句替代干瘪的"嗯"。
 
     参数是 reply_mode 字符串，方便流式分支用 PolicyHint.reply_mode 直接调用。
     """
-    return _STICKER_REJECT_FALLBACK_BY_MODE.get(reply_mode, "……")
+    english = _STICKER_REJECT_FALLBACK_BY_MODE.get(reply_mode, "…")
+    return content_text(english, language=fallback_conversation_language(user_text))
 
 
 def is_ai_silence_signal(
@@ -290,27 +301,24 @@ def build_sticker_retry_hint(
     raw_text: str,
     available_names: frozenset[str],
 ) -> str:
-    """构造一条 system 消息提示，告诉主模型刚才输出的 sticker 不在库里，请重新组织。
-
-    用作 retry 时追加到 messages 末尾。available_names 为空时明确告诉模型
-    "当前完全没有可用 sticker"，避免它继续乱猜。
-    """
-    rejected = sorted({
-        m.group(1)
-        for m in re.finditer(r"\[sticker(?::|=)([^\]\s]+)\]", raw_text)
-        if m.group(1) not in available_names
-    })
-    rejected_text = "、".join(f"[sticker:{n}]" for n in rejected) or "（未识别）"
+    rejected = sorted(
+        {
+            match.group(1)
+            for match in re.finditer(r"\[sticker(?::|=)([^\]\s]+)\]", raw_text)
+            if match.group(1) not in available_names
+        }
+    )
+    rejected_text = ", ".join(f"[sticker:{name}]" for name in rejected) or "(unrecognized)"
     if available_names:
-        allowed = "、".join(f"[sticker:{n}]" for n in sorted(available_names))
+        allowed = ", ".join(f"[sticker:{name}]" for name in sorted(available_names))
         return (
-            f"你刚才输出了系统里**不存在**的 sticker：{rejected_text}。"
-            f"当前可用的 sticker 仅有：{allowed}。"
-            "请用文字（或上面列出的名字一字不差地使用）重新回复用户的上一条消息；"
-            "**不要**再输出自创的 sticker 名字。"
+            f"The previous reply used unavailable stickers: {rejected_text}. "
+            f"The only allowed stickers are: {allowed}. "
+            "Answer the original user message again using text or these exact names. "
+            "Never invent a sticker name. Keep the original conversation language."
         )
     return (
-        f"你刚才输出了系统里**不存在**的 sticker：{rejected_text}。"
-        "当前完全没有可用 sticker。请改用文字（或 emoji）重新回复用户的上一条消息；"
-        "**不要**再输出 `[sticker:...]` 格式。"
+        f"The previous reply used unavailable stickers: {rejected_text}. "
+        "No stickers are available. Answer the original user message again with text or appropriate emoji. "
+        "Never output [sticker:...] tokens. Keep the original conversation language."
     )

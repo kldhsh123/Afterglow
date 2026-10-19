@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from xuwen.config import Settings
 from xuwen.core.errors import ConfigError
@@ -33,8 +34,12 @@ def test_model_timeouts_reject_non_finite_and_non_positive_values(
     field_name: str,
     invalid_value: float,
 ):
-    with pytest.raises(ValueError, match="模型 timeout 必须为有限正数"):
+    with pytest.raises(ValidationError) as caught:
         Settings(_env_file=None, **{field_name: invalid_value})
+    errors = caught.value.errors()
+    assert len(errors) == 1
+    assert errors[0]["loc"] == (field_name,)
+    assert errors[0]["type"] == "value_error"
 
 
 @pytest.mark.parametrize("field_name", MODEL_TIMEOUT_FIELDS)

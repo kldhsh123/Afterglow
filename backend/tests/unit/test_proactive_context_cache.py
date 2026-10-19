@@ -42,7 +42,7 @@ async def test_proactive_context_cache_indexes_by_caller_and_conversation(tmp_pa
         "我明天要去办手续",
         "那你记得早点睡",
     ]
-    assert "用户: 我明天要去办手续" in render_proactive_context_cache(by_caller)
+    assert "User: 我明天要去办手续" in render_proactive_context_cache(by_caller)
 
 
 @pytest.mark.asyncio

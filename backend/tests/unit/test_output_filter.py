@@ -5,14 +5,14 @@ from __future__ import annotations
 from xuwen.chat_api.output_filter import AssistantOutputFilter, sanitize_assistant_text
 
 
-def test_sanitize_assistant_text_removes_history_placeholders():
+def test_sanitize_assistant_text_removes_history_placeholders(chinese_language):
     assert sanitize_assistant_text("[图片]: 在干嘛") == "在干嘛"
     assert sanitize_assistant_text("[图片]在干嘛") == "在干嘛"
     assert sanitize_assistant_text("[[呜呜呜]] 想你") == "想你"
     assert sanitize_assistant_text("[语音]") == "嗯"
 
 
-def test_sanitize_assistant_text_removes_qq_native_face():
+def test_sanitize_assistant_text_removes_qq_native_face(chinese_language):
     """旧库未清洗的 `[/汪汪]` 被检索后可能让模型直接复读，输出层必须兜底。"""
     assert sanitize_assistant_text("好的[/汪汪]") == "好的"
     assert sanitize_assistant_text("[/呲牙] 晚安") == "晚安"
@@ -25,7 +25,7 @@ def test_sanitize_assistant_text_keeps_sticker_tokens():
     assert sanitize_assistant_text("摸摸 [sticker:摸摸头]") == "摸摸 [sticker:摸摸头]"
 
 
-def test_sanitize_assistant_text_removes_trailing_partial_sticker():
+def test_sanitize_assistant_text_removes_trailing_partial_sticker(chinese_language):
     assert sanitize_assistant_text("[sticker:e7e") == "嗯"
     assert sanitize_assistant_text("等我一下 [sticker:e7e") == "等我一下"
     assert sanitize_assistant_text("摸摸 [sticker:摸摸头]") == "摸摸 [sticker:摸摸头]"
@@ -102,7 +102,7 @@ def test_stream_filter_does_not_emit_life_event_until_closed():
     assert "准备处理手头的事情" in f.raw_text()
 
 
-def test_sanitize_strips_unknown_sticker_tokens():
+def test_sanitize_strips_unknown_sticker_tokens(chinese_language):
     """模型自创不在库里的 sticker 名字，必须剥离，避免前端渲染失败。"""
     valid = frozenset({"摸摸头", "ok"})
     assert sanitize_assistant_text(
@@ -120,7 +120,7 @@ def test_sanitize_strips_unknown_sticker_tokens():
     ) == "[sticker:任意名字]"
 
 
-def test_sanitize_with_empty_sticker_set_strips_all_stickers():
+def test_sanitize_with_empty_sticker_set_strips_all_stickers(chinese_language):
     """空集 = 当前没有可用 sticker，应剥离所有 sticker token。"""
     assert sanitize_assistant_text(
         "[sticker:某个]",

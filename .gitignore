@@ -40,3 +40,10 @@ backend/scripts/diag_rerank.py
 backend/scripts/test_proactive_poll.py
 /wiki
 backend/.env COPY1
+
+# Generated documentation site
+docs/.site/
+docs/.vitepress/cache/
+docs/.vitepress/dist/
+/.data
+/.wiki-preview/

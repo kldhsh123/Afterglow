@@ -23,102 +23,88 @@ def render_persona_card(report: PersonaReport) -> str:
     输出会被嵌入 prompt 模板的 `{{ persona_card }}` 变量。
     """
     lines: list[str] = []
-    name = report.friend_name or "TA"
-
-    lines.append(f"# {name} 的画像")
+    name = report.friend_name or "Friend"
+    lines.append(f"# {name} profile")
     lines.append("")
     lines.append(
-        f"基于 {report.total_messages} 条历史聊天，其中 {name} 发出 "
-        f"{report.friend_message_count} 条。"
+        f"Based on {report.total_messages} historical messages; {name} sent {report.friend_message_count} messages."
     )
     lines.append("")
     lines.append(
-        "> 这是长期统计画像，只能作为语气参考；具体回复优先参考当前生活状态、"
-        "关系记忆和本轮检索到的真实回复样本。不要凭画像发明当天事实、emoji、"
-        "亲密动作或现实生活经历。"
+        "> This statistical profile is a tone reference only. Current life state, relationship memory and genuine retrieved replies take priority. Never invent today's facts, emoji, intimate gestures or real-life experiences from this profile."
     )
     lines.append("")
-
-    # 语言节奏
-    lines.append("## 语言节奏")
+    lines.append("## Speech rhythm")
     short = report.length.short_ratio
     long_ = report.length.long_ratio
     rhythm: list[str] = []
     if short > 0.6:
-        rhythm.append("以短句为主，习惯连发几条")
+        rhythm.append("Mostly short messages, often sent in bursts")
     elif short > 0.4:
-        rhythm.append("偏短句")
+        rhythm.append("Prefers short messages")
     if long_ > 0.2:
-        rhythm.append("偶尔会长篇展开")
+        rhythm.append("Sometimes elaborates at length")
     if not rhythm:
-        rhythm.append("句长比较均衡")
+        rhythm.append("Balanced message length")
     rhythm.append(
-        f"平均每条 {report.length.mean:.1f} 字（中位数 {report.length.median:.1f} 字）"
+        f"Mean message length: {report.length.mean:.1f} characters (median {report.length.median:.1f} characters)"
     )
     lines.append("- " + "；".join(rhythm))
     lines.append("")
-
-    # 标点习惯
-    lines.append("## 标点与情绪表达")
+    lines.append("## Punctuation and emotion")
     punct_bits: list[str] = []
     if report.punctuation.no_punct_ratio > 0.4:
-        punct_bits.append(f"约 {int(report.punctuation.no_punct_ratio * 100)}% 的消息没有标点")
+        punct_bits.append(
+            f"About {int(report.punctuation.no_punct_ratio * 100)}% of messages have no punctuation"
+        )
     if report.punctuation.question_ratio > 0.2:
-        punct_bits.append("爱用问号追问")
+        punct_bits.append("Often follows up with questions")
     if report.punctuation.exclaim_ratio > 0.2:
-        punct_bits.append("感叹号比较多，情绪外放")
+        punct_bits.append("Expressive, with frequent exclamation marks")
     if report.punctuation.ellipsis_ratio > 0.1:
-        punct_bits.append("习惯用省略号表达停顿或欲言又止")
+        punct_bits.append("Uses ellipses for pauses or hesitation")
     if report.media.emoji_per_message > 0.3:
-        punct_bits.append("会用 emoji")
+        punct_bits.append("Uses emoji")
     if not punct_bits:
-        punct_bits.append("标点使用比较克制")
+        punct_bits.append("Uses punctuation sparingly")
     lines.append("- " + "；".join(punct_bits))
     lines.append("")
-
-    # 媒体
     if report.media.placeholder_ratio > 0.05:
         media_bits: list[str] = []
         if report.media.image_ratio > 0.03:
             media_bits.append(
-                f"图片占约 {int(report.media.image_ratio * 100)}%（会用图片表达反应；"
-                "模型不能直接输出 [图片] 占位符）"
+                f"Images account for about {int(report.media.image_ratio * 100)}% (images convey reactions; never output historical [图片] placeholders)"
             )
         if report.media.voice_ratio > 0.02:
-            media_bits.append("偶尔发语音")
+            media_bits.append("Sometimes sends voice messages")
         if media_bits:
-            lines.append("## 媒体使用习惯")
+            lines.append("## Media habits")
             for bit in media_bits:
                 lines.append(f"- {bit}")
             lines.append("")
-
-    # 口头禅 / 高频短语
     phrases = [p for p in report.top_phrases if len(p.term) >= 2][:12]
     if phrases:
-        lines.append("## 常用短语 / 口头禅")
-        lines.append("> 学习这些词组的使用语境，但不要逐字复读。")
+        lines.append("## Common phrases")
+        lines.append("> Learn the context of these phrases without repeating them verbatim.")
         lines.append("")
         for p in phrases:
-            lines.append(f"- 「{p.term}」(出现 {p.count} 次)")
+            lines.append(f'- "{p.term}" (used {p.count} times)')
         lines.append("")
-
-    # 高频词
     terms = report.top_terms[:20]
     if terms:
-        lines.append("## 高频词（参考）")
+        lines.append("## Frequent words (reference)")
         lines.append(_format_terms(terms))
         lines.append("")
-
-    # 样本
     if report.samples:
-        lines.append("## 典型对话样本")
-        lines.append(f"> 真实历史中 {name} 是如何回应的；写新回复时参考其语气，不要照抄。")
+        lines.append("## Genuine dialogue examples")
+        lines.append(
+            f"> Genuine historical replies by {name}; use the tone when writing new replies, without copying."
+        )
         lines.append("")
         for s in report.samples[:8]:
-            lines.append(_format_sample(s, report.self_name or "我", name))
+            lines.append(_format_sample(s, report.self_name or "User", name))
             lines.append("")
-
-    lines.append(f"---\n*生成于 {datetime.now(UTC).isoformat(timespec='seconds')}*")
+    lines.append(f"---\n*Generated at {datetime.now(UTC).isoformat(timespec='seconds')}*")
     return "\n".join(lines).strip() + "\n"
 
 

@@ -108,7 +108,7 @@ async def test_check_once_handles_network_error():
 
 
 @pytest.mark.asyncio
-async def test_check_once_handles_invalid_json():
+async def test_check_once_handles_invalid_json(chinese_language):
     settings = _settings()
     async with httpx.AsyncClient() as client:
         checker = UpdateChecker(settings, current_version="0.2.0", client=client)
@@ -174,7 +174,7 @@ async def test_force_check_now_throttles_repeated_calls():
 
 
 @pytest.mark.asyncio
-async def test_check_once_prints_outdated_to_stdout(capsys):
+async def test_check_once_prints_outdated_to_stdout(chinese_language, capsys):
     """成功检查到新版本时应该把状态打印到 stdout（控制台可见）。"""
     settings = _settings()
     payload = {
@@ -197,7 +197,7 @@ async def test_check_once_prints_outdated_to_stdout(capsys):
 
 
 @pytest.mark.asyncio
-async def test_check_once_prints_up_to_date(capsys):
+async def test_check_once_prints_up_to_date(chinese_language, capsys):
     """已是最新版应该打印 "已是最新版" 提示。"""
     settings = _settings()
     payload = {"tag_name": "v0.2.0", "html_url": "https://x.com", "body": ""}
@@ -215,7 +215,7 @@ async def test_check_once_prints_up_to_date(capsys):
 
 
 @pytest.mark.asyncio
-async def test_check_once_does_not_repeat_same_status(capsys):
+async def test_check_once_does_not_repeat_same_status(chinese_language, capsys):
     """状态没变时不应该重复打日志，避免周期检查刷屏。"""
     settings = _settings()
     payload = {"tag_name": "v0.3.0", "html_url": "https://x.com", "body": "x"}
@@ -236,7 +236,7 @@ async def test_check_once_does_not_repeat_same_status(capsys):
 
 
 @pytest.mark.asyncio
-async def test_check_once_prints_state_transition(capsys):
+async def test_check_once_prints_state_transition(chinese_language, capsys):
     """状态从 outdated → up-to-date 应该重新打印一次。"""
     settings = _settings()
     async with httpx.AsyncClient() as client:
@@ -260,7 +260,7 @@ async def test_check_once_prints_state_transition(capsys):
 
 
 @pytest.mark.asyncio
-async def test_check_once_prints_error(capsys):
+async def test_check_once_prints_error(chinese_language, capsys):
     """检查失败应该把错误打印到 stdout。"""
     settings = _settings()
     async with httpx.AsyncClient() as client:
@@ -278,7 +278,7 @@ async def test_check_once_prints_error(capsys):
 
 
 @pytest.mark.asyncio
-async def test_start_disabled_prints_status(capsys):
+async def test_start_disabled_prints_status(chinese_language, capsys):
     """UPDATE_CHECK_ENABLED=false 时 start() 应该打印禁用提示。"""
     settings = _settings(update_check_enabled=False)
     checker = UpdateChecker(settings, current_version="0.2.0")

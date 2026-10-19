@@ -7,6 +7,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from xuwen.content_i18n import content_text
+
 EventType = Literal[
     "milestone",
     "conflict",
@@ -137,6 +139,7 @@ class AnalysisBlock(BaseModel):
 
 
 class BlockAnalysis(BaseModel):
+    output_language: str = ""  # Empty identifies legacy caches with unspecified language.
     schema_version: int = 5
     block_id: str
     start_time_ms: int
@@ -181,8 +184,10 @@ class ReportSection(BaseModel):
 class PersonalityReport(BaseModel):
     schema_version: int = 2
     generated_at: str = Field(default_factory=utc_now_iso)
-    disclaimer: str = (
-        "这是基于聊天文字痕迹的有限分析，不等同于这个人本身，也不是心理评估或诊断。"
+    disclaimer: str = Field(
+        default_factory=lambda: content_text(
+            "This limited analysis of chat text does not represent the whole person and is not a psychological assessment or diagnosis."
+        )
     )
     summary: str = ""
     sections: list[ReportSection] = Field(default_factory=list)
@@ -226,6 +231,7 @@ class ProactiveOpeningRecord(BaseModel):
 class ProactiveAnalysisReport(BaseModel):
     """完整的对方主动开聊统计，也是运行时调度画像的首选数据源。"""
 
+    output_language: str = ""  # Empty identifies legacy caches with unspecified language.
     schema_version: int = 1
     generated_at: str = Field(default_factory=utc_now_iso)
     session_gap_minutes: int = Field(default=30, ge=1)
@@ -249,9 +255,7 @@ class ProactiveAnalysisReport(BaseModel):
     monthly_counts: list[ProactivePeriodCount] = Field(default_factory=list)
     opening_type_counts: dict[ProactiveOpeningType, int] = Field(default_factory=dict)
     reason_counts: dict[ProactiveReasonCategory, int] = Field(default_factory=dict)
-    ai_analysis_status: Literal["not_requested", "completed", "partial", "failed"] = (
-        "not_requested"
-    )
+    ai_analysis_status: Literal["not_requested", "completed", "partial", "failed"] = "not_requested"
     ai_analyzed_count: int = Field(default=0, ge=0)
     openings: list[ProactiveOpeningRecord] = Field(default_factory=list)
 
@@ -259,9 +263,10 @@ class ProactiveAnalysisReport(BaseModel):
 class ExperimentalReport(BaseModel):
     schema_version: int = 2
     generated_at: str = Field(default_factory=utc_now_iso)
-    disclaimer: str = (
-        "以下内容是基于聊天文字的实验性人格假设，允许推测但不等于事实核验、"
-        "蓄意认定或医学诊断。"
+    disclaimer: str = Field(
+        default_factory=lambda: content_text(
+            "These experimental personality hypotheses allow inference from chat text, but are not verified facts, determinations of intent or medical diagnoses."
+        )
     )
     summary: str = ""
     signals: list[ExperimentalSignal] = Field(default_factory=list)
@@ -271,5 +276,9 @@ class ExperimentalReport(BaseModel):
     def _require_alternatives(cls, value: list[ExperimentalSignal]) -> list[ExperimentalSignal]:
         for signal in value:
             if not signal.alternative_explanations:
-                signal.alternative_explanations = ["现有聊天记录不足以排除其他情境解释"]
+                signal.alternative_explanations = [
+                    content_text(
+                        "The available chat records cannot rule out other contextual explanations"
+                    )
+                ]
         return value

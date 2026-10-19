@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useLocale } from '@/composables/useLocale'
+const { t } = useLocale()
 // 聊天主页面：组合 MessageList + ChatInput + 错误条 + 引导
 
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
@@ -242,12 +244,12 @@ async function send(text: string, images: string[] = []) {
             ? [userMsg.id]
             : turnPendingMessageIds
         for (const id of idsToClear) pendingCallerMessageIds.delete(id)
-        chat.setError(`聊天出错：${err.message}`)
+        chat.setError(t('feedback.chatError', { error: err.message }))
         // 把错误也显示成 assistant 的一句话
         if (!assistantMsg.content) {
           chat.setMessageContent(
             assistantMsg.id,
-            `（连接出了点问题：${err.message}）`,
+            t('feedback.connectionError', { error: err.message }),
           )
         }
         chat.finishAssistantMessage(assistantMsg.id)
@@ -281,13 +283,13 @@ async function startProactiveTopic() {
       chat.markMessageSilenced(assistantMsg.id)
       return
     }
-    chat.setMessageContent(assistantMsg.id, result.message.trim() || '嗯')
+    chat.setMessageContent(assistantMsg.id, result.message.trim() || t('remaining.hmm'))
   } catch (e) {
     const err = e instanceof Error ? e : new Error(String(e))
-    chat.setError(`主动话题出错：${err.message}`)
+    chat.setError(t('feedback.proactiveError', { error: err.message }))
     chat.setMessageContent(
       assistantMsg.id,
-      `（主动开话题失败：${err.message}）`,
+      t('feedback.proactiveFailure', { error: err.message }),
     )
   } finally {
     chat.finishAssistantMessage(assistantMsg.id)
@@ -312,11 +314,11 @@ async function startProactiveTopic() {
                  border border-ink/5 dark:border-night-text/10
                  hover:text-ink dark:hover:text-night-text disabled:opacity-50"
           :disabled="chat.isGenerating"
-          title="让对方主动开个话题"
+          :title="t('remaining.letThemStartATopic')"
           @click="startProactiveTopic"
         >
           <Sparkles :size="14" />
-          <span>开个话题</span>
+          <span>{{ t('remaining.startATopic') }}</span>
         </button>
         <button
           class="ml-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full
@@ -324,11 +326,11 @@ async function startProactiveTopic() {
                  bg-paper-soft/80 dark:bg-night-bg-soft/80
                  border border-ink/5 dark:border-night-text/10
                  hover:text-ink dark:hover:text-night-text"
-          title="一键滑到最新消息"
+          :title="t('remaining.jumpToTheLatestMessage')"
           @click="jumpToBottom"
         >
           <ChevronDown :size="14" />
-          <span>到底</span>
+          <span>{{ t('remaining.latest') }}</span>
         </button>
         <button
           class="ml-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full
@@ -336,11 +338,11 @@ async function startProactiveTopic() {
                  bg-paper-soft/80 dark:bg-night-bg-soft/80
                  border border-ink/5 dark:border-night-text/10
                  hover:text-ink dark:hover:text-night-text"
-          title="打开详细调试面板"
+          :title="t('remaining.openTheDetailedDebugPanel')"
           @click="debugOpen = true"
         >
           <Bug :size="14" />
-          <span>调试</span>
+          <span>{{ t('remaining.debug') }}</span>
         </button>
       </div>
     </div>

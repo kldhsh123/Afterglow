@@ -28,12 +28,14 @@ from tenacity import (
 from xuwen.config import ChatApiProtocol, Settings
 from xuwen.core.errors import LLMError
 from xuwen.core.metrics import MetricsRecorder
+from xuwen.error_i18n import error_text
 from xuwen.ingestion.embedder import _resolve_endpoint
 
 _SCHEDULE_HINT_RE = re.compile(
     r"<schedule-hint>\s*(.*?)\s*</schedule-hint>",
     re.DOTALL | re.IGNORECASE,
 )
+
 
 class _RetryableLLMError(LLMError):
     """仅供 tenacity 内部触发重试。"""
@@ -126,7 +128,7 @@ class LLMClient:
                     metrics=metrics,
                     attempt_number=_attempt_number(attempt.retry_state),
                 )
-        raise LLMError("意外的重试退出")
+        raise LLMError(error_text("Retry loop exited unexpectedly"))
 
     async def stream_chat(
         self,
@@ -170,10 +172,12 @@ class LLMClient:
                         return
                     break
         except httpx.HTTPError as e:
-            raise LLMError(f"LLM 流式请求失败：{type(e).__name__}") from e
+            raise LLMError(
+                error_text("LLM streaming request failed: {p0}", p0=type(e).__name__)
+            ) from e
 
         if gen is None or first is None:  # pragma: no cover - reraise=True 保证不到这里
-            raise LLMError("无法建立流式连接")
+            raise LLMError(error_text("Cannot establish a streaming connection"))
 
         async def _emit() -> AsyncIterator[str]:
             try:
@@ -210,10 +214,7 @@ class LLMClient:
             payload["messages"] = messages
         if params is None:
             params = GenerationParams()
-        if (
-            self._include_reasoning_effort
-            and self.settings.llm_reasoning_effort != "null"
-        ):
+        if self._include_reasoning_effort and self.settings.llm_reasoning_effort != "null":
             if self._api_protocol == "responses":
                 payload["reasoning"] = {
                     "effort": self.settings.llm_reasoning_effort,
@@ -225,11 +226,7 @@ class LLMClient:
         if params.top_p is not None:
             payload["top_p"] = params.top_p
         if params.max_tokens is not None:
-            token_key = (
-                "max_output_tokens"
-                if self._api_protocol == "responses"
-                else "max_tokens"
-            )
+            token_key = "max_output_tokens" if self._api_protocol == "responses" else "max_tokens"
             payload[token_key] = params.max_tokens
         if params.presence_penalty is not None and self._api_protocol == "chat_completions":
             payload["presence_penalty"] = params.presence_penalty
@@ -282,7 +279,7 @@ class LLMClient:
                 error=type(e).__name__,
             )
             raise _RetryableLLMError(
-                f"LLM 网络请求失败：{type(e).__name__}",
+                error_text("LLM network request failed: {p0}", p0=type(e).__name__),
             ) from e
 
         request_id = resp.headers.get("x-request-id") or resp.headers.get("request-id")
@@ -303,7 +300,7 @@ class LLMClient:
                 error=f"HTTP {resp.status_code}",
             )
             raise _RetryableLLMError(
-                f"LLM 上游返回重定向（HTTP {resp.status_code}）",
+                error_text("The LLM provider returned a redirect (HTTP {p0})", p0=resp.status_code),
                 detail={"status": resp.status_code, "request_id": request_id},
             )
         if resp.status_code in (429,) or 500 <= resp.status_code < 600:
@@ -323,7 +320,9 @@ class LLMClient:
                 error=f"HTTP {resp.status_code}",
             )
             raise _RetryableLLMError(
-                f"LLM 暂时不可用（HTTP {resp.status_code}）",
+                error_text(
+                    "The LLM provider is temporarily unavailable (HTTP {p0})", p0=resp.status_code
+                ),
                 detail={"status": resp.status_code, "request_id": request_id},
             )
         if resp.status_code >= 400:
@@ -343,7 +342,10 @@ class LLMClient:
                 error=f"HTTP {resp.status_code}",
             )
             raise LLMError(
-                f"LLM 客户端错误（HTTP {resp.status_code}），请检查 OPENAI_API_KEY、CHAT_MODEL 与配额",
+                error_text(
+                    "LLM client error (HTTP {p0}). Check OPENAI_API_KEY, CHAT_MODEL and your quota",
+                    p0=resp.status_code,
+                ),
                 detail={"status": resp.status_code, "request_id": request_id},
             )
 
@@ -366,7 +368,7 @@ class LLMClient:
                 error="invalid_json",
             )
             raise LLMError(
-                "LLM 返回非 JSON 响应（请检查 OPENAI_BASE_URL 是否正确）",
+                error_text("The LLM returned a non-JSON response. Check OPENAI_BASE_URL"),
                 detail={"status": resp.status_code, "request_id": request_id},
             ) from e
 
@@ -389,7 +391,7 @@ class LLMClient:
                     error=refusal_reason,
                 )
                 raise LLMError(
-                    "主模型触发内容过滤",
+                    error_text("The main model triggered content filtering"),
                     detail={"request_id": request_id, "reason": refusal_reason},
                 )
         else:
@@ -411,7 +413,7 @@ class LLMClient:
                     error=failure,
                 )
                 raise LLMError(
-                    "LLM Responses 请求执行失败",
+                    error_text("The LLM Responses request failed"),
                     detail={"request_id": request_id, "reason": failure},
                 )
             if _responses_has_refusal(data):
@@ -431,7 +433,7 @@ class LLMClient:
                     error="responses_refusal",
                 )
                 raise LLMError(
-                    "主模型拒绝处理当前请求",
+                    error_text("The main model refused the request"),
                     detail={"request_id": request_id, "reason": "responses_refusal"},
                 )
 
@@ -455,9 +457,9 @@ class LLMClient:
             )
             raise LLMError(
                 (
-                    "LLM 响应缺少 output_text"
+                    error_text("The LLM response is missing output_text")
                     if self._api_protocol == "responses"
-                    else "LLM 响应缺少 choices[0].message.content"
+                    else error_text("The LLM response is missing choices[0].message.content")
                 ),
                 detail={"request_id": request_id},
             ) from e
@@ -524,7 +526,9 @@ class LLMClient:
                     error=f"HTTP {resp.status_code}",
                 )
                 raise _RetryableLLMError(
-                    f"LLM 上游返回重定向（HTTP {resp.status_code}）",
+                    error_text(
+                        "The LLM provider returned a redirect (HTTP {p0})", p0=resp.status_code
+                    ),
                     detail={"status": resp.status_code, "request_id": request_id},
                 )
             if resp.status_code in (429,) or 500 <= resp.status_code < 600:
@@ -548,7 +552,10 @@ class LLMClient:
                     error=f"HTTP {resp.status_code}",
                 )
                 raise _RetryableLLMError(
-                    f"LLM 暂时不可用（HTTP {resp.status_code}）",
+                    error_text(
+                        "The LLM provider is temporarily unavailable (HTTP {p0})",
+                        p0=resp.status_code,
+                    ),
                     detail={"status": resp.status_code, "request_id": request_id},
                 )
             if resp.status_code >= 400:
@@ -572,7 +579,7 @@ class LLMClient:
                     error=f"HTTP {resp.status_code}",
                 )
                 raise LLMError(
-                    f"LLM 客户端错误（HTTP {resp.status_code}）",
+                    error_text("LLM client error (HTTP {p0})", p0=resp.status_code),
                     detail={"status": resp.status_code, "request_id": request_id},
                 )
 
@@ -600,7 +607,7 @@ class LLMClient:
                         elif event_type == "response.refusal.delta":
                             stream_error = "responses_refusal"
                             raise LLMError(
-                                "主模型拒绝处理当前请求",
+                                error_text("The main model refused the request"),
                                 detail={
                                     "request_id": request_id,
                                     "reason": "responses_refusal",
@@ -616,7 +623,7 @@ class LLMClient:
                         elif event_type in {"error", "response.failed"}:
                             stream_error = event_type
                             raise LLMError(
-                                "LLM Responses 流返回错误事件",
+                                error_text("The LLM Responses stream returned an error event"),
                                 detail={"request_id": request_id},
                             )
                         else:
@@ -631,9 +638,9 @@ class LLMClient:
                         if refusal_reason:
                             stream_error = refusal_reason
                             message = (
-                                "主模型触发内容过滤"
+                                error_text("The main model triggered content filtering")
                                 if refusal_reason == "content_filter"
-                                else "主模型拒绝处理当前请求"
+                                else error_text("The main model refused the request")
                             )
                             raise LLMError(
                                 message,
@@ -657,11 +664,13 @@ class LLMClient:
                 stream_error = type(e).__name__
                 if pieces <= 0:
                     raise _RetryableLLMError(
-                        f"LLM 流式响应建立后中断：{stream_error}",
+                        error_text(
+                            "The LLM stream was interrupted after connecting: {p0}", p0=stream_error
+                        ),
                         detail={"request_id": request_id},
                     ) from e
                 raise LLMError(
-                    f"LLM 流式响应中断：{stream_error}",
+                    error_text("The LLM stream was interrupted: {p0}", p0=stream_error),
                     detail={"request_id": request_id},
                 ) from e
             finally:
@@ -712,9 +721,7 @@ def _responses_input(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     continue
                 part_type = str(raw_part.get("type") or "")
                 if part_type == "text":
-                    parts.append(
-                        {"type": "input_text", "text": str(raw_part.get("text") or "")}
-                    )
+                    parts.append({"type": "input_text", "text": str(raw_part.get("text") or "")})
                 elif part_type == "image_url":
                     image = raw_part.get("image_url")
                     if isinstance(image, dict):
@@ -753,7 +760,7 @@ def _extract_content_text(
     if not isinstance(output, list):
         if isinstance(output_text, str):
             return output_text
-        raise ValueError("Responses output 缺失")
+        raise ValueError(error_text("Responses output is missing"))
     texts: list[str] = []
     for item in output:
         if not isinstance(item, dict) or item.get("type") != "message":
@@ -792,10 +799,7 @@ def _responses_has_refusal(data: dict[str, Any]) -> bool:
         content = item.get("content")
         if not isinstance(content, list):
             continue
-        if any(
-            isinstance(part, dict) and part.get("type") == "refusal"
-            for part in content
-        ):
+        if any(isinstance(part, dict) and part.get("type") == "refusal" for part in content):
             return True
     return False
 
@@ -944,7 +948,9 @@ def _response_summary(text: str, *, include_full: bool) -> dict[str, Any]:
 def _json_response_summary(data: dict[str, Any]) -> dict[str, Any]:
     return {
         "keys": sorted(str(key) for key in data.keys()),
-        "choice_count": len(data.get("choices", [])) if isinstance(data.get("choices"), list) else 0,
+        "choice_count": len(data.get("choices", []))
+        if isinstance(data.get("choices"), list)
+        else 0,
         "output_count": len(data.get("output", [])) if isinstance(data.get("output"), list) else 0,
     }
 
@@ -1017,8 +1023,7 @@ def _schedule_request_debug(text: str) -> dict[str, Any]:
     """调试定时任务链路：主模型请求是否注入了内部协议指令。"""
     lower = text.lower()
     return {
-        "prompt_has_schedule_instruction": "【定时任务" in text
-        or "<schedule-hint>" in lower,
+        "prompt_has_schedule_instruction": "【定时任务" in text or "<schedule-hint>" in lower,
         "schedule_hint_tag_mentions": lower.count("<schedule-hint>"),
     }
 

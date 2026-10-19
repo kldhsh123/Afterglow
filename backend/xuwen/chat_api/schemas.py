@@ -12,6 +12,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from xuwen.error_i18n import error_text
 from xuwen.memory.policy import MemorySource
 
 Role = Literal["system", "user", "assistant"]
@@ -102,9 +103,9 @@ class ChatCompletionRequest(BaseModel):
     @classmethod
     def _at_least_one_user(cls, v: list[ChatMessage]) -> list[ChatMessage]:
         if not v:
-            raise ValueError("messages 不能为空")
+            raise ValueError(error_text("messages must not be empty"))
         if not any(m.role == "user" for m in v):
-            raise ValueError("messages 中至少要有一条 role=user")
+            raise ValueError(error_text("messages must contain at least one entry with role=user"))
         return v
 
 
@@ -151,7 +152,9 @@ class ScheduleTask(BaseModel):
     """
 
     id: str = Field(description="短随机 ID，用于第三方去重")
-    trigger_at: str = Field(description="ISO 8601 含时区的首次触发时间，例如 2026-06-01T07:00:00+08:00")
+    trigger_at: str = Field(
+        description="ISO 8601 含时区的首次触发时间，例如 2026-06-01T07:00:00+08:00"
+    )
     message: str = Field(description="届时要发送给用户的消息内容")
     title: str = Field(default="", description="简短标题；可选")
     recurrence: str | None = Field(
@@ -162,7 +165,6 @@ class ScheduleTask(BaseModel):
         default="extractor",
         description="解析来源：main=主聊天模型直出，extractor=时间线小模型解析",
     )
-
 
 
 class Choice(BaseModel):
@@ -343,12 +345,12 @@ class ResponsesRequest(BaseModel):
     ) -> str | list[ResponsesInputMessage]:
         if isinstance(v, str):
             if not v.strip():
-                raise ValueError("input 字符串不能为空")
+                raise ValueError(error_text("The input string must not be empty"))
             return v
         if not v:
-            raise ValueError("input 数组不能为空")
+            raise ValueError(error_text("The input array must not be empty"))
         if not any(m.role == "user" for m in v):
-            raise ValueError("input 中至少要有一条 role=user")
+            raise ValueError(error_text("input must contain at least one entry with role=user"))
         return v
 
 

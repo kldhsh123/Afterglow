@@ -1,3 +1,5 @@
+[English development guide](https://kldhsh123.github.io/Afterglow/en/development.html) · [中文文档](https://kldhsh123.github.io/Afterglow/zh/)
+
 # 贡献指南
 
 感谢你考虑为 Afterglow 出力。这个文档帮你最快地把改动以一种**容易被合并**的形式提上来。
@@ -21,7 +23,7 @@
 
 ## 在动手之前
 
-- 项目主要是中文用户，文档、Issue、PR、commit、注释**优先中文**；变量名 / 标识符仍用英文。Ruff 已经把全角标点告警关掉。
+- 用户文档中英文同等维护，分别放在 `docs/wiki/` 与 `docs/en/`。Issue、PR 和提交说明均可使用中英文；变量名 / 标识符使用英文。新增用户提示通过语言文件提供，已有中文注释不必机械翻译。
 - 不要在 Issue / PR 里贴**真实聊天记录**或 API key。所有截图和日志请先脱敏，特别是 `u_xxx` / `wxid_xxx` / `sk-xxx` / `tvly-xxx` 这种东西。
 - 项目在 `dev` 分支推进，发布前 squash 到 `main`。**请把 PR 提到 `dev`**。
 - 如果是大改动（新增模型适配、改检索策略、动 prompt 模板等），**建议先开 Issue 讨论**，避免实现完发现方向不被接受。
@@ -99,7 +101,7 @@ Afterglow/
 │   ├── web_ui_src/      # 配置向导前端源码（构建到 ../xuwen/web_ui/static/）
 │   └── scripts/         # 离线脚本（import / analyze_persona / eval_retrieval）
 ├── frontend/            # Vue 3 时光信笺主聊天 UI（测试调试用）
-├── docs/wiki/           # 可审查的文档源，Actions 同步到 GitHub Wiki
+├── docs/                # 中英文文档源，VitePress / GitHub Pages 与 Wiki 兼容镜像
 └── .github/             # Issue 模板 / FUNDING
 ```
 
@@ -245,7 +247,7 @@ Closes #123
 - [ ] 改了 `frontend/` 跑过 `npx vue-tsc --noEmit`
 - [ ] 没有 `.env` / `.data/` / 真实聊天 JSON 跟着进 PR
 - [ ] 新功能 / bug fix 带了对应的测试
-- [ ] 新增长文档已放入 `docs/wiki/`，并更新 `Home.md` / `_Sidebar.md`
+- [ ] 新增长文档已分别放入 `docs/wiki/` 和 `docs/en/`，更新 `docs/pages.json` 与两份语言导航，文档检查和构建通过
 - [ ] 标题 + 描述讲清楚"做了什么"和"为什么"
 - [ ] 如果对应一个 Issue，PR 里写 `Closes #N`
 

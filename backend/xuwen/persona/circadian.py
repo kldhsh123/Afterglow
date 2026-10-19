@@ -23,6 +23,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from xuwen.content_i18n import content_text
 from xuwen.core.models import NormalizedMessage
 
 CIRCADIAN_PROFILE_FILENAME = "circadian_profile.json"
@@ -63,7 +64,10 @@ def compute_circadian_profile(
     if sample_size < min_samples:
         return CircadianProfile(
             sample_size=sample_size,
-            summary=f"样本不足（仅 {sample_size} 条），沿用默认作息 8-23",
+            summary=content_text(
+                "Insufficient samples ({p0} messages); using default waking hours 8-23",
+                p0=sample_size,
+            ),
         )
 
     # 累计每小时活跃度，分工作日/周末
@@ -142,12 +146,17 @@ def _summarize(awake: tuple[int, int], night_owl: float) -> str:
     start, end = awake
     range_text = f"{start:02d}:00 - {end:02d}:00"
     if night_owl >= 0.4:
-        tone = "明显夜猫子作息"
+        tone = content_text("Strong night-owl pattern")
     elif night_owl >= 0.2:
-        tone = "偏晚睡型"
+        tone = content_text("Tends to sleep late")
     else:
-        tone = "常规白天作息"
-    return f"通常清醒时段：{range_text}（{tone}，深夜活跃占比 {night_owl:.0%}）"
+        tone = content_text("Regular daytime pattern")
+    return content_text(
+        "Usual waking hours: {p0} ({p1}; late-night activity {p2:.0%})",
+        p0=range_text,
+        p1=tone,
+        p2=night_owl,
+    )
 
 
 def save_circadian_profile(profile: CircadianProfile, path: Path) -> None:

@@ -100,11 +100,11 @@ def test_life_snapshot_prompt_includes_day_plan_and_timeline(tmp_path):
 
     prompt = manager.snapshot(datetime(2026, 5, 21, 15, 0)).render_prompt_block()
 
-    assert "今天计划" in prompt
+    assert "Daily plan:" in prompt
     assert "在整理自己的东西" in prompt
-    assert "今天已经发生的状态变化" in prompt
+    assert "Recent state transitions:" in prompt
     assert "刚泡了杯水" in prompt
-    assert "历史记忆只用于语气和偏好" in prompt
+    assert "Historical memories inform tone/preferences, not today's facts." in prompt
 
 
 @pytest.mark.asyncio
@@ -218,8 +218,8 @@ async def test_life_decision_uses_analysis_habits_as_non_factual_prior(tmp_path)
 
     prompt = llm.messages[0][1]["content"]
     assert "夜间常和朋友打游戏" in prompt
-    assert "仅作候选先验，不代表今天已经发生" in prompt
-    assert "不要因为历史上常熬夜、打游戏" in prompt
+    assert "only candidate priors, not proof of today's activities" in prompt
+    assert "Never turn past habits into established present facts." in prompt
 
 
 @pytest.mark.asyncio
@@ -371,10 +371,10 @@ async def test_life_decision_prompt_treats_memory_as_tone_not_today_fact(tmp_pat
     )
 
     prompt = llm.messages[0][1]["content"]
-    assert "相关历史语气参考" in prompt
+    assert '"historical_style_reference"' in prompt
     assert "用户曾经打游戏" in prompt
-    assert "不是今天事实" in prompt
-    assert "不要据此生成" in prompt
+    assert "not proof of today's activities" in prompt
+    assert "Never turn past habits into established present facts." in prompt
 
 
 @pytest.mark.asyncio

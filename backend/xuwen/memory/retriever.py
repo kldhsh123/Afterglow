@@ -28,6 +28,7 @@ from xuwen.core.errors import RetrievalError
 from xuwen.core.metrics import MetricsRecorder
 from xuwen.core.models import RetrievalQuery, RetrievalResult, ScoredChunk
 from xuwen.core.time import now_ms, recency_weight
+from xuwen.error_i18n import error_text
 from xuwen.ingestion.embedder import EmbeddingClient
 from xuwen.memory.cross_reranker import CrossReranker
 from xuwen.memory.reranker import QueryRewriter, SemanticReranker
@@ -89,7 +90,7 @@ class HybridRetriever:
         """执行混合检索并返回融合结果。"""
         total_start = time.perf_counter()
         if not query.query_text.strip():
-            raise RetrievalError("query_text 不能为空")
+            raise RetrievalError(error_text("query_text must not be empty"))
 
         # 1) query 改写（可选）+ 向量化。第一个永远是原始 query。
         query_texts = [query.query_text]
@@ -126,7 +127,9 @@ class HybridRetriever:
                 error=type(e).__name__,
             )
             # 把 embedder 的失败包装成 RetrievalError，方便上层统一处理
-            raise RetrievalError(f"查询向量化失败：{type(e).__name__}") from e
+            raise RetrievalError(
+                error_text("Query embedding failed: {p0}", p0=type(e).__name__)
+            ) from e
 
         top_k_friend = query.top_k_friend or self.settings.friend_top_k
         top_k_pair = self.settings.response_pair_top_k
@@ -221,8 +224,7 @@ class HybridRetriever:
 
         # 3) 归一化为 ScoredChunk（RRF 前先各自 rank）
         response_pairs = [
-            _row_to_scored(r, rank=i + 1, kind="response_pair")
-            for i, r in enumerate(pair_rows)
+            _row_to_scored(r, rank=i + 1, kind="response_pair") for i, r in enumerate(pair_rows)
         ]
         friend_examples = [
             _row_to_scored(r, rank=i + 1, kind="friend") for i, r in enumerate(friend_rows)
@@ -234,9 +236,7 @@ class HybridRetriever:
             _row_to_scored(r, rank=i + 1, kind="history_image")
             for i, r in enumerate(history_image_rows)
         ]
-        recent_live = [
-            _row_to_scored(r, rank=i + 1, kind="live") for i, r in enumerate(live_rows)
-        ]
+        recent_live = [_row_to_scored(r, rank=i + 1, kind="live") for i, r in enumerate(live_rows)]
 
         # 4) RRF 融合 + boost；按下游需要的最大候选数保留池子。
         final_pool_k = final_k
@@ -335,10 +335,7 @@ async def _search_variants(
     """对一个或多个查询变体执行向量检索，并按行 ID 合并结果。"""
     if not vectors:
         return []
-    tasks = [
-        search_fn(vector, top_k, extra_filter=extra_filter)
-        for vector in vectors
-    ]
+    tasks = [search_fn(vector, top_k, extra_filter=extra_filter) for vector in vectors]
     results = await asyncio.gather(*tasks)
     return _merge_variant_rows(results)
 
@@ -417,6 +414,7 @@ def _merge_variant_rows(result_sets: list[list[dict[str, Any]]]) -> list[dict[st
                     existing[key] = value
                 existing["query_variant_hits"] = hits
                 existing["query_variant_best_rank"] = best_rank
+
     # 按 best_rank（任一 variant 内的最小排名）升序输出，让 variant-only 命中也有机会
     # 进入后续 top_k 截断；原先按"原 query 在前、追加 variant"顺序会让 query_rewrite 的
     # 命中实质被截掉，等于该功能没生效。同 rank 用 distance 兜底。
@@ -574,7 +572,7 @@ def _window_has_friend_signal(text: str, friend_names: list[str]) -> bool:
         matched_prefix = next((p for p in prefixes if line.startswith(p)), None)
         if matched_prefix is None:
             continue
-        content = line[len(matched_prefix):].strip()
+        content = line[len(matched_prefix) :].strip()
         if not _is_low_signal_text(content):
             return True
     return False
@@ -634,10 +632,7 @@ def _row_to_scored(row: dict[str, Any], *, rank: int, kind: str) -> ScoredChunk:
         score=base_score,
         rank=rank,
         timestamp_ms=int(
-            row.get("timestamp_ms")
-            or row.get("end_time_ms")
-            or row.get("created_at_ms")
-            or 0
+            row.get("timestamp_ms") or row.get("end_time_ms") or row.get("created_at_ms") or 0
         ),
         session_id=str(row.get("session_id") or ""),
         sender_name=str(row.get("sender_name") or ""),

@@ -1,3 +1,5 @@
+import { useLocale } from '@/composables/useLocale'
+const { t } = useLocale()
 import { useSettingsStore } from '@/stores/settings'
 
 /** 把相对路径拼成完整 URL，并附带 API key（如有） */
@@ -9,7 +11,9 @@ function buildUrl(path: string): string {
 
 export function authHeaders(): Record<string, string> {
   const settings = useSettingsStore()
+  const { locale } = useLocale()
   const headers: Record<string, string> = {}
+  headers['Accept-Language'] = locale.value
   if (settings.localApiKey) {
     headers['Authorization'] = `Bearer ${settings.localApiKey}`
   }
@@ -46,7 +50,7 @@ export async function jsonRequest<T>(
     const text = await resp.text()
     const prefix = text.trim().slice(0, 40)
     throw new Error(
-      `后端返回的不是 JSON：${prefix || contentType}。请检查后端 API 地址或 Vite 代理配置。`,
+      t('feedback.notJson', { detail: prefix || contentType }),
     )
   }
   const body = await resp.json()
@@ -72,7 +76,7 @@ async function readJson(resp: Response, url: string): Promise<Record<string, any
     const text = await resp.text()
     const prefix = text.trim().slice(0, 40)
     throw new Error(
-      `请求 ${url} 返回的不是 JSON：${prefix || contentType}`,
+      t('feedback.requestNotJson', { url, detail: prefix || contentType }),
     )
   }
   return (await resp.json()) as Record<string, any>

@@ -23,14 +23,23 @@ from tenacity import (
 )
 
 from xuwen.config import Settings
+from xuwen.content_i18n import content_text
 from xuwen.core.errors import XuwenError
+from xuwen.error_i18n import error_text
 from xuwen.ingestion.embedder import _resolve_endpoint
 
 logger = logging.getLogger(__name__)
 
 # 默认 mood 枚举：8 个常见聊天意图
 DEFAULT_MOOD_VOCAB: list[str] = [
-    "安慰", "调侃", "分享", "请求", "吐槽", "认真讨论", "日常", "撒娇",
+    "安慰",
+    "调侃",
+    "分享",
+    "请求",
+    "吐槽",
+    "认真讨论",
+    "日常",
+    "撒娇",
 ]
 
 
@@ -47,9 +56,9 @@ class _RetryableLabelError(LabelError):
 class ChunkLabel:
     """单个 chunk 的标签结果。"""
 
-    mood: str       # 枚举中的某项，或 "unknown"
-    topic: str      # 自由短词（≤8 字），允许空
-    importance: int # 0-3：0=无关紧要, 1=普通, 2=值得记, 3=高光时刻
+    mood: str  # 枚举中的某项，或 "unknown"
+    topic: str  # 自由短词（≤8 字），允许空
+    importance: int  # 0-3：0=无关紧要, 1=普通, 2=值得记, 3=高光时刻
 
 
 def _mood_vocab(settings: Settings) -> list[str]:
@@ -74,9 +83,7 @@ class Labeler:
         self.settings = settings
         self._owned_client = client is None
         effective_timeout = (
-            timeout_seconds
-            if timeout_seconds is not None
-            else settings.label_timeout_seconds
+            timeout_seconds if timeout_seconds is not None else settings.label_timeout_seconds
         )
         self._client = client or httpx.AsyncClient(
             timeout=httpx.Timeout(effective_timeout, connect=10.0),
@@ -125,7 +132,7 @@ class Labeler:
                 raise
             except LabelError as e:
                 logger.warning(
-                    "打标批次失败：%s（%d 条降级为 unknown）",
+                    content_text("Labeling batch failed: %s (%d entries set to unknown)"),
                     e.message,
                     len(batch),
                 )
@@ -143,7 +150,10 @@ class Labeler:
         payload = {
             "model": self.settings.label_model,
             "messages": [
-                {"role": "system", "content": "你是一个严格输出 JSON 的标签助手。"},
+                {
+                    "role": "system",
+                    "content": "You label chat messages in any language. Return strictly valid JSON only.",
+                },
                 {"role": "user", "content": prompt},
             ],
             "stream": False,
@@ -168,17 +178,17 @@ class Labeler:
     def _build_prompt(self, batch: list[str]) -> str:
         vocab = "、".join(f'"{w}"' for w in self._mood_vocab)
         lines = [
-            f"给下面 {len(batch)} 条朋友的聊天消息分别打标签。",
+            f"Label each of the following {len(batch)} friend messages.",
             "",
-            "返回严格的 JSON 对象，根字段 `labels` 是数组，与输入顺序一一对应。",
-            "每条 `labels[i]` 必须含 3 个字段：",
-            f'- mood：从这些里选一个：{vocab}；如果都不匹配返回 "unknown"',
-            "- topic：用 2-6 个汉字概括话题；想不到就返回空字符串",
-            "- importance：0-3 的整数（0=无关紧要 / 1=普通 / 2=值得记忆 / 3=高光时刻）",
+            "Return one JSON object with a labels array in exactly the input order.",
+            "Each labels[i] must have all three fields:",
+            f'- mood: choose an EXACT value from {vocab}; use "unknown" if none fits. Do not translate enum values.',
+            "- topic: a concise topic in the message’s language, at most 8 characters; empty string if unknown.",
+            "- importance: integer 0-3 (0=trivial, 1=ordinary, 2=worth remembering, 3=highlight).",
             "",
-            "不要解释、不要 markdown，只返回 JSON。",
+            "No explanation or Markdown; return JSON only.",
             "",
-            "消息列表：",
+            "Messages:",
         ]
         for i, text in enumerate(batch, 1):
             cleaned = text.replace("\n", " ").strip()
@@ -190,24 +200,33 @@ class Labeler:
             resp = await self._client.post(self._url, headers=self._headers, json=payload)
         except httpx.HTTPError as e:
             raise _RetryableLabelError(
-                f"打标网络错误：{type(e).__name__}",
+                error_text("Labeling network error: {p0}", p0=type(e).__name__),
             ) from e
 
         if resp.status_code in (429,) or 500 <= resp.status_code < 600:
-            logger.warning("打标上游 %d: %s", resp.status_code, resp.text[:300])
+            logger.warning(
+                content_text("Labeling provider %d: %s"), resp.status_code, resp.text[:300]
+            )
             raise _RetryableLabelError(
-                f"打标 API 暂不可用（HTTP {resp.status_code}）",
+                error_text(
+                    "The labeling API is temporarily unavailable (HTTP {p0})", p0=resp.status_code
+                ),
             )
         if resp.status_code >= 400:
-            logger.error("打标上游 %d: %s", resp.status_code, resp.text[:300])
+            logger.error(
+                content_text("Labeling provider %d: %s"), resp.status_code, resp.text[:300]
+            )
             raise LabelError(
-                f"打标 API 客户端错误（HTTP {resp.status_code}），请检查 LABEL_API_KEY / LABEL_MODEL",
+                error_text(
+                    "Labeling API client error (HTTP {p0}). Check LABEL_API_KEY / LABEL_MODEL",
+                    p0=resp.status_code,
+                ),
             )
         try:
             data = resp.json()
             content = data["choices"][0]["message"]["content"]
         except (ValueError, KeyError, IndexError) as e:
-            raise LabelError("打标 API 响应格式异常") from e
+            raise LabelError(error_text("Invalid labeling API response")) from e
         if isinstance(content, list):
             content = "".join(p.get("text", "") for p in content if isinstance(p, dict))
         return str(content or "")

@@ -66,10 +66,20 @@ def test_ping_open_without_token(cfg_settings) -> None:
         assert r.json()["ok"] is True
 
 
-def test_schema_requires_token(cfg_settings) -> None:
+@pytest.mark.parametrize(
+    ("language", "expected"),
+    [
+        (None, "Unauthorized. Check the access token printed in the backend startup console and enter it here."),
+        ("en", "Unauthorized. Check the access token printed in the backend startup console and enter it here."),
+        ("zh-TW", "未授权，请检查并输入后端启动时打印到控制台的访问token。"),
+    ],
+)
+def test_schema_requires_token(cfg_settings, language, expected) -> None:
     app = create_app(cfg_settings)
     with TestClient(app) as client:
-        assert client.get("/config/schema").status_code == 401
+        response = client.get("/config/schema", headers={"Accept-Language": language} if language else {})
+        assert response.status_code == 401
+        assert response.json()["error"]["message"] == expected
 
 
 def test_schema_with_valid_token(cfg_settings) -> None:
@@ -190,6 +200,42 @@ def test_values_detects_runtime_secret_without_exposing_it(cfg_settings) -> None
 
 
 # ---------- 写值 ----------
+
+
+def test_values_distinguishes_inherited_and_configured_services(cfg_settings, monkeypatch) -> None:
+    """English UI may replace runtime defaults, but must preserve explicit choices."""
+    for key in ("OPENAI_BASE_URL", "CHAT_MODEL", "LABEL_MODEL"):
+        monkeypatch.delenv(key, raising=False)
+        cfg_settings.model_fields_set.discard(key.lower())
+    app = create_app(cfg_settings)
+    token = _extract_token(app)
+    with TestClient(app) as client:
+        headers = {"Authorization": f"Bearer {token}"}
+        values = client.get("/config/values", headers=headers).json()["values"]
+        assert values["OPENAI_BASE_URL"]["set"] is True
+        assert values["OPENAI_BASE_URL"]["configured"] is False
+        assert values["CHAT_MODEL"]["configured"] is False
+        assert values["EMBEDDING_DIM"]["configured"] is True
+        cfg_settings.chat_model = "my-existing-model"
+        values = client.get("/config/values", headers=headers).json()["values"]
+        assert values["CHAT_MODEL"]["configured"] is True
+        assert values["CHAT_MODEL"]["value"] == "my-existing-model"
+        # Even explicitly choosing the runtime default is a configured choice.
+        cfg_settings.openai_base_url = Settings.model_fields["openai_base_url"].default
+        values = client.get("/config/values", headers=headers).json()["values"]
+        assert values["OPENAI_BASE_URL"]["configured"] is True
+
+
+def test_values_preserves_file_and_environment_choices(cfg_settings, tmp_path, monkeypatch) -> None:
+    (tmp_path / ".env").write_text("CHAT_MODEL=gpt-4o-mini\n", encoding="utf-8")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    app = create_app(cfg_settings)
+    token = _extract_token(app)
+    with TestClient(app) as client:
+        headers = {"Authorization": f"Bearer {token}"}
+        values = client.get("/config/values", headers=headers).json()["values"]
+        assert values["CHAT_MODEL"]["configured"] is True
+        assert values["OPENAI_BASE_URL"]["configured"] is True
 
 
 def test_put_values_creates_env_from_example(cfg_settings, tmp_path) -> None:

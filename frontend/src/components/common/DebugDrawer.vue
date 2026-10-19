@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useLocale } from '@/composables/useLocale'
+const { t } = useLocale()
 import { computed, defineComponent, h, ref, watch } from 'vue'
 import { requestProactiveTopic } from '@/api/chat'
 import { getDebugConfig, getDebugStats } from '@/api/extra'
@@ -70,9 +72,9 @@ async function refresh() {
 function debugEndpointErrorMessage(e: unknown): string {
   const message = e instanceof Error ? e.message : String(e)
   if (/404|not found/i.test(message)) {
-    return '调试端点未启用。请在 .env 设置 DEBUG_ENDPOINTS_ENABLED=true 并重启后端。'
+    return t('remaining.debugEndpointsAreDisabledSetDebug')
   }
-  return message
+  return `${t('errors.debugRequestFailed')}: ${message}`
 }
 
 async function runSearch() {
@@ -95,7 +97,7 @@ async function runSearch() {
     searchResult.value = await searchMemory(q, 12, chat.conversationId)
     await refresh()
   } catch (e) {
-    errorMsg.value = (e as Error).message
+    errorMsg.value = `${t('errors.debugRequestFailed')}: ${(e as Error).message}`
   } finally {
     searchLoading.value = false
   }
@@ -111,7 +113,7 @@ async function runProactive() {
     })
     await refresh()
   } catch (e) {
-    errorMsg.value = (e as Error).message
+    errorMsg.value = `${t('errors.operationFailed')}: ${(e as Error).message}`
   } finally {
     proactiveLoading.value = false
   }
@@ -228,15 +230,15 @@ const MemoryGroup = defineComponent({
       h('div', { class: 'space-y-2' }, [
         h('div', { class: 'text-sm font-medium' }, `${props.title} (${props.items.length})`),
         props.items.length === 0
-          ? h('div', { class: 'text-xs text-ink-soft dark:text-night-text-soft' }, '无结果')
+          ? h('div', { class: 'text-xs text-ink-soft dark:text-night-text-soft' }, t('remaining.noResults'))
           : h(
               'div',
               { class: 'space-y-2' },
               props.items.slice(0, 8).map((item) =>
                 h('div', { class: 'debug-hit' }, [
                   h('div', { class: 'flex items-center justify-between gap-2 text-xs' }, [
-                    h('span', { class: 'font-medium' }, `${item.kind} · rank ${item.rank}`),
-                    h('span', { class: 'text-ink-soft dark:text-night-text-soft' }, `score ${item.score.toFixed(4)}`),
+                    h('span', { class: 'font-medium' }, `${item.kind} · ${t('debugMetrics.rank', { rank: item.rank })}`),
+                    h('span', { class: 'text-ink-soft dark:text-night-text-soft' }, t('debugMetrics.score', { score: item.score.toFixed(4) })),
                   ]),
                   h('div', { class: 'text-xs text-ink-soft dark:text-night-text-soft' }, `${item.source || 'history'} · ${item.chunk_id}`),
                   item.image_sha
@@ -260,7 +262,7 @@ const LogList = defineComponent({
       h('div', { class: 'space-y-2' }, [
         h('div', { class: 'text-sm font-medium' }, `${props.title} (${props.items.length})`),
         props.items.length === 0
-          ? h('div', { class: 'text-xs text-ink-soft dark:text-night-text-soft' }, '暂无记录')
+          ? h('div', { class: 'text-xs text-ink-soft dark:text-night-text-soft' }, t('remaining.noRecords'))
           : h(
               'div',
               { class: 'space-y-1' },
@@ -268,7 +270,7 @@ const LogList = defineComponent({
                 h('div', { class: 'debug-log' }, [
                   h('span', { class: item.status === 'error' ? 'text-warning' : '' }, `${item.op}:${item.table}`),
                   h('span', null, `${item.latency_ms}ms`),
-                  h('span', null, `rows ${item.rows}`),
+                  h('span', null, t('debugMetrics.rowCount', { count: item.rows })),
                   item.detail ? h('span', { class: 'text-ink-soft dark:text-night-text-soft' }, item.detail) : null,
                 ]),
               ),
@@ -288,7 +290,7 @@ const ModelChainList = defineComponent({
     return () =>
       h('div', { class: 'space-y-2' }, [
         props.items.length === 0
-          ? h('div', { class: 'text-xs text-ink-soft dark:text-night-text-soft' }, '暂无模型请求')
+          ? h('div', { class: 'text-xs text-ink-soft dark:text-night-text-soft' }, t('remaining.noModelRequests'))
           : h(
               'div',
               { class: 'space-y-2' },
@@ -296,27 +298,27 @@ const ModelChainList = defineComponent({
                 return h('div', { class: 'debug-hit space-y-1' }, [
                     h('div', { class: 'flex items-center justify-between gap-2 text-xs' }, [
                       h('span', { class: item.status !== 'ok' ? 'text-warning font-medium' : 'font-medium' }, `${item.stage} · ${item.model}`),
-                      h('span', { class: 'text-ink-soft dark:text-night-text-soft' }, `${item.latency_ms}ms · attempt ${item.attempt}`),
+                      h('span', { class: 'text-ink-soft dark:text-night-text-soft' }, `${item.latency_ms}ms · ${t('debugMetrics.attempt', { count: item.attempt })}`),
                     ]),
                     h('div', { class: 'grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1 text-xs' }, [
-                      h('span', { class: 'text-ink-soft dark:text-night-text-soft' }, 'trace'),
+                      h('span', { class: 'text-ink-soft dark:text-night-text-soft' }, t('debugMetrics.trace')),
                       h('span', { class: 'truncate' }, item.trace_id || '-'),
-                      h('span', { class: 'text-ink-soft dark:text-night-text-soft' }, 'url'),
+                      h('span', { class: 'text-ink-soft dark:text-night-text-soft' }, t('debugMetrics.url')),
                       h('span', { class: 'truncate' }, item.url),
-                      h('span', { class: 'text-ink-soft dark:text-night-text-soft' }, 'status'),
-                      h('span', null, `${item.status}${item.status_code ? ` · HTTP ${item.status_code}` : ''}${item.stream ? ' · stream' : ''}`),
+                      h('span', { class: 'text-ink-soft dark:text-night-text-soft' }, t('debugMetrics.status')),
+                      h('span', null, `${item.status}${item.status_code ? ` · HTTP ${item.status_code}` : ''}${item.stream ? ` · ${t('debugMetrics.stream')}` : ''}`),
                       item.upstream_request_id
                         ? [
-                            h('span', { class: 'text-ink-soft dark:text-night-text-soft' }, 'upstream'),
+                            h('span', { class: 'text-ink-soft dark:text-night-text-soft' }, t('debugMetrics.upstream')),
                             h('span', { class: 'truncate' }, item.upstream_request_id),
                           ]
                         : null,
                     ]),
                     item.error ? h('div', { class: 'text-xs text-warning' }, item.error) : null,
                     h('details', { class: 'text-xs' }, [
-                      h('summary', { class: 'cursor-pointer text-ink-soft dark:text-night-text-soft' }, 'request / response 摘要'),
+                      h('summary', { class: 'cursor-pointer text-ink-soft dark:text-night-text-soft' }, t('remaining.requestResponseSummary')),
                       h('div', { class: 'mt-2 flex items-center justify-between gap-2' }, [
-                        h('span', { class: 'text-ink-soft dark:text-night-text-soft' }, '摘要字段'),
+                        h('span', { class: 'text-ink-soft dark:text-night-text-soft' }, t('remaining.summaryFields')),
                         h(
                           'button',
                           {
@@ -326,7 +328,7 @@ const ModelChainList = defineComponent({
                               fullRecord.value = item
                             },
                           },
-                          '查看完整字段',
+                          t('remaining.viewFullFields'),
                         ),
                       ]),
                       h('pre', { class: 'debug-pre mt-2' }, JSON.stringify({ request: item.request, response: item.response }, null, 2)),
@@ -338,7 +340,7 @@ const ModelChainList = defineComponent({
           ? h('div', { class: 'fixed inset-0 z-[60] p-4 sm:p-6' }, [
               h('button', {
                 class: 'absolute inset-0 bg-ink/30 dark:bg-black/60',
-                'aria-label': '关闭完整字段窗口',
+                'aria-label': t('remaining.closeFullFieldsWindow'),
                 onClick: () => {
                   fullRecord.value = null
                 },
@@ -353,7 +355,7 @@ const ModelChainList = defineComponent({
                 [
                   h('header', { class: 'flex items-center justify-between gap-3 border-b border-ink/10 dark:border-night-text/10 px-4 py-3' }, [
                     h('div', { class: 'min-w-0' }, [
-                      h('div', { class: 'text-sm font-medium' }, '模型请求完整字段'),
+                      h('div', { class: 'text-sm font-medium' }, t('remaining.fullModelRequestFields')),
                       h('div', { class: 'truncate text-xs text-ink-soft dark:text-night-text-soft' }, `${fullRecord.value.stage} · ${fullRecord.value.model} · trace ${fullRecord.value.trace_id || '-'}`),
                     ]),
                     h(
@@ -361,7 +363,7 @@ const ModelChainList = defineComponent({
                       {
                         class: 'debug-icon',
                         type: 'button',
-                        title: '关闭',
+                        title: t('remaining.close'),
                         onClick: () => {
                           fullRecord.value = null
                         },
@@ -370,8 +372,8 @@ const ModelChainList = defineComponent({
                     ),
                   ]),
                   props.fullPayloadsEnabled
-                    ? h('div', { class: 'border-b border-ink/10 dark:border-night-text/10 px-4 py-2 text-xs text-ink-soft dark:text-night-text-soft' }, '完整正文记录已开启')
-                    : h('div', { class: 'border-b border-ink/10 dark:border-night-text/10 px-4 py-2 text-xs text-warning' }, '完整正文记录未开启；如需查看完整 prompt/response，请设置 DEBUG_MODEL_FULL_PAYLOADS_ENABLED=true 并重启后端。'),
+                    ? h('div', { class: 'border-b border-ink/10 dark:border-night-text/10 px-4 py-2 text-xs text-ink-soft dark:text-night-text-soft' }, t('remaining.fullPayloadLoggingIsEnabled'))
+                    : h('div', { class: 'border-b border-ink/10 dark:border-night-text/10 px-4 py-2 text-xs text-warning' }, t('remaining.fullPayloadLoggingIsDisabledTo')),
                   h('div', { class: 'min-h-0 flex-1 overflow-auto p-4' }, [
                     h('pre', { class: 'debug-pre min-h-full whitespace-pre-wrap break-words text-xs' }, JSON.stringify(fullRecord.value, null, 2)),
                   ]),
@@ -387,7 +389,7 @@ const ModelChainList = defineComponent({
 <template>
   <Teleport to="body">
     <div v-if="open" class="fixed inset-0 z-50">
-      <button class="absolute inset-0 bg-ink/20 dark:bg-black/40" aria-label="关闭调试面板" @click="close" />
+      <button class="absolute inset-0 bg-ink/20 dark:bg-black/40" :aria-label="t('remaining.closeDebugPanel')" @click="close" />
       <aside
         class="absolute right-0 top-0 h-full w-full max-w-2xl overflow-y-auto
                bg-paper dark:bg-night-bg text-ink dark:text-night-text
@@ -396,136 +398,136 @@ const ModelChainList = defineComponent({
         <header class="sticky top-0 z-10 bg-paper/95 dark:bg-night-bg/95 backdrop-blur px-5 py-4 border-b border-ink/10 dark:border-night-text/10">
           <div class="flex items-center justify-between gap-3">
             <div>
-              <h2 class="text-base font-medium">调试面板</h2>
-              <p class="text-xs text-ink-soft dark:text-night-text-soft">conversation: {{ chat.conversationId }}</p>
+              <h2 class="text-base font-medium">{{ t('remaining.debugPanel') }}</h2>
+              <p class="text-xs text-ink-soft dark:text-night-text-soft">{{ t('debugMetrics.conversation') }}: {{ chat.conversationId }}</p>
             </div>
             <div class="flex items-center gap-1">
-              <button class="debug-icon" title="刷新运行时统计" :disabled="loading" @click="refresh">
+              <button class="debug-icon" :title="t('remaining.refreshRuntimeMetrics')" :disabled="loading" @click="refresh">
                 <RefreshCw :size="17" :class="loading ? 'animate-spin' : ''" />
               </button>
-              <button class="debug-icon" title="复制诊断包" @click="copyDiagnosticPack">
+              <button class="debug-icon" :title="t('remaining.copyDiagnosticBundle')" @click="copyDiagnosticPack">
                 <Copy :size="17" />
               </button>
-              <button class="debug-icon" title="关闭" @click="close">
+              <button class="debug-icon" :title="t('remaining.close')" @click="close">
                 <X :size="18" />
               </button>
             </div>
           </div>
           <div class="debug-notice mt-3">
-            调试端点默认关闭；需要查看运行时统计和模型链路时，设置
-            <code>DEBUG_ENDPOINTS_ENABLED=true</code> 并重启后端。
+            {{ t('remaining.debugEndpointsAreDisabledByDefault') }}
+            <code>DEBUG_ENDPOINTS_ENABLED=true</code> {{ t('remaining.andRestartTheBackend') }}
           </div>
-          <p v-if="copied" class="mt-2 text-xs text-accent dark:text-night-accent">诊断包已复制</p>
+          <p v-if="copied" class="mt-2 text-xs text-accent dark:text-night-accent">{{ t('remaining.diagnosticBundleCopied') }}</p>
           <p v-if="errorMsg" class="mt-2 text-xs text-warning">{{ errorMsg }}</p>
         </header>
 
         <main class="p-5 space-y-5">
           <section class="debug-section">
-            <div class="debug-title"><Search :size="16" />检索调试</div>
+            <div class="debug-title"><Search :size="16" />{{ t('remaining.retrievalDebugging') }}</div>
             <textarea
               v-model="query"
               class="debug-textarea"
               rows="3"
-              placeholder="输入要调试的检索 query"
+              :placeholder="t('remaining.enterARetrievalQueryToDebug')"
             />
             <button class="debug-button" :disabled="searchLoading" @click="runSearch">
-              {{ searchLoading ? '检索中...' : '运行 /memory/search' }}
+              {{ searchLoading ? t('remaining.searching') : t('remaining.runMemorySearch') }}
             </button>
             <div v-if="searchResult" class="space-y-3">
               <p v-if="searchResult.trace_id" class="text-xs text-ink-soft dark:text-night-text-soft">
                 trace_id: {{ searchResult.trace_id }}
               </p>
-              <MemoryGroup title="融合结果 fused" :items="searchResult.fused" />
-              <MemoryGroup title="问答响应 response_pairs" :items="searchResult.response_pairs || []" />
-              <MemoryGroup title="朋友单条 friend_examples" :items="searchResult.friend_examples" />
-              <MemoryGroup title="对话窗口 dialogue_windows" :items="searchResult.dialogue_windows" />
-              <MemoryGroup title="历史图片 history_images" :items="searchResult.history_images || []" />
-              <MemoryGroup title="最近对话 recent_live（不参与 fused）" :items="searchResult.recent_live || []" />
+              <MemoryGroup :title="t('remaining.fusedResults')" :items="searchResult.fused" />
+              <MemoryGroup :title="t('remaining.responsePairs')" :items="searchResult.response_pairs || []" />
+              <MemoryGroup :title="t('remaining.friendExamples')" :items="searchResult.friend_examples" />
+              <MemoryGroup :title="t('remaining.dialogueWindows')" :items="searchResult.dialogue_windows" />
+              <MemoryGroup :title="t('remaining.historyImages')" :items="searchResult.history_images || []" />
+              <MemoryGroup :title="t('remaining.recentLiveMessagesExcludedFromFused')" :items="searchResult.recent_live || []" />
             </div>
           </section>
 
           <section class="debug-section">
-            <div class="debug-title"><Database :size="16" />数据库性能</div>
+            <div class="debug-title"><Database :size="16" />{{ t('remaining.databasePerformance') }}</div>
             <div class="grid grid-cols-2 gap-2">
               <div v-for="(item, key) in dbByOperation" :key="key" class="debug-metric">
                 <div class="font-medium truncate">{{ key }}</div>
                 <div class="text-xs text-ink-soft dark:text-night-text-soft">
-                  count {{ item.count }} · rows {{ item.rows }} · err {{ Math.round(item.error_rate * 100) }}%
+                  {{ t('debugMetrics.count') }} {{ item.count }} · {{ t('debugMetrics.rows') }} {{ item.rows }} · {{ t('debugMetrics.errorRate') }} {{ Math.round(item.error_rate * 100) }}%
                 </div>
                 <div class="text-xs">
-                  avg {{ item.avg_latency_ms }}ms · p95 {{ item.p95_latency_ms }}ms · max {{ item.max_latency_ms }}ms
+                  {{ t('debugMetrics.average') }} {{ item.avg_latency_ms }}ms · p95 {{ item.p95_latency_ms }}ms · {{ t('debugMetrics.maximum') }} {{ item.max_latency_ms }}ms
                 </div>
               </div>
             </div>
-            <LogList title="最慢 DB 操作" :items="dbSlowest" />
-            <LogList title="最近 DB 操作" :items="dbRecent" />
+            <LogList :title="t('remaining.slowestDbOperations')" :items="dbSlowest" />
+            <LogList :title="t('remaining.recentDbOperations')" :items="dbRecent" />
           </section>
 
           <section class="debug-section">
-            <div class="debug-title"><Activity :size="16" />模型与链路耗时</div>
+            <div class="debug-title"><Activity :size="16" />{{ t('remaining.modelAndPipelineTiming') }}</div>
             <div class="grid grid-cols-2 gap-2">
               <div v-for="(item, key) in calls" :key="key" class="debug-metric">
                 <div class="font-medium truncate">{{ key }}</div>
                 <div class="text-xs text-ink-soft dark:text-night-text-soft">
-                  count {{ item.count }} · err {{ Math.round(item.error_rate * 100) }}%
+                  {{ t('debugMetrics.count') }} {{ item.count }} · {{ t('debugMetrics.errorRate') }} {{ Math.round(item.error_rate * 100) }}%
                 </div>
                 <div class="text-xs">
-                  avg {{ item.avg_latency_ms }}ms · p95 {{ item.p95_latency_ms }}ms
+                  {{ t('debugMetrics.average') }} {{ item.avg_latency_ms }}ms · p95 {{ item.p95_latency_ms }}ms
                 </div>
               </div>
             </div>
           </section>
 
           <section class="debug-section">
-            <div class="debug-title"><Activity :size="16" />模型请求完整链路</div>
+            <div class="debug-title"><Activity :size="16" />{{ t('remaining.fullModelRequestTrace') }}</div>
             <ModelChainList :items="modelChain" :full-payloads-enabled="modelFullPayloadsEnabled" />
           </section>
 
           <section class="debug-section">
-            <div class="debug-title"><Activity :size="16" />AI生活状态与决策</div>
+            <div class="debug-title"><Activity :size="16" />{{ t('remaining.aiLifeStateAndDecisions') }}</div>
             <div class="grid grid-cols-2 gap-2">
               <div class="debug-metric">
-                <div class="font-medium">当前状态</div>
+                <div class="font-medium">{{ t('remaining.currentState') }}</div>
                 <div class="text-xs text-ink-soft dark:text-night-text-soft">
                   {{ life.snapshot?.date || '-' }} · {{ life.snapshot?.time_slot || '-' }}
                 </div>
                 <div class="text-sm">{{ life.snapshot?.current_activity || '-' }}</div>
               </div>
               <div class="debug-metric">
-                <div class="font-medium">可用与延迟</div>
+                <div class="font-medium">{{ t('remaining.availabilityAndDelay') }}</div>
                 <div class="text-xs text-ink-soft dark:text-night-text-soft">
-                  {{ life.snapshot?.availability || '-' }} · delay {{ life.snapshot?.reply_delay_seconds ?? 0 }}s
+                  {{ life.snapshot?.availability || '-' }} · {{ t('debugMetrics.delay') }} {{ life.snapshot?.reply_delay_seconds ?? 0 }}s
                 </div>
-                <div class="text-sm">{{ life.snapshot?.reply_delay_reason || '无延迟原因' }}</div>
+                <div class="text-sm">{{ life.snapshot?.reply_delay_reason || t('remaining.noDelayReason') }}</div>
               </div>
               <div class="debug-metric">
-                <div class="font-medium">吃喝 / 心情</div>
+                <div class="font-medium">{{ t('remaining.foodMood') }}</div>
                 <div class="text-xs text-ink-soft dark:text-night-text-soft">
                   {{ life.snapshot?.recent_meal || '-' }}
                 </div>
                 <div class="text-sm">{{ life.snapshot?.mood || '-' }}</div>
               </div>
               <div class="debug-metric">
-                <div class="font-medium">下一次更新</div>
+                <div class="font-medium">{{ t('remaining.nextUpdate') }}</div>
                 <div class="text-xs text-ink-soft dark:text-night-text-soft">
-                  event {{ life.snapshot?.current_event_id || '-' }}
+                  {{ t('debugMetrics.event') }} {{ life.snapshot?.current_event_id || '-' }}
                 </div>
                 <div class="text-sm">{{ life.snapshot?.next_update_at || '-' }}</div>
               </div>
             </div>
             <div class="debug-metric">
-              <div class="font-medium">可自然展开的话题</div>
+              <div class="font-medium">{{ t('remaining.suggestedConversationTopics') }}</div>
               <div class="text-sm">{{ life.snapshot?.topic_seed || '-' }}</div>
             </div>
             <div class="text-xs text-ink-soft dark:text-night-text-soft">
-              state: {{ life.state_file || '-' }} · plan_by_model: {{ life.plan_decided_by_model ? 'yes' : 'no' }}
+              {{ t('debugMetrics.stateFile') }}: {{ life.state_file || '-' }} · {{ t('debugMetrics.modelPlan') }}: {{ life.plan_decided_by_model ? t('debugMetrics.yes') : t('debugMetrics.no') }}
             </div>
             <div class="debug-metric space-y-2">
               <div class="flex items-center justify-between gap-3">
                 <div>
-                  <div class="font-medium">本地强制回复延迟（调试）</div>
+                  <div class="font-medium">{{ t('remaining.overrideReplyDelayLocallyDebug') }}</div>
                   <div class="text-xs text-ink-soft dark:text-night-text-soft">
-                    勾选后忽略后端 reply_delay_seconds，用下方秒数强制延迟；仅本地生效，不改后端决策。
+                    {{ t('remaining.overridesTheBackendReplyDelaySeconds') }}
                   </div>
                 </div>
                 <label class="inline-flex items-center gap-2 text-xs whitespace-nowrap">
@@ -534,7 +536,7 @@ const ModelChainList = defineComponent({
                     :checked="settings.debugForceReplyDelay"
                     @change="(e) => (settings.debugForceReplyDelay = (e.target as HTMLInputElement).checked)"
                   />
-                  启用覆盖
+                  {{ t('remaining.enableOverride') }}
                 </label>
               </div>
               <div class="flex items-center gap-2">
@@ -551,25 +553,25 @@ const ModelChainList = defineComponent({
                     settings.debugReplyDelaySeconds = Number.isFinite(v) ? Math.max(0, Math.min(120, v)) : 0
                   }"
                 />
-                <span class="text-xs text-ink-soft dark:text-night-text-soft">秒（0-120，前端硬上限 120s）</span>
+                <span class="text-xs text-ink-soft dark:text-night-text-soft">{{ t('remaining.seconds0120FrontendLimit120S') }}</span>
               </div>
             </div>
             <details class="text-xs">
-              <summary class="cursor-pointer text-ink-soft dark:text-night-text-soft">本轮/上一轮模型决策 current</summary>
+              <summary class="cursor-pointer text-ink-soft dark:text-night-text-soft">{{ t('remaining.currentPreviousModelDecision') }}</summary>
               <pre class="debug-pre mt-2">{{ JSON.stringify(life.model_decision || {}, null, 2) }}</pre>
             </details>
             <details class="text-xs">
-              <summary class="cursor-pointer text-ink-soft dark:text-night-text-soft">今日计划 daily_plan</summary>
+              <summary class="cursor-pointer text-ink-soft dark:text-night-text-soft">{{ t('remaining.dailyPlan') }}</summary>
               <pre class="debug-pre mt-2">{{ JSON.stringify(life.daily_plan || [], null, 2) }}</pre>
             </details>
             <details class="text-xs">
-              <summary class="cursor-pointer text-ink-soft dark:text-night-text-soft">最近时间线 timeline</summary>
+              <summary class="cursor-pointer text-ink-soft dark:text-night-text-soft">{{ t('remaining.recentTimeline') }}</summary>
               <pre class="debug-pre mt-2">{{ JSON.stringify(life.recent_timeline || [], null, 2) }}</pre>
             </details>
           </section>
 
           <section class="debug-section">
-            <div class="debug-title">最近消息 Trace</div>
+            <div class="debug-title">{{ t('remaining.recentMessageTraces') }}</div>
             <div class="space-y-1">
               <div
                 v-for="m in chat.messages.slice(-8)"
@@ -584,20 +586,20 @@ const ModelChainList = defineComponent({
           </section>
 
           <section class="debug-section">
-            <div class="debug-title"><MessageSquareText :size="16" />主动话题测试</div>
+            <div class="debug-title"><MessageSquareText :size="16" />{{ t('remaining.proactiveTopicTest') }}</div>
             <div class="grid sm:grid-cols-3 gap-2">
-              <input v-model="reason" class="debug-input" placeholder="reason" />
-              <input v-model="topicHint" class="debug-input sm:col-span-2" placeholder="topic_hint" />
+              <input v-model="reason" class="debug-input" :placeholder="t('debugMetrics.reason')" />
+              <input v-model="topicHint" class="debug-input sm:col-span-2" :placeholder="t('debugMetrics.topicHint')" />
             </div>
-            <textarea v-model="privateContext" class="debug-textarea" rows="2" placeholder="private_context，不作为用户消息写入历史" />
+            <textarea v-model="privateContext" class="debug-textarea" rows="2" :placeholder="t('remaining.privateContextExcludedFromUserMessage')" />
             <button class="debug-button" :disabled="proactiveLoading" @click="runProactive">
-              {{ proactiveLoading ? '生成中...' : '调用 /v1/companion/proactive' }}
+              {{ proactiveLoading ? t('remaining.generating') : t('remaining.callV1CompanionProactive') }}
             </button>
             <pre v-if="proactiveResult" class="debug-pre">{{ JSON.stringify(proactiveResult, null, 2) }}</pre>
           </section>
 
           <section class="debug-section">
-            <div class="debug-title">运行配置快照</div>
+            <div class="debug-title">{{ t('remaining.runtimeConfigurationSnapshot') }}</div>
             <pre class="debug-pre max-h-80">{{ JSON.stringify(config, null, 2) }}</pre>
           </section>
         </main>

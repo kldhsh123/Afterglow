@@ -26,7 +26,10 @@ from xuwen.analysis.models import (
 from xuwen.analysis.storage import LIFE_CACHE_VERSION
 from xuwen.chat_api.llm_client import GenerationParams, LLMClient
 from xuwen.config import Settings
+from xuwen.content_i18n import content_text
 from xuwen.core.errors import LLMError
+from xuwen.error_i18n import error_text
+from xuwen.prompt_language import output_language, structured_output_instruction
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +49,14 @@ class AnalysisBlockOutputError(ValueError):
         self.stage = stage
         self.errors = errors
         self.raw_outputs = raw_outputs
-        detail = errors[-1] if errors else "未知解析错误"
-        super().__init__(f"分析块 {block_id} 多次返回无效 JSON；最后错误：{detail}")
+        detail = errors[-1] if errors else error_text("Unknown parsing error")
+        super().__init__(
+            error_text(
+                "Analysis block {block} repeatedly returned invalid JSON; last error: {reason}",
+                block=block_id,
+                reason=detail,
+            )
+        )
 
 
 class AnalysisMapper:
@@ -92,7 +101,11 @@ class AnalysisMapper:
         messages = [
             {
                 "role": "system",
-                "content": "你分析聊天记录，只能依据给定文字，严格输出 JSON，不补写事实。",
+                "content": (
+                    "Analyze chat records using only the supplied text. Return strict JSON; never invent facts."
+                    + "\n"
+                    + structured_output_instruction()
+                ),
             },
             {"role": "user", "content": self._map_prompt(block, experimental=experimental)},
         ]
@@ -130,9 +143,9 @@ class AnalysisMapper:
                     {
                         "role": "user",
                         "content": (
-                            f"上一个输出无法解析：{type(exc).__name__}: {exc}。"
-                            "重新生成完整且更精简的 JSON。不要复述解释；缩短 claim、summary 和 quote，"
-                            "严格遵守各数组数量上限，根字段和条目字段不得省略。"
+                            f"The previous output could not be parsed: {type(exc).__name__}: {exc}. "
+                            "Return complete, more concise JSON only. Shorten claim, summary and quote; "
+                            "respect array limits and retain all required root and item fields."
                         ),
                     }
                 )
@@ -151,8 +164,13 @@ class AnalysisMapper:
             {
                 "role": "system",
                 "content": (
-                    "你从私有聊天记录中提取目标角色本人的生活状态候选。"
-                    "只依据输入，严格输出 JSON，不把用户或双方互动改写成目标角色习惯。"
+                    (
+                        "Extract candidate daily states of the target character from private chat records. Use only "
+                        "the input and return strict JSON. Never recast the user's routines or joint interactions as "
+                        "the character's own habits."
+                    )
+                    + "\n"
+                    + structured_output_instruction()
                 ),
             },
             {"role": "user", "content": self._life_prompt(block)},
@@ -169,11 +187,7 @@ class AnalysisMapper:
                         max_tokens=self.settings.analysis_max_tokens,
                     ),
                     model=self.settings.resolved_analysis_model,
-                    stage=(
-                        "analysis.life.map"
-                        if attempt == 0
-                        else "analysis.life.map.repair"
-                    ),
+                    stage=("analysis.life.map" if attempt == 0 else "analysis.life.map.repair"),
                 )
             except LLMError as exc:
                 if _is_model_refusal_error(exc):
@@ -188,8 +202,13 @@ class AnalysisMapper:
                 raw_habits = obj.get("life_habits")
                 habits = _validated_items(raw_habits, LifeHabit)
                 if isinstance(raw_habits, list) and raw_habits and not habits:
-                    raise ValueError("life_habits 有内容，但所有条目都不符合结构契约")
+                    raise ValueError(
+                        error_text(
+                            "life_habits is populated, but none of its entries match the schema"
+                        )
+                    )
                 return BlockAnalysis(
+                    output_language=output_language(),
                     block_id=block.block_id,
                     start_time_ms=block.start_time_ms,
                     end_time_ms=block.end_time_ms,
@@ -205,8 +224,7 @@ class AnalysisMapper:
                     {
                         "role": "user",
                         "content": (
-                            "上一个输出无法解析。只返回完整 JSON："
-                            '{"life_habits": [...]}。缩短文字并遵守最多 10 条。'
+                            'The previous output could not be parsed. Return only complete JSON: {"life_habits": [...]}. Shorten text and include at most 10 entries.'
                         ),
                     }
                 )
@@ -225,9 +243,14 @@ class AnalysisMapper:
             {
                 "role": "system",
                 "content": (
-                    "你为最终大模型收集实验性人格候选证据，严格输出 JSON。"
-                    "允许提出性格、依恋、隐瞒、操控意图和精神健康相关假设，"
-                    "但单个聊天块只能形成候选，必须保留不确定性和替代解释。"
+                    (
+                        "Collect candidate evidence for experimental personality hypotheses for a final model. Return"
+                        " strict JSON. Personality, attachment, concealment, manipulation intent and mental-health "
+                        "hypotheses are permitted, but a single block supports only candidates; retain uncertainty "
+                        "and alternative explanations."
+                    )
+                    + "\n"
+                    + structured_output_instruction()
                 ),
             },
             {"role": "user", "content": self._experimental_prompt(block)},
@@ -268,7 +291,7 @@ class AnalysisMapper:
                 messages.append(
                     {
                         "role": "user",
-                        "content": "上一个输出无法解析。只返回包含 experimental_signals 数组的 JSON。",
+                        "content": "The previous output could not be parsed. Return only a JSON object containing an experimental_signals array.",
                     }
                 )
                 if _looks_like_model_refusal(raw):
@@ -284,16 +307,23 @@ class AnalysisMapper:
         """超大库的第一级归并；失败由上层回退为直接拼接。"""
         payload = [_compact_result(result) for result in results]
         prompt = (
-            f"归并 {month} 的块级分析。合并重复事件和重复观察，保留证据、反例与替代解释。"
-            "观察只能在 subject 相同且语义重复时合并，不得把 self/both/relationship "
-            "改写成 friend。"
-            "返回与 Map 相同字段的 JSON 对象：events、personality_observations、"
-            "relationship_signals、life_habits、experimental_signals。\n输入：\n"
+            f"Merge block analyses for {month}. Deduplicate events and observations while preserving "
+            "evidence, counterexamples and alternative explanations. Merge observations only when "
+            "their subjects match and their meanings overlap; never change self/both/relationship "
+            "into friend. Return the Map schema with events, personality_observations, "
+            "relationship_signals, life_habits and experimental_signals.\nInput:\n"
             + json.dumps(payload, ensure_ascii=False)
         )
         raw = await self.llm.complete_chat(
             [
-                {"role": "system", "content": "你是严格输出 JSON 的归并器。"},
+                {
+                    "role": "system",
+                    "content": (
+                        "Merge structured analysis, returning strict JSON."
+                        + "\n"
+                        + structured_output_instruction()
+                    ),
+                },
                 {"role": "user", "content": prompt},
             ],
             GenerationParams(temperature=0.1, max_tokens=self.settings.analysis_max_tokens),
@@ -327,15 +357,23 @@ class AnalysisMapper:
         ]
         raw = await self.final_llm.complete_chat(
             [
-                {"role": "system", "content": "你只依据事件时间线划分关系阶段，严格输出 JSON。"},
+                {
+                    "role": "system",
+                    "content": (
+                        "Divide the relationship into phases based only on the supplied event timeline. Return strict JSON."
+                        + "\n"
+                        + structured_output_instruction()
+                    ),
+                },
                 {
                     "role": "user",
                     "content": (
-                        "将事件划分成连续、不重叠的关系阶段。阶段名应描述变化，例如相识期、升温期、"
-                        "稳定期、疏远期；不要为了凑数强行分段。返回 "
-                        "{\"phases\":[{\"title\":\"阶段名\",\"start_date\":\"YYYY-MM-DD\","
-                        "\"end_date\":\"YYYY-MM-DD\",\"summary\":\"概括\","
-                        "\"event_ids\":[\"evt-id\"]}]}。\n"
+                        (
+                            "Group events into consecutive, non-overlapping relationship phases. Name each phase for its "
+                            "change, such as meeting, growing closer, stability or distance. Do not force extra phases. "
+                            'Return {"phases":[{"title":"phase name","start_date":"YYYY-MM-DD","end_date":"YYYY-MM-'
+                            'DD","summary":"overview","event_ids":["evt-id"]}]}.\n'
+                        )
                         + json.dumps(compact, ensure_ascii=False)
                     ),
                 },
@@ -347,7 +385,7 @@ class AnalysisMapper:
         obj = _parse_json_object(raw)
         phases = obj.get("phases", [])
         if not isinstance(phases, list):
-            raise ValueError("阶段输出缺少 phases 数组")
+            raise ValueError(error_text("The phase output is missing the phases array"))
         valid_ids = {event.event_id for event in events}
         output: list[TimelinePhase] = []
         for item in phases:
@@ -360,9 +398,7 @@ class AnalysisMapper:
                 output.append(phase)
         return output
 
-    async def reduce_personality_report(
-        self, report: PersonalityReport
-    ) -> PersonalityReport:
+    async def reduce_personality_report(self, report: PersonalityReport) -> PersonalityReport:
         """由最终大模型重组完整普通人格报告，保留结构化证据。"""
         observations = [
             {
@@ -375,9 +411,7 @@ class AnalysisMapper:
         if not observations:
             return report
         source_observations = [
-            observation
-            for section in report.sections
-            for observation in section.observations
+            observation for section in report.sections for observation in section.observations
         ]
         allowed_evidence = {
             evidence.quote: evidence
@@ -390,20 +424,27 @@ class AnalysisMapper:
                 {
                     "role": "system",
                     "content": (
-                        "你根据结构化聊天观察生成目标角色的普通人格报告，严格输出 JSON。"
-                        "不得分析用户本人，不得虚构证据，不做精神疾病或蓄意操控判断。"
+                        (
+                            "Create a descriptive personality report about the target character from structured chat "
+                            "observations. Return strict JSON. Do not analyze the user, invent evidence, diagnose mental "
+                            "disorders or assert deliberate manipulation."
+                        )
+                        + "\n"
+                        + structured_output_instruction()
                     ),
                 },
                 {
                     "role": "user",
                     "content": (
-                        "跨时段归并并自行组织最合适的章节，例如核心性格、沟通与情绪、"
-                        "对人方式、对用户的态度、价值观与边界；不要为了套模板生成空章节。"
-                        "保留每条观察的 subject、dimension、claim、evidence、confidence、"
-                        "counterexamples、alternative_explanations。personality 类观察只能是 friend；"
-                        "关系互动可为 friend/both/relationship。最多 8 个章节、每章 12 条。"
-                        "返回 {\"summary\":\"...\",\"sections\":[{\"key\":\"...\","
-                        "\"title\":\"...\",\"observations\":[...]}]}。\n"
+                        (
+                            "Merge observations across periods and organize meaningful sections, such as core "
+                            "personality, communication/emotion, interpersonal style, attitude toward the user, "
+                            "values/boundaries. Omit unsupported empty sections. Preserve subject, dimension, claim, "
+                            "evidence, confidence, counterexamples and alternative_explanations. Personality observations"
+                            " must have subject=friend; relationship observations may use friend/both/relationship. At "
+                            "most 8 sections and 12 observations per section. Return "
+                            '{"summary":"...","sections":[{"key":"...","title":"...","observations":[...]}]}.\n'
+                        )
                         + json.dumps(observations, ensure_ascii=False)
                     ),
                 },
@@ -430,9 +471,7 @@ class AnalysisMapper:
                     continue
                 if observation.subject not in {"friend", "both", "relationship"}:
                     continue
-                grounded.append(
-                    observation.model_copy(update={"evidence": evidence}, deep=True)
-                )
+                grounded.append(observation.model_copy(update={"evidence": evidence}, deep=True))
             if grounded:
                 valid_sections.append(
                     section.model_copy(update={"observations": grounded[:12]}, deep=True)
@@ -480,17 +519,25 @@ class AnalysisMapper:
                 {
                     "role": "system",
                     "content": (
-                        "你把结构化普通人格观察写成供主聊天模型内部使用的人格画像。"
-                        "严格输出 JSON，不输出原文引用，不诊断，不写回应策略。"
+                        (
+                            "Write an internal personality profile for the main chat model from structured descriptive "
+                            "observations. Return strict JSON. Do not include original quotations, diagnoses or response "
+                            "strategies."
+                        )
+                        + "\n"
+                        + structured_output_instruction()
                     ),
                 },
                 {
                     "role": "user",
                     "content": (
-                        "按报告已有章节组织目标角色的核心性格、沟通情绪、对人方式、"
-                        "对用户态度和价值边界；没有依据的内容不要补。"
-                        "保留概率、条件、反例和替代解释，不包含聊天原文、session_id、"
-                        "回应建议、触发策略或禁止项。返回 {\"profile\":\"...\"}。\n"
+                        (
+                            "Use the existing report sections to organize supported core traits, communication/emotion, "
+                            "interpersonal style, attitude toward the user and values/boundaries. Preserve probabilities,"
+                            " conditions, counterexamples and alternative explanations. Do not include chat quotations, "
+                            "session_id, response suggestions, trigger strategies or prohibitions. Return "
+                            '{"profile":"..."}.\n'
+                        )
                         + json.dumps(observations, ensure_ascii=False)
                     ),
                 },
@@ -529,20 +576,27 @@ class AnalysisMapper:
                 {
                     "role": "system",
                     "content": (
-                        "你根据全局归并后的聊天信号撰写实验性人格画像，严格输出 JSON。"
-                        "允许提出性格、依恋、隐瞒、操控意图和精神健康相关假设，"
-                        "但必须保留概率语言、条件、反例和替代解释，不得伪造原文。"
+                        (
+                            "Write an experimental personality profile from globally merged chat signals. Return strict "
+                            "JSON. Personality, attachment, concealment, manipulation intent and mental-health hypotheses"
+                            " are permitted, but preserve probabilistic wording, conditions, counterexamples and "
+                            "alternatives. Never fabricate quotations."
+                        )
+                        + "\n"
+                        + structured_output_instruction()
                     ),
                 },
                 {
                     "role": "user",
                     "content": (
-                        "生成一份供主聊天模型内部使用的中文人格画像正文。"
-                        "按核心人格、对人方式、依恋、隐瞒或失真、操控意图、"
-                        "精神健康相关假设组织；没有证据的章节不要硬写。"
-                        "不要写回应建议、触发策略或禁止项，不要包含聊天原文和 session_id。"
-                        "明确这些是历史推测而非当前事实。"
-                        "返回 {\"profile\":\"...\"}，正文不超过 5000 字。\n"
+                        (
+                            "Create an internal personality profile for the main chat model. Organize supported "
+                            "hypotheses about core traits, interpersonal style, attachment, concealment/distortion, "
+                            "manipulation intent and mental health. Omit unsupported sections. Include no response "
+                            "suggestions, trigger strategies, prohibitions, quotations or session_id. State that these "
+                            'are historical hypotheses, not current facts. Return {"profile":"..."}, at most 5000 '
+                            "characters.\n"
+                        )
                         + json.dumps(signals, ensure_ascii=False)
                     ),
                 },
@@ -557,16 +611,12 @@ class AnalysisMapper:
         profile = str(_parse_json_object(raw).get("profile") or "").strip()
         return profile[:10000]
 
-    async def reduce_experimental_report(
-        self, report: ExperimentalReport
-    ) -> ExperimentalReport:
+    async def reduce_experimental_report(self, report: ExperimentalReport) -> ExperimentalReport:
         """跨块归并候选线索，形成带证据的最终实验报告。"""
         if not report.signals:
             return report
         allowed_evidence = {
-            evidence.quote: evidence
-            for signal in report.signals
-            for evidence in signal.evidence
+            evidence.quote: evidence for signal in report.signals for evidence in signal.evidence
         }
         allowed_claims = {signal.claim for signal in report.signals}
         candidates = [signal.model_dump(mode="json") for signal in report.signals[:40]]
@@ -575,29 +625,30 @@ class AnalysisMapper:
                 {
                     "role": "system",
                     "content": (
-                        "你用跨时段聊天证据归并实验性人格画像，严格输出 JSON。"
-                        "允许提出可能的真实性格、人际态度、依恋类型、隐瞒情境、"
-                        "操控意图和精神健康相关假设；推测必须写成假设并保留反证。"
+                        (
+                            "Merge experimental personality hypotheses using evidence across periods. Return strict JSON."
+                            " Possible underlying traits, interpersonal attitudes, attachment, concealment, manipulation "
+                            "intent and mental-health explanations must remain hypotheses with counterevidence."
+                        )
+                        + "\n"
+                        + structured_output_instruction()
                     ),
                 },
                 {
                     "role": "user",
                     "content": (
-                        "把下列块级候选线索跨时间归并成最终实验人格画像。"
-                        "重复出现且证据来自不同时段时可提高置信度；单次线索应保持低置信度。"
-                        "只分析 friend；保留代表性证据、推断依据、适用条件、反例和替代解释，"
-                        "最多 24 条。类别只能是 personality_hypothesis、interpersonal_style、"
-                        "attachment、deception_pattern、manipulation_intent、"
-                        "mental_health_hypothesis、internal_contradiction。"
-                        "精神疾病名称只能写成可能相符的解释，不能写成确诊；"
-                        "隐瞒和操控意图可以推测，但必须给出非恶意替代解释。"
-                        "返回 {\"summary\":\"全局人格概括\","
-                        "\"experimental_signals\":[{\"subject\":\"friend\","
-                        "\"category\":\"...\",\"claim\":\"...\","
-                        "\"inference_basis\":\"...\",\"conditions\":[\"...\"],"
-                        "\"evidence\":[...],\"confidence\":0.0,"
-                        "\"counterexamples\":[\"...\"],"
-                        "\"alternative_explanations\":[\"...\"]}]}。\n"
+                        (
+                            "Merge block-level candidates into a final experimental profile. Repeated evidence from "
+                            "distinct periods may increase confidence; isolated signals warrant low confidence. Analyze "
+                            "only friend. Preserve representative evidence, inference_basis, conditions, counterexamples "
+                            "and alternative_explanations; at most 24 signals. Allowed categories: personality_hypothesis"
+                            "/interpersonal_style/attachment/deception_pattern/manipulation_intent/mental_health_hypothes"
+                            "is/internal_contradiction. Mental-health labels are only possible explanations, never "
+                            "diagnoses. For concealment or manipulation hypotheses, include a non-malicious alternative. "
+                            'Return {"summary":"global overview","experimental_signals":[{"subject":"friend","category":"'
+                            '...","claim":"...","inference_basis":"...","conditions":["..."],"evidence":[...],"confidence'
+                            '":0.0,"counterexamples":["..."],"alternative_explanations":["..."]}]}.\n'
+                        )
                         + json.dumps(candidates, ensure_ascii=False)
                     ),
                 },
@@ -622,9 +673,7 @@ class AnalysisMapper:
                 continue
             if not evidence and signal.claim not in allowed_claims:
                 continue
-            friend_signals.append(
-                signal.model_copy(update={"evidence": evidence}, deep=True)
-            )
+            friend_signals.append(signal.model_copy(update={"evidence": evidence}, deep=True))
             if len(friend_signals) >= 24:
                 break
         summary = _clean_generated_text(obj.get("summary"), 1200)
@@ -654,27 +703,26 @@ class AnalysisMapper:
                 {
                     "role": "system",
                     "content": (
-                        "你归并目标角色的长期生活规律，严格输出 JSON。"
-                        "只保留目标角色本人、非敏感关系活动且有跨时段支持的规律。"
+                        "Merge the target character's long-term daily patterns. Return strict JSON. Keep only their own non-sensitive routines supported across periods."
+                        + "\n"
+                        + structured_output_instruction()
                     ),
                 },
                 {
                     "role": "user",
                     "content": (
-                        "把候选归并为 sleep/meal/activity/availability 四类生活规律。"
-                        "合并语义重复项，保留时间条件、适用情境、允许影响字段、反例和替代解释。"
-                        "不得把用户习惯、双方共同互动或敏感关系活动改写成目标角色个人日常。"
-                        "target_fields 只能是 daily_plan/current_activity/recent_meal/availability/"
-                        "next_update_at/reply_delay_seconds/topic_seed。最多 16 条。"
-                        "每条终稿必须列出支持它的 source_ids；只能引用输入中存在的编号，"
-                        "至少引用 1 条，稳定规律应优先引用不同日期或不同块的多条候选。"
-                        "不要返回 evidence，代码会按 source_ids 回填原始证据。"
-                        "返回 {\"summary\":\"...\",\"habits\":[{\"source_ids\":[0,1],"
-                        "\"category\":\"sleep|meal|activity|availability\",\"claim\":\"...\","
-                        "\"time_patterns\":[\"...\"],\"contexts\":[\"...\"],"
-                        "\"target_fields\":[\"...\"],\"confidence\":0.0,"
-                        "\"counterexamples\":[\"...\"],"
-                        "\"alternative_explanations\":[\"...\"]}]}。\n"
+                        (
+                            "Merge candidates into sleep/meal/activity/availability patterns. Deduplicate while retaining"
+                            " time conditions, contexts, target_fields, counterexamples and alternatives. Never turn user"
+                            " habits, joint interactions or sensitive relationship activities into personal daily "
+                            "routines. target_fields must be daily_plan/current_activity/recent_meal/availability/next_up"
+                            "date_at/reply_delay_seconds/topic_seed. At most 16 habits. Each final habit must cite at "
+                            "least one existing source_id in source_ids; prefer multiple sources from different "
+                            "days/blocks for stable patterns. Do not return evidence: code restores exact evidence from "
+                            'source_ids. Return {"summary":"...","habits":[{"source_ids":[0,1],"category":"sleep","claim"'
+                            ':"...","time_patterns":["..."],"contexts":["..."],"target_fields":["..."],"confidence":0.0,"'
+                            'counterexamples":["..."],"alternative_explanations":["..."]}]}.\n'
+                        )
                         + json.dumps(payload, ensure_ascii=False)
                     ),
                 },
@@ -700,11 +748,12 @@ class AnalysisMapper:
             source_evidence = _unique_evidence(
                 [evidence for source in sources for evidence in source.evidence]
             )[:6]
-            target_fields = item.get("target_fields") or list(
-                dict.fromkeys(
-                    field for source in sources for field in source.target_fields
-                )
-            )[:5]
+            target_fields = (
+                item.get("target_fields")
+                or list(
+                    dict.fromkeys(field for source in sources for field in source.target_fields)
+                )[:5]
+            )
             try:
                 habit = LifeHabit.model_validate(
                     {
@@ -712,8 +761,7 @@ class AnalysisMapper:
                         "subject": "friend",
                         "target_fields": target_fields,
                         "evidence": [
-                            evidence.model_dump(mode="json")
-                            for evidence in source_evidence
+                            evidence.model_dump(mode="json") for evidence in source_evidence
                         ],
                         "sensitive_relationship_context": False,
                     }
@@ -729,106 +777,105 @@ class AnalysisMapper:
         )
 
     def _map_prompt(self, block: AnalysisBlock, *, experimental: bool) -> str:
-        output_fields = "events、personality_observations、relationship_signals"
+        output_fields = "events, personality_observations, relationship_signals"
         experimental_instruction = ""
         if experimental:
-            output_fields += "、experimental_signals"
-            experimental_instruction = """
-experimental_signals 仅允许以下类别：
-- personality_hypothesis、interpersonal_style、attachment、deception_pattern、
-  manipulation_intent、mental_health_hypothesis、internal_contradiction。
-每条必须有 subject(friend)、claim、inference_basis、conditions、evidence、confidence(0..1)、
-counterexamples 和 alternative_explanations（至少一项）。推测不等于事实、动机认定或诊断。
-"""
-        return f"""分析下面一段双人聊天。输出 JSON 对象，根字段固定为：
-{output_fields}。
-
-events 每项字段：date(YYYY-MM-DD)、title、type、summary、importance(1..5)、
-evidence([{{quote,session_id,date}}])、session_ids。
-type 只能是 milestone/conflict/reconciliation/intimacy/shared_activity/emotional_shift/
-separation/daily/other。日常内容只有在能代表关系状态时才提取。最多 12 条。
-
-personality_observations 只分析 {self.settings.friend_name or "TA"} 本人的描述性大五倾向、
-沟通与情绪模式、价值观与边界；不要把作息、饮食或日常活动混入这里。
-relationship_signals 关注主动性、回应质量、关心方式、冲突行为和随时间的变化。
-把主动联系、回应方式、关系投入和共同活动模式等写成具体观察，
-不要只输出“重视关系”“比较温和”一类笼统结论。阶段性习惯应注明替代解释。
-两类观察每项字段：subject、dimension、claim、evidence、confidence(0..1)、counterexamples、
-alternative_explanations。必须引用原文；有反例必须列出；证据不足就不输出。
-personality_observations 和 relationship_signals 各最多 8 条。
-subject 只能是 friend/self/both/relationship/unknown。personality_observations 必须是 friend；
-描述“我”本人的习惯不要输出，描述双方共同互动的内容放入 relationship_signals，
-relationship_signals 的 subject 只能是 friend/both/relationship，不能是 self 或 unknown；
-不得把“双方经常一起做某事”改写成 {self.settings.friend_name or "TA"} 的个人日常规律。
-
-{experimental_instruction}
-列出的字段即使没有内容也保留空数组。不要输出 markdown 或解释。
-块 ID：{block.block_id}
-会话 ID：{", ".join(block.session_ids)}
-聊天记录：
-{block.text}
-"""
+            output_fields += ", experimental_signals"
+            experimental_instruction = (
+                "\n        experimental_signals categories: personality_hypothesis, interpersonal_style, "
+                "attachment,\n        deception_pattern, manipulation_intent, mental_health_hypothesis, "
+                "internal_contradiction.\n        Each requires subject=friend, claim, inference_basis, "
+                "conditions, evidence, confidence(0..1),\n        counterexamples and at least one "
+                "alternative_explanations entry. Inference is not fact,\n        proof of intent or a "
+                "diagnosis.\n        "
+            )
+        return f"""Analyze this two-person chat. Return a JSON object with root fields:
+        {output_fields}.
+        events entries: date(YYYY-MM-DD), title, type, summary, importance(1..5),
+        evidence([{{quote,session_id,date}}]), session_ids.
+        type: milestone/conflict/reconciliation/intimacy/shared_activity/emotional_shift/separation/daily/other.
+        Extract everyday events only when representative of the relationship. At most 12 events.
+        personality_observations describe only {self.settings.friend_name or "Friend"}: descriptive Big Five
+        tendencies, communication/emotion, values/boundaries. Exclude sleep, meals and daily activities.
+        relationship_signals describe initiative, response quality, care, conflict and change over time.
+        Be specific about contact, replies, investment and shared activities, rather than generic traits.
+        Give alternative explanations for period-specific habits.
+        Both observation arrays require subject, dimension, claim, evidence, confidence(0..1),
+        counterexamples and alternative_explanations. Quote source text exactly. Include known
+        counterexamples. Omit unsupported observations. At most 8 entries per array.
+        Allowed subjects: friend/self/both/relationship/unknown. personality_observations must be friend.
+        Do not analyze the user's own habits. Put joint interaction patterns in relationship_signals,
+        whose subject must be friend/both/relationship, never self/unknown. Shared activities do not
+        prove the character has a personal daily routine.
+        {experimental_instruction}
+        Keep empty arrays for fields without evidence. No Markdown or explanation.
+        Block ID: {block.block_id}
+        Session IDs: {", ".join(block.session_ids)}
+        Chat records:
+        {block.text}
+        """
 
     def _life_prompt(self, block: AnalysisBlock) -> str:
-        return f"""只提取 {self.settings.friend_name or "TA"} 本人的生活候选。返回：
-{{"life_habits":[{{"subject":"friend","category":"sleep|meal|activity|availability",
-"claim":"...","time_patterns":["..."],"contexts":["..."],
-"target_fields":["daily_plan","availability"],
-"evidence":[{{"quote":"...","session_id":"...","date":"..."}}],"confidence":0.0,
-"counterexamples":["..."],"alternative_explanations":["..."],
-"sensitive_relationship_context":false}}]}}
-
-规则：
-- 这里只收集块级候选，不要求单个块已经证明是长期规律；跨时段稳定性由最终大模型判断。
-- sleep：入睡、起床、补觉、活跃时段等候选；meal：进食时段和饮食安排候选；
-  activity：工作、学习、出行和日常娱乐候选；availability：忙闲、在线和回应时段候选。
-- subject 必须是 friend。用户本人的状态、双方共同活动和主体不明内容不要输出。
-- 敏感或只在关系互动中成立的活动可作为审计候选，但必须标记
-  sensitive_relationship_context=true，后续不会进入生活时间线。
-- 一次明确状态可低置信度输出；重复出现可提高置信度。必须引用带时间的原文短句。
-- 最多 10 条，每段 quote 最多 120 字。无候选时返回空数组，不要返回解释或 markdown。
-
-块 ID：{block.block_id}
-会话 ID：{", ".join(block.session_ids)}
-聊天记录：
-{block.text}
-"""
+        return f"""Extract daily-life candidates only for {self.settings.friend_name or "Friend"}. Return:
+        {{"life_habits":[{{"subject":"friend","category":"sleep",
+        "claim":"...","time_patterns":["..."],"contexts":["..."],
+        "target_fields":["daily_plan","availability"],
+        "evidence":[{{"quote":"...","session_id":"...","date":"..."}}],"confidence":0.0,
+        "counterexamples":["..."],"alternative_explanations":["..."],
+        "sensitive_relationship_context":false}}]}}
+        Rules:
+        - These are block-level candidates; the final model judges stability across periods.
+        - category must be sleep (sleep/waking/naps/active hours), meal (meal timing/plans),
+          activity (work/study/travel/leisure), or availability (busy/free/online/reply timing).
+        - subject must be friend. Exclude the user's states, joint activities and ambiguous subjects.
+        - Sensitive or relationship-specific activities may be audit candidates only when marked
+          sensitive_relationship_context=true; they will not enter the daily-life timeline.
+        - A single explicit state warrants low confidence; repetition may increase it. Include exact
+          short quotations with dates. At most 10 entries; each quote at most 120 characters.
+        - Return an empty array when unsupported. No explanation or Markdown.
+        Block ID: {block.block_id}
+        Session IDs: {", ".join(block.session_ids)}
+        Chat records:
+        {block.text}
+        """
 
     def _experimental_prompt(self, block: AnalysisBlock) -> str:
-        return f"""只分析下面这段双人聊天中的实验性人格候选。只返回 JSON 对象：
-{{"experimental_signals":[{{"subject":"friend","category":"personality_hypothesis|interpersonal_style|attachment|deception_pattern|manipulation_intent|mental_health_hypothesis|internal_contradiction","claim":"...","inference_basis":"...","conditions":["..."],"evidence":[{{"quote":"...","session_id":"...","date":"..."}}],"confidence":0.0,"counterexamples":["..."],"alternative_explanations":["..."]}}]}}
-
-规则：
-- 只分析 {self.settings.friend_name or "TA"}，subject 必须是 friend；不要分析“我”或把双方共同模式写成对方个人特征。
-- 这里只收集块级候选，不要求单块形成最终结论；confidence 应保守，跨时段稳定性由最终大模型判断。
-- personality_hypothesis：可能的核心性格、情绪调节、自我呈现和真实性格反差。
-- interpersonal_style：如何对人、亲疏差异、尊重/功利/照顾/冷淡等态度。
-- attachment：可能的依恋类型、亲近/撤离方式和关系触发点。
-- deception_pattern：可能隐瞒、夸大、淡化或改变说法的情境；不得把单次矛盾直接写成撒谎习惯。
-- manipulation_intent：可能通过施压、愧疚、隐私、金钱或控制权影响他人的模式与意图假设。
-- mental_health_hypothesis：可提出与某类精神健康状态或症状相符的假设，但只能写“可能相符”，不能写成确诊。
-- internal_contradiction：记录中尚未解释的前后差异，为 deception_pattern 提供候选证据但本身不证明故意。
-- 每条必须包含推断依据、可能出现的条件、原文短引、反例和至少一个替代解释；没有反例时说明当前块未见反例。
-- 普通日常只有在能支持人格推断时才提取。最多返回 6 条候选。
-
-块 ID：{block.block_id}
-会话 ID：{", ".join(block.session_ids)}
-聊天记录：
-{block.text}
-"""
+        return f"""Extract experimental personality candidates from this two-person chat. Return JSON only:
+        {{"experimental_signals":[{{"subject":"friend","category":"personality_hypothesis","claim":"...","inference_basis":"...","conditions":["..."],"evidence":[{{"quote":"...","session_id":"...","date":"..."}}],"confidence":0.0,"counterexamples":["..."],"alternative_explanations":["..."]}}]}}
+        Rules:
+        - Analyze only {self.settings.friend_name or "Friend"}, subject=friend. Do not analyze the user
+          or turn shared patterns into individual traits.
+        - These are conservative block-level candidates, not final conclusions; the final model judges
+          stability across periods. At most 6 candidates. Everyday content requires personality relevance.
+        - category must be one of:
+          personality_hypothesis: possible core traits, emotion regulation, self-presentation contrasts;
+          interpersonal_style: attitudes to others, closeness differences, respect, care or distance;
+          attachment: possible attachment tendencies, approach/withdrawal and relationship triggers;
+          deception_pattern: possible concealment/exaggeration/minimization/changed accounts. One
+          contradiction does not establish habitual lying;
+          manipulation_intent: hypotheses about pressure, guilt, privacy, money or control to influence others;
+          mental_health_hypothesis: possible compatibility with mental-health states/symptoms, never diagnoses;
+          internal_contradiction: unexplained differences in the record, not proof of deliberate deception.
+        - Each entry requires inference_basis, conditions, exact short quotations, counterexamples and
+          at least one alternative_explanations entry. If no counterexample exists, state that this block
+          contains none. Keep all uncertainty explicit.
+        Block ID: {block.block_id}
+        Session IDs: {", ".join(block.session_ids)}
+        Chat records:
+        {block.text}
+        """
 
 
 def _coerce_block_result(raw: str, block: AnalysisBlock, *, experimental: bool) -> BlockAnalysis:
     obj = _parse_json_object(raw)
     return BlockAnalysis(
+        output_language=output_language(),
         block_id=block.block_id,
         start_time_ms=block.start_time_ms,
         end_time_ms=block.end_time_ms,
         experimental_requested=experimental,
         events=_validated_items(obj.get("events"), EventCandidate),
-        personality_observations=_validated_items(
-            obj.get("personality_observations"), Observation
-        ),
+        personality_observations=_validated_items(obj.get("personality_observations"), Observation),
         relationship_signals=_validated_items(obj.get("relationship_signals"), Observation),
         life_habits=_validated_items(obj.get("life_habits"), LifeHabit),
         experimental_signals=(
@@ -850,7 +897,7 @@ def _validated_items[ModelT: BaseModel](
         try:
             output.append(model.model_validate(item))
         except ValidationError:
-            logger.debug("忽略无效分析条目：%s", model.__name__)
+            logger.debug(content_text("Ignoring invalid analysis entry: %s"), model.__name__)
     return output
 
 
@@ -864,10 +911,10 @@ def _parse_json_object(raw: str) -> dict[str, Any]:
         start = cleaned.find("{")
         end = cleaned.rfind("}")
         if start < 0 or end <= start:
-            raise ValueError("模型输出中没有 JSON 对象") from None
+            raise ValueError(error_text("No JSON object found in the model output")) from None
         value = json.loads(cleaned[start : end + 1])
     if not isinstance(value, dict):
-        raise ValueError("模型输出根节点不是 JSON 对象")
+        raise ValueError(error_text("The model output root is not a JSON object"))
     return value
 
 

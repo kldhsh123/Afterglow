@@ -48,18 +48,18 @@ class QueryRewriter:
             {
                 "role": "system",
                 "content": (
-                    "你是 RAG 检索 query 改写器。你只输出 JSON，不要 markdown。"
-                    "目标是把用户当前的短句、口语、情绪表达改写成 1-3 个适合检索历史聊天记录的查询。"
-                    "不要添加用户没表达的新事实；不要改写成回答。"
+                    "You rewrite queries for RAG. Return JSON only, no Markdown. "
+                    "Turn a short, colloquial or emotional user input into 1-3 history retrieval queries in the input language. "
+                    "Do not add facts the user did not express or turn the input into an answer."
                 ),
             },
             {
                 "role": "user",
                 "content": (
-                    "用户本轮输入：\n"
+                    "Current user input:\n"
                     f"{original}\n\n"
-                    "输出格式：\n"
-                    '{"queries":["..."],"intent":"一句短标签"}'
+                    "Output format:\n"
+                    '{"queries":["..."],"intent":"short label"}'
                 ),
             },
         ]
@@ -129,11 +129,11 @@ class SemanticReranker:
             {
                 "role": "system",
                 "content": (
-                    "你是聊天记忆语义重排器。你只输出 JSON，不要 markdown。"
-                    "任务：对每条历史候选独立打 0~1 分，表示它作为本轮回复证据的贴合度。"
-                    "评分依据（优先级从高到低）：是真实聊天 > response_pair（用户→朋友回复对）> "
-                    "语境相符 > 排除低信号寒暄（仅『嗯』、『在』、纯表情等）。"
-                    "严禁所有候选打同一个分数；不要生成回复正文；不要改写候选内容。"
+                    "You rerank chat memories. Return JSON only, no Markdown. "
+                    "Independently score each candidate from 0 to 1 for relevance as evidence for the current reply. "
+                    "Prioritize genuine human chat, then response_pair (user -> friend reply), then "
+                    "matching context. Downrank low-signal greetings, acknowledgements and bare emoji. "
+                    "Do not assign all candidates the same score. Do not generate a reply or rewrite candidates."
                 ),
             },
             {"role": "user", "content": _build_rerank_prompt(query_text, pool)},
@@ -200,18 +200,18 @@ class SemanticReranker:
 
 def _build_rerank_prompt(query_text: str, candidates: list[ScoredChunk]) -> str:
     lines = [
-        "【当前用户输入】",
+        "[Current user input]",
         query_text.strip(),
         "",
-        "【候选记忆】",
+        "[Candidate memories]",
     ]
     for idx, chunk in enumerate(candidates, 1):
         meta = chunk.metadata
         if chunk.kind == "response_pair":
             text = (
-                f"用户曾说：{meta.get('text') or ''}\n"
-                f"TA 曾回：{meta.get('friend_reply') or ''}\n"
-                f"上下文：{chunk.text}"
+                f"User said: {meta.get('text') or ''}\n"
+                f"Friend replied: {meta.get('friend_reply') or ''}\n"
+                f"Context: {chunk.text}"
             )
         else:
             text = str(meta.get("dialogue_snippet") or chunk.text or "")
@@ -227,15 +227,15 @@ def _build_rerank_prompt(query_text: str, candidates: list[ScoredChunk]) -> str:
     lines.extend(
         [
             "",
-            "请输出 JSON。**格式示例（数字仅为示意，不要照抄）**：",
+            "Return JSON. Format example (illustrative numbers; do not copy):",
             '{"ranked":[{"id":"first_id","score":0.92},{"id":"second_id","score":0.45},{"id":"third_id","score":0.08}]}',
-            "score 范围 0~1，**根据每条候选的真实贴合度独立打分**：",
-            "  - 0.7-0.95：特别贴合，是本轮的强证据（如同样话题的真实 response_pair）",
-            "  - 0.3-0.6：一般相关，可作为背景",
-            "  - 0-0.2：无关、低信号寒暄、或主要是用户自己说的话",
-            "必须为【所有】候选 id 给出一个分数，不要遗漏；",
-            "严禁所有候选打相同分数，严禁照抄上面示例里的 0.92/0.45/0.08；",
-            "也不要返回候选集合之外的 id。只输出这一段 JSON，不要解释、不要 markdown。",
+            "Score from 0 to 1 independently according to actual relevance:",
+            "  - 0.7-0.95: strong evidence, e.g. a genuine response_pair on the same topic.",
+            "  - 0.3-0.6: generally related background.",
+            "  - 0-0.2: unrelated, low-signal greeting, or mostly the user’s own words.",
+            "Score EVERY candidate id without omissions.",
+            "Do not use one score for all candidates or copy the example scores.",
+            "Return no ids outside the candidates. JSON only, no explanation or Markdown.",
         ]
     )
     return "\n".join(lines)

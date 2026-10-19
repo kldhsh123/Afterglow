@@ -55,6 +55,7 @@ from xuwen.chat_api.state import get_state
 from xuwen.config import Settings
 from xuwen.core.errors import LLMError
 from xuwen.core.models import MessageKind, NormalizedMessage, Session
+from xuwen.prompt_language import output_language
 
 
 def _message(message_id: str, timestamp_ms: int, *, self_message: bool, text: str) -> NormalizedMessage:
@@ -91,6 +92,7 @@ def _block_result(block: AnalysisBlock, *, experimental: bool) -> BlockAnalysis:
         start_time_ms=block.start_time_ms,
         end_time_ms=block.end_time_ms,
         experimental_requested=experimental,
+        output_language=output_language(),
         life_schema_version=1,
         events=[
             EventCandidate(
@@ -579,7 +581,7 @@ def test_runtime_proactive_context_prefers_matching_time_without_dumping_report(
 
     context = render_runtime_proactive_context(report, hour=0, weekday=report.openings[0].weekday)
 
-    assert "历史主动开聊参考" in context
+    assert "Historical proactive openings" in context
     assert "今天考试结果出来了" in context
     assert len(context) < 2_000
 
@@ -797,7 +799,7 @@ async def test_mapper_stops_retrying_after_map_refusal() -> None:
     )
     block = build_analysis_blocks([_session()], self_name="我", friend_name="TA")[0]
 
-    with pytest.raises(ValueError, match="多次返回无效 JSON"):
+    with pytest.raises(ValueError, match="repeatedly returned invalid JSON"):
         await mapper.map_block(block, experimental=False)
 
     assert refusing.calls == 1
@@ -811,7 +813,7 @@ async def test_mapper_records_content_filter_as_skippable_block() -> None:
     )
     block = build_analysis_blocks([_session()], self_name="我", friend_name="TA")[0]
 
-    with pytest.raises(AnalysisBlockOutputError, match="多次返回无效 JSON") as caught:
+    with pytest.raises(AnalysisBlockOutputError, match="repeatedly returned invalid JSON") as caught:
         await mapper.map_block(block, experimental=False)
 
     assert filtering.calls == 1
@@ -1018,15 +1020,15 @@ def test_map_prompt_omits_experimental_instructions_when_generation_is_disabled(
     disabled_prompt = mapper._map_prompt(block, experimental=False)
     enabled_prompt = mapper._map_prompt(block, experimental=True)
 
-    assert "relationship_signals、experimental_signals" not in disabled_prompt
-    assert "experimental_signals 仅允许以下类别" not in disabled_prompt
-    assert "personality_hypothesis、interpersonal_style" not in disabled_prompt
-    assert "experimental_signals 仅允许以下类别" in enabled_prompt
-    assert "personality_hypothesis、interpersonal_style" in enabled_prompt
+    assert "relationship_signals, experimental_signals" not in disabled_prompt
+    assert "experimental_signals categories:" not in disabled_prompt
+    assert "personality_hypothesis, interpersonal_style" not in disabled_prompt
+    assert "experimental_signals categories:" in enabled_prompt
+    assert "personality_hypothesis, interpersonal_style" in enabled_prompt
     assert "life_habits" not in disabled_prompt
     life_prompt = mapper._life_prompt(block)
-    assert "不要求单个块已经证明是长期规律" in life_prompt
-    assert "共同活动和主体不明内容不要输出" in life_prompt
+    assert "block-level candidates; the final model judges stability across periods" in life_prompt
+    assert "Exclude the user's states, joint activities and ambiguous subjects" in life_prompt
 
 
 def test_final_analysis_connection_defaults_to_main_chat_connection() -> None:
@@ -1234,7 +1236,7 @@ async def test_pipeline_does_not_publish_reports_when_any_block_fails(tmp_path: 
         analysis_data_dir=analysis_dir,
     )
 
-    with pytest.raises(AnalysisPipelineError, match="未生成最终报告") as caught:
+    with pytest.raises(AnalysisPipelineError, match="no final report was generated") as caught:
         await analyze_relationship(
             [source],
             settings,
@@ -1379,7 +1381,7 @@ def test_personality_prompt_context_drops_quotes_and_keeps_uncertainty() -> None
     assert "也可能由情境A临时引起" in context
     assert "原始证据A" not in context
     assert "AI 可如何体现" not in context
-    assert "生活作息与当前活动由生活时间线负责" in context
+    assert "Use the life timeline for current activities/routines" in context
 
 
 def test_life_analysis_context_only_keeps_relevant_non_evidence_observations() -> None:
@@ -1404,7 +1406,7 @@ def test_life_analysis_context_only_keeps_relevant_non_evidence_observations() -
     assert "目标角色在时段A更常活跃" in context
     assert "也可能是阶段性安排" in context
     assert "原始证据A" not in context
-    assert "主体：TA" in context
+    assert "Subject: TA" in context
 
 
 def test_life_analysis_context_excludes_non_target_sensitive_and_unmapped_items() -> None:
@@ -1455,7 +1457,7 @@ def test_life_analysis_context_excludes_non_target_sensitive_and_unmapped_items(
     assert "目标角色空闲时常进行活动A" in context
     assert "敏感关系活动不应进入生活画像" not in context
     assert "没有目标字段的条目不可注入" not in context
-    assert "可影响字段：current_activity、topic_seed" in context
+    assert "allowed fields: current_activity、topic_seed" in context
 
 
 def test_personality_reduce_never_merges_self_observation_into_friend() -> None:
@@ -1498,7 +1500,7 @@ def test_optimized_experimental_context_drops_quotes_and_low_confidence() -> Non
 
     assert "还好，你呢" not in context
     assert "这一次互动表现出回应意愿" not in context
-    assert "当前没有达到注入阈值" in context
+    assert "No experimental hypotheses meet the inclusion threshold" in context
 
 
 def test_optimized_experimental_context_keeps_claim_but_not_quote() -> None:
@@ -1510,7 +1512,7 @@ def test_optimized_experimental_context_keeps_claim_but_not_quote() -> None:
 
     assert "这一次互动表现出回应意愿" in context
     assert "还好，你呢" not in context
-    assert "不要向用户复述" in context
+    assert "never recite to the user" in context
 
 
 def test_experimental_prompt_switch_requires_generation_switch() -> None:

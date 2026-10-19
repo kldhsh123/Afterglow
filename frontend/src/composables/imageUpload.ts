@@ -1,3 +1,5 @@
+import { useLocale } from '@/composables/useLocale'
+const { t } = useLocale()
 /**
  * 把 File 转 data URL（base64）；超过限制自动按比例缩放后再编码。
  */
@@ -12,7 +14,7 @@ export interface ReadOptions {
 export async function fileToDataUrl(file: File, opts: ReadOptions = {}): Promise<string> {
   const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES
   if (!file.type.startsWith('image/')) {
-    throw new Error('仅支持图片文件')
+    throw new Error(t('feedback.imagesOnly'))
   }
 
   // 如果文件不大也没指定缩放，直接 base64
@@ -33,7 +35,7 @@ function readAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.onload = () => resolve(String(reader.result))
-    reader.onerror = () => reject(new Error('读取图片失败'))
+    reader.onerror = () => reject(new Error(t('feedback.readImage')))
     reader.readAsDataURL(file)
   })
 }
@@ -51,7 +53,7 @@ async function shrinkDataUrl(
   canvas.width = w
   canvas.height = h
   const ctx = canvas.getContext('2d')
-  if (!ctx) throw new Error('Canvas 不可用')
+  if (!ctx) throw new Error(t('feedback.canvasUnavailable'))
   ctx.drawImage(img, 0, 0, w, h)
 
   // 尝试逐次降低 quality 直到符合 maxBytes
@@ -69,7 +71,7 @@ function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image()
     img.onload = () => resolve(img)
-    img.onerror = () => reject(new Error('图片解码失败'))
+    img.onerror = () => reject(new Error(t('feedback.decodeImage')))
     img.src = src
   })
 }

@@ -3,8 +3,10 @@
 import { useChatStore } from '@/stores/chat'
 import { AlertCircle, X } from 'lucide-vue-next'
 import { computed } from 'vue'
+import { useLocale } from '@/composables/useLocale'
 
 const chat = useChatStore()
+const { t } = useLocale()
 const visible = computed(() => !!chat.lastError)
 </script>
 
@@ -25,7 +27,7 @@ const visible = computed(() => !!chat.lastError)
       <button
         class="p-1 rounded-full hover:bg-warning/20"
         @click="chat.setError(null)"
-        aria-label="关闭"
+        :aria-label="t('common.dismiss')"
       >
         <X :size="14" />
       </button>

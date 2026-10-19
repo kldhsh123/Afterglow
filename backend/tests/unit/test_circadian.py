@@ -29,7 +29,7 @@ def _msg(ts: datetime, *, role: str = "friend") -> NormalizedMessage:
     )
 
 
-def test_low_sample_falls_back_to_default():
+def test_low_sample_falls_back_to_default(chinese_language):
     """样本太少时画像保持 8-23 默认，不强行推断。"""
     msgs = [_msg(datetime(2026, 5, 22, 14, 0))] * 5
     profile = compute_circadian_profile(msgs)

@@ -35,7 +35,7 @@ def test_quality_recommends_clean_specific_dataset() -> None:
     assert quality.metrics["fallback_risk"] == "low"
 
 
-def test_quality_rejects_placeholder_heavy_dataset() -> None:
+def test_quality_rejects_placeholder_heavy_dataset(chinese_language) -> None:
     report = ProactiveAnalysisReport(
         openings=[
             _opening(index, "[图片] [图片]", "other")

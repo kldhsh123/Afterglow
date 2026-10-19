@@ -18,6 +18,7 @@ from dataclasses import asdict, dataclass
 import httpx
 
 from xuwen.config import Settings
+from xuwen.error_i18n import error_text
 
 logger = logging.getLogger(__name__)
 
@@ -142,16 +143,14 @@ class UpdateChecker:
         if self._task is not None:
             return
         if not self.settings.update_check_enabled:
-            message = (
-                f"[更新检查] 已禁用（UPDATE_CHECK_ENABLED=false，"
-                f"当前 v{self.current_version}）"
+            message = error_text(
+                "[Update check] Disabled (UPDATE_CHECK_ENABLED=false, current v{p0})",
+                p0=self.current_version,
             )
             print(message, flush=True)
             logger.info(message)
             return
-        self._task = asyncio.create_task(
-            self._run_startup_check(), name="xuwen-update-check"
-        )
+        self._task = asyncio.create_task(self._run_startup_check(), name="xuwen-update-check")
 
     async def stop(self) -> None:
         if self._task is not None and not self._task.done():
@@ -174,7 +173,7 @@ class UpdateChecker:
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.warning("启动版本检查失败", exc_info=True)
+            logger.warning(error_text("Startup update check failed"), exc_info=True)
 
     async def _check_once(self) -> None:
         """拉一次 GitHub Releases API 并更新 snapshot。
@@ -189,7 +188,7 @@ class UpdateChecker:
                     headers={"User-Agent": _USER_AGENT, "Accept": "application/vnd.github+json"},
                 )
             except httpx.HTTPError as e:
-                self._info.last_error = f"网络错误：{type(e).__name__}"
+                self._info.last_error = error_text("Network error: {p0}", p0=type(e).__name__)
                 self._info.last_checked_at_ms = int(time.time() * 1000)
                 return
 
@@ -201,19 +200,19 @@ class UpdateChecker:
             try:
                 data = resp.json()
             except ValueError:
-                self._info.last_error = "响应非 JSON"
+                self._info.last_error = error_text("The response is not JSON")
                 self._info.last_checked_at_ms = int(time.time() * 1000)
                 return
 
             if not isinstance(data, dict):
-                self._info.last_error = "响应格式异常"
+                self._info.last_error = error_text("Invalid response format")
                 self._info.last_checked_at_ms = int(time.time() * 1000)
                 return
 
             # GitHub Releases API 字段
             tag_name = str(data.get("tag_name") or data.get("name") or "").strip()
             if not tag_name:
-                self._info.last_error = "上游未返回 tag_name"
+                self._info.last_error = error_text("The provider did not return tag_name")
                 self._info.last_checked_at_ms = int(time.time() * 1000)
                 return
 
@@ -257,21 +256,29 @@ class UpdateChecker:
         self._last_logged_signature = signature
 
         if info.last_error:
-            message = (
-                f"[更新检查] 失败：{info.last_error}（当前 v{info.current_version}）"
+            message = error_text(
+                "[Update check] Failed: {p0} (current v{p1})",
+                p0=info.last_error,
+                p1=info.current_version,
             )
         elif info.is_outdated and info.latest_version:
             url = info.release_url or ""
-            url_part = f"，详情 {url}" if url else ""
-            message = (
-                f"[更新检查] 发现新版本：v{info.current_version}"
-                f" → v{info.latest_version}{url_part}"
+            url_part = error_text("; details: {p0}", p0=url) if url else ""
+            message = error_text(
+                "[Update check] New version: v{p0} → v{p1}{p2}",
+                p0=info.current_version,
+                p1=info.latest_version,
+                p2=url_part,
             )
         elif info.latest_version:
-            message = f"[更新检查] 已是最新版（v{info.current_version}）"
+            message = error_text(
+                "[Update check] Already up to date (v{p0})", p0=info.current_version
+            )
         else:
             # 兜底：理论上不会到达（没有 latest_version 也没有 error）
-            message = f"[更新检查] 状态未知（当前 v{info.current_version}）"
+            message = error_text(
+                "[Update check] Status unknown (current v{p0})", p0=info.current_version
+            )
 
         try:
             print(message, flush=True)

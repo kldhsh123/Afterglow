@@ -3,7 +3,13 @@ name: sync-wiki
 on:
   pull_request:
     paths:
-      - "docs/wiki/**"
+      - "docs/**"
+      - "assets/brand/**"
+      - "backend/xuwen/config.py"
+      - "backend/.env.example*"
+      - ".github/scripts/prepare_env_editor.py"
+      - ".github/scripts/test_prepare_docs.py"
+      - ".github/scripts/prepare_docs.py"
       - ".github/scripts/prepare_wiki.py"
       - ".github/workflows/sync-wiki.yml"
   release:
@@ -33,32 +39,16 @@ jobs:
           python-version: "3.12"
 
       - name: Validate documentation mirror
+        env:
+          DOCS_SITE_URL: ${{ vars.DOCS_SITE_URL }}
         shell: bash
         run: |
           set -euo pipefail
-          test -f docs/wiki/Home.md
-          test -f docs/wiki/_Sidebar.md
-          test -f docs/wiki/_Footer.md
-          test -n "$(find docs/wiki -maxdepth 1 -type f -name '*.md' -print -quit)"
-
-          if [[ -n "$(find docs/wiki -type l -print -quit)" ]]; then
-            echo "docs/wiki must not contain symbolic links" >&2
-            exit 1
-          fi
-          if [[ -n "$(find docs/wiki -maxdepth 1 -type f ! -name '*.md' -print -quit)" ]]; then
-            echo "docs/wiki may only contain Markdown pages" >&2
-            exit 1
-          fi
-          if [[ -n "$(find docs/wiki -mindepth 1 -type d -print -quit)" ]]; then
-            echo "docs/wiki must remain flat because GitHub Wiki pages are flat" >&2
-            exit 1
-          fi
-
-          preview_dir="${RUNNER_TEMP}/afterglow-wiki-preview"
-          mkdir -p "$preview_dir"
-          rsync -a docs/wiki/ "$preview_dir/"
-          python .github/scripts/prepare_wiki.py \
-            "$preview_dir" "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/wiki"
+          python -m unittest discover -s .github/scripts -p test_prepare_docs.py
+          python .github/scripts/prepare_docs.py wiki \
+            --output "${RUNNER_TEMP}/afterglow-wiki-preview" \
+            --wiki-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/wiki" \
+            --site-url "${DOCS_SITE_URL:-https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}/}"
 
   publish:
     if: ${{ github.event_name == 'release' || github.event_name == 'workflow_dispatch' }}
@@ -82,6 +72,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.WIKI_TOKEN || github.token }}
+          DOCS_SITE_URL: ${{ vars.DOCS_SITE_URL }}
         run: |
           set -euo pipefail
           wiki_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.wiki.git"
@@ -97,9 +88,12 @@ jobs:
           test -d "$wiki_dir/.git"
           test "$(git -C "$wiki_dir" remote get-url origin)" = "$wiki_url"
 
-          rsync -a --delete --exclude='.git/' docs/wiki/ "$wiki_dir/"
-          python .github/scripts/prepare_wiki.py \
-            "$wiki_dir" "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/wiki"
+          preview_dir="${RUNNER_TEMP}/afterglow-wiki-generated"
+          python .github/scripts/prepare_docs.py wiki \
+            --output "$preview_dir" \
+            --wiki-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/wiki" \
+            --site-url "${DOCS_SITE_URL:-https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}/}"
+          rsync -a --delete --exclude='.git/' "$preview_dir/" "$wiki_dir/"
           git -C "$wiki_dir" add -A
 
           if git -C "$wiki_dir" diff --cached --quiet; then

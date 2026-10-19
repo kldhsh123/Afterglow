@@ -51,6 +51,7 @@ class SchemaSnapshot:
 
 # 给小白看的字段标题。未列出的字段沿用 key。
 _TITLES: dict[str, str] = {
+    "XUWEN_LANGUAGE": "后端语言",
     "APP_NAME": "应用名称",
     "APP_SLOGAN": "应用副标题",
     "APP_TIMEZONE": "时区",

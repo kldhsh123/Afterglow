@@ -67,7 +67,7 @@ def test_select_plugin_explicit_overrides(sample_payload):
     assert plugin.name == "qqexporter_v5"
 
 
-def test_select_plugin_unknown_name_raises():
+def test_select_plugin_unknown_name_raises(chinese_language):
     with pytest.raises(ParseError) as exc:
         select_plugin({}, preferred="not_a_real_plugin")
     assert "未知" in exc.value.message or "未知" in str(exc.value)

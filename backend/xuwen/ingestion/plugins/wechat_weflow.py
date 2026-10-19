@@ -41,6 +41,7 @@ from typing import Any
 from xuwen.config import Settings
 from xuwen.core.errors import ParseError
 from xuwen.core.models import MessageKind, NormalizedMessage, SenderRole
+from xuwen.error_i18n import error_text
 from xuwen.ingestion.plugins import (
     ImportIdentityCandidate,
     ImportImageRef,
@@ -98,13 +99,13 @@ class WeChatWeFlowPlugin:
     ) -> list[NormalizedMessage]:
         canonical = _canonical_payload(payload)
         if canonical is None:
-            raise ParseError("JSONL 不符合 WeFlow ChatLab 格式")
+            raise ParseError(error_text("JSONL does not match the WeFlow ChatLab format"))
         if _looks_like_chatlab(canonical):
             return _parse_chatlab_messages(canonical, settings)
 
         raw_messages = canonical.get("messages")
         if not isinstance(raw_messages, list):
-            raise ParseError("payload 中缺少 messages 数组")
+            raise ParseError(error_text("The payload is missing the messages array"))
 
         sender_index = _build_sender_index(canonical.get("senders"))
 
@@ -126,7 +127,9 @@ class WeChatWeFlowPlugin:
         source_is_jsonl = jsonl_records(payload) is not None
         canonical = _canonical_payload(payload)
         if canonical is None:
-            return ImportInspection("unknown", [], 0, "无法识别 WeFlow 格式")
+            return ImportInspection(
+                "unknown", [], 0, error_text("Cannot recognize the WeFlow format")
+            )
         if _looks_like_chatlab(canonical):
             members: dict[str, str] = {}
             for item in canonical.get("members") or []:
@@ -134,9 +137,7 @@ class WeChatWeFlowPlugin:
                     continue
                 uid = str(item.get("platformId") or "")
                 if uid:
-                    members[uid] = str(
-                        item.get("groupNickname") or item.get("accountName") or uid
-                    )
+                    members[uid] = str(item.get("groupNickname") or item.get("accountName") or uid)
             for message in canonical.get("messages") or []:
                 if not isinstance(message, dict):
                     continue
@@ -148,8 +149,7 @@ class WeChatWeFlowPlugin:
             return ImportInspection(
                 format="weflow_chatlab_jsonl" if source_is_jsonl else "weflow_chatlab",
                 candidates=[
-                    ImportIdentityCandidate(name=name, uid=uid)
-                    for uid, name in members.items()
+                    ImportIdentityCandidate(name=name, uid=uid) for uid, name in members.items()
                 ],
                 total_messages=len(canonical.get("messages") or []),
                 format_label="WeFlow ChatLab JSONL" if source_is_jsonl else "WeFlow ChatLab",
@@ -174,7 +174,9 @@ class WeChatWeFlowPlugin:
             role = (
                 "self"
                 if self_sender_id is not None and sender.get("senderID") == self_sender_id
-                else "friend" if self_sender_id is not None else "unknown"
+                else "friend"
+                if self_sender_id is not None
+                else "unknown"
             )
             candidates.append(
                 ImportIdentityCandidate(
@@ -203,9 +205,7 @@ class WeChatWeFlowPlugin:
             if _chatlab_placeholder(_parse_int(raw.get("type"), default=99), content) != "[图片]":
                 continue
             message_id = str(
-                raw.get("platformMessageId")
-                or raw.get("_jsonlSourceId")
-                or f"local-{idx}"
+                raw.get("platformMessageId") or raw.get("_jsonlSourceId") or f"local-{idx}"
             )
             if message_id and content:
                 refs.append(ImportImageRef(message_id, content))
@@ -290,7 +290,7 @@ def _parse_chatlab_messages(
 ) -> list[NormalizedMessage]:
     raw_messages = payload.get("messages")
     if not isinstance(raw_messages, list):
-        raise ParseError("ChatLab payload 中缺少 messages 数组")
+        raise ParseError(error_text("The ChatLab payload is missing the messages array"))
 
     messages: list[NormalizedMessage] = []
     for idx, raw in enumerate(raw_messages):
@@ -337,9 +337,7 @@ def _parse_chatlab_messages(
         messages.append(
             NormalizedMessage(
                 message_id=str(
-                    raw.get("platformMessageId")
-                    or raw.get("_jsonlSourceId")
-                    or f"local-{idx}"
+                    raw.get("platformMessageId") or raw.get("_jsonlSourceId") or f"local-{idx}"
                 ),
                 seq=idx,
                 timestamp_ms=timestamp_ms,
@@ -407,11 +405,29 @@ _RECALL_HINTS = (
 # 微信内置 emoji token：`[微笑]` `[捂脸]` `[破涕为笑]` 等（中文 1-4 字 + 方括号）。
 # 注意要排除真实占位符 `[图片]` `[位置]` 等，这些虽然形式相同但语义不同。
 _WECHAT_EMOJI_RE = re.compile(r"\[[一-龥]{1,4}\]")
-_RESERVED_BRACKET_TOKENS: frozenset[str] = frozenset({
-    "[图片]", "[语音]", "[视频]", "[文件]", "[位置]", "[链接]", "[通话]",
-    "[名片]", "[小程序]", "[转账]", "[红包]", "[表情]", "[表情包]", "[动画表情]",
-    "[撤回]", "[系统消息]", "[引用]", "[未知消息]", "[附件]",
-})
+_RESERVED_BRACKET_TOKENS: frozenset[str] = frozenset(
+    {
+        "[图片]",
+        "[语音]",
+        "[视频]",
+        "[文件]",
+        "[位置]",
+        "[链接]",
+        "[通话]",
+        "[名片]",
+        "[小程序]",
+        "[转账]",
+        "[红包]",
+        "[表情]",
+        "[表情包]",
+        "[动画表情]",
+        "[撤回]",
+        "[系统消息]",
+        "[引用]",
+        "[未知消息]",
+        "[附件]",
+    }
+)
 
 
 def _strip_wechat_emoji(text: str) -> str:
@@ -470,11 +486,7 @@ def _parse_one(
     # 单发表情：纯文本消息内容完全由 [微笑] 等微信内置 emoji 组成 → 转为 PLACEHOLDER。
     # 避免主模型把字面 `[微笑]` 当真人语气证据；下游 cleaner 也不必再单独兜底。
     # 引用消息保留正文，由 cleaner 统一归一化为 [表情]，不在这里改 kind。
-    if (
-        raw_type == "文本消息"
-        and not reply_info
-        and _is_emoji_only_text(text_field)
-    ):
+    if raw_type == "文本消息" and not reply_info and _is_emoji_only_text(text_field):
         has_media = True
         placeholders = ["[表情]"]
         text_field = ""

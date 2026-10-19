@@ -14,6 +14,7 @@ from xuwen.chat_api.document import (
     supported_extensions,
 )
 from xuwen.chat_api.state import AppState, get_state
+from xuwen.error_i18n import error_text
 
 router = APIRouter(prefix="/v1/documents", tags=["documents"])
 
@@ -43,10 +44,10 @@ async def extract_document(
 ) -> ExtractResponse:
     """上传文档并提取文本。"""
     if not file.filename:
-        raise HTTPException(status_code=400, detail="缺少文件名")
+        raise HTTPException(status_code=400, detail=error_text("Missing filename"))
     data = await file.read()
     if not data:
-        raise HTTPException(status_code=400, detail="文件内容为空")
+        raise HTTPException(status_code=400, detail=error_text("The file is empty"))
     try:
         doc = extract(data, file.filename)
     except DocumentError as e:

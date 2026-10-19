@@ -1,4 +1,5 @@
-# 后端 API 文档已移动
+# Backend API · 后端 API
 
-完整内容位于 [`docs/wiki/后端API文档.md`](wiki/后端API文档.md)。此文件仅用于兼容旧链接。
+[English](https://kldhsh123.github.io/Afterglow/en/api.html) | [简体中文](https://kldhsh123.github.io/Afterglow/zh/api.html)
 
+Sources / 文档源：[English](en/api.md) · [中文](wiki/后端API文档.md)。This file preserves the old entry point / 此文件保留旧入口。

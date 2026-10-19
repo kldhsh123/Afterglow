@@ -69,9 +69,9 @@ def test_render_persona_card_includes_name_and_samples():
     report = analyze_persona(sessions, friend_name="Bob", self_name="Me")
     md = render_persona_card(report)
     assert "Bob" in md
-    assert "## 语言节奏" in md
-    assert "## 典型对话样本" in md
-    assert "长期统计画像，只能作为语气参考" in md
+    assert "## Speech rhythm" in md
+    assert "## Genuine dialogue examples" in md
+    assert "This statistical profile is a tone reference only." in md
     # 不应回显未脱敏的敏感片段格式（仅检查样本展示是否有 Me/Bob 前缀）
     assert "Me：" in md or "Bob：" in md
 
@@ -88,8 +88,7 @@ def test_render_persona_card_does_not_encourage_image_placeholder_output():
     report = analyze_persona(sessions, friend_name="TA", self_name="Me")
     md = render_persona_card(report)
 
-    assert "模型不能直接输出 [图片] 占位符" in md
-    assert "以 [图片] 代替文字也是自然的" not in md
+    assert "never output historical [图片] placeholders" in md
 
 
 def test_report_to_dict_roundtrip():

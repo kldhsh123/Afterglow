@@ -157,7 +157,7 @@ def render_proactive_context_cache(items: list[ProactiveContextItem]) -> str:
     """渲染给 prompt/debug 使用的紧凑时间顺序上下文。"""
     lines: list[str] = []
     for item in items:
-        role = "用户" if item.role == "user" else "AI"
+        role = "User" if item.role == "user" else "AI"
         lines.append(f"- {role}: {item.text}")
     return "\n".join(lines)
 

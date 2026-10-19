@@ -18,6 +18,7 @@ from xuwen.analysis.models import (
 )
 from xuwen.core.models import NormalizedMessage, Session
 from xuwen.persona.proactive_profile import classify_opening
+from xuwen.prompt_language import output_language
 
 
 def analyze_proactive_openings(
@@ -61,10 +62,7 @@ def analyze_proactive_openings(
         gap_minutes = (
             max(
                 0,
-                int(
-                    (session.start_time_ms - previous_human_session.end_time_ms)
-                    / 60_000
-                ),
+                int((session.start_time_ms - previous_human_session.end_time_ms) / 60_000),
             )
             if previous_human_session is not None
             else None
@@ -126,6 +124,7 @@ def analyze_proactive_openings(
         average_per_30_days = round(len(friend_openings) * 30 / span_days, 2)
 
     return ProactiveAnalysisReport(
+        output_language=output_language(),
         session_gap_minutes=max(1, session_gap_minutes),
         source_session_count=len(ordered),
         source_message_count=sum(session.message_count for session in ordered),
@@ -183,15 +182,15 @@ def render_runtime_proactive_context(
         ),
     )[: max(1, max_records)]
     lines = [
-        "历史主动开聊参考（仅用于寻找相似的真人记忆，不是当前事实）：",
+        "Historical proactive openings: use to find similar genuine memories, never as current facts:",
     ]
     for opening in candidates:
         content = " ".join(opening.content.split())[:280]
         if not content:
             continue
-        reason = f"，动机={opening.reason_summary}" if opening.reason_summary else ""
+        reason = f"; reason={opening.reason_summary}" if opening.reason_summary else ""
         lines.append(
-            f"- {opening.occurred_at[:16]}，类型={opening.opening_type}{reason}，内容={content}"
+            f"- {opening.occurred_at[:16]}; type={opening.opening_type}{reason}; content={content}"
         )
     return "\n".join(lines) if len(lines) > 1 else ""
 

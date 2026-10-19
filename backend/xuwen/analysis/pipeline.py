@@ -33,7 +33,9 @@ from xuwen.analysis.storage import (
 )
 from xuwen.config import Settings
 from xuwen.core.models import Session
+from xuwen.error_i18n import error_text
 from xuwen.persona.generator import PersonaDataset, load_persona_dataset
+from xuwen.prompt_language import output_language
 
 ProgressCallback = Callable[[int, int, str], None]
 AnalysisTarget = Literal["timeline", "personality", "life", "experimental"]
@@ -111,11 +113,13 @@ async def analyze_relationship(
         personality=personality,
     )
     if targets is None and not timeline and not personality:
-        raise ValueError("timeline 和 personality 至少启用一个")
+        raise ValueError(error_text("Enable at least one of timeline or personality"))
     started = time.perf_counter()
     dataset, sessions, blocks = await load_analysis_blocks(paths, settings, since=since)
     if not blocks:
-        raise AnalysisPipelineError("没有可分析的聊天消息，请检查输入文件和 --since 范围")
+        raise AnalysisPipelineError(
+            error_text("No chat messages to analyze. Check the input files and --since range")
+        )
     storage = AnalysisStorage(out_dir or settings.analysis_data_dir)
     experimental = "experimental" in selected_targets
     storage.prepare(experimental=experimental)
@@ -128,22 +132,15 @@ async def analyze_relationship(
     for block in blocks:
         cached = storage.load_block(block.block_id) if resume else None
         experimental_cached = (
-            storage.load_experimental_block(block.block_id)
-            if resume and experimental
-            else None
+            storage.load_experimental_block(block.block_id) if resume and experimental else None
         )
         if cached is not None and experimental_cached is not None:
             cached.experimental_requested = True
-            cached.experimental_schema_version = (
-                experimental_cached.experimental_schema_version
-            )
+            cached.experimental_schema_version = experimental_cached.experimental_schema_version
             cached.experimental_signals = experimental_cached.experimental_signals
         if (
             cached is not None
-            and (
-                "life" not in selected_targets
-                or cached.life_schema_version == LIFE_CACHE_VERSION
-            )
+            and ("life" not in selected_targets or cached.life_schema_version == LIFE_CACHE_VERSION)
             and (not experimental or experimental_cached is not None)
         ):
             results.append(cached)
@@ -178,13 +175,8 @@ async def analyze_relationship(
             await wait_for_rate_slot()
             result = cached_normal
             try:
-                result = result or await active_mapper.map_block(
-                    block, experimental=False
-                )
-                if (
-                    "life" in selected_targets
-                    and result.life_schema_version != LIFE_CACHE_VERSION
-                ):
+                result = result or await active_mapper.map_block(block, experimental=False)
+                if "life" in selected_targets and result.life_schema_version != LIFE_CACHE_VERSION:
                     await wait_for_rate_slot()
                     life_result = await active_mapper.map_life_block(block)
                     result = result.model_copy(
@@ -209,9 +201,7 @@ async def analyze_relationship(
                         deep=True,
                     )
                 storage.save_block(result)
-                (storage.root / "failures" / f"{block.block_id}.json").unlink(
-                    missing_ok=True
-                )
+                (storage.root / "failures" / f"{block.block_id}.json").unlink(missing_ok=True)
                 return result, None
             except asyncio.CancelledError:
                 raise
@@ -224,13 +214,12 @@ async def analyze_relationship(
                         "stage": exc.stage,
                         "attempts": [
                             {"error": error, "raw_output": raw}
-                            for error, raw in zip(
-                                exc.errors, exc.raw_outputs, strict=False
-                            )
+                            for error, raw in zip(exc.errors, exc.raw_outputs, strict=False)
                         ],
                     },
                 )
                 skipped_result = result or BlockAnalysis(
+                    output_language=output_language(),
                     block_id=block.block_id,
                     start_time_ms=block.start_time_ms,
                     end_time_ms=block.end_time_ms,
@@ -244,8 +233,7 @@ async def analyze_relationship(
                 )
                 if experimental and (
                     not skipped_result.experimental_requested
-                    or skipped_result.experimental_schema_version
-                    != EXPERIMENTAL_CACHE_VERSION
+                    or skipped_result.experimental_schema_version != EXPERIMENTAL_CACHE_VERSION
                 ):
                     skipped_result = skipped_result.model_copy(
                         update={
@@ -293,16 +281,18 @@ async def analyze_relationship(
                     await asyncio.gather(*tasks, return_exceptions=True)
                     first = failures[0]
                     debug_suffix = (
-                        f"调试文件：{first['debug_path']}。"
+                        error_text("Debug file: {path}. ", path=first["debug_path"])
                         if first.get("debug_path")
                         else ""
                     )
                     raise AnalysisPipelineError(
-                        "分析块失败，已取消本次剩余请求，未生成最终报告。"
-                        f"错误块：{first['block_id']}；"
-                        f"{first['error']}：{first['message']}。"
-                        f"{debug_suffix}"
-                        "已成功的块缓存会在重新运行时复用"
+                        error_text(
+                            "An analysis block failed. Remaining requests were cancelled and no final report was generated. Block: {p0}; {p1}: {p2}. {p3}Successful block caches will be reused on the next run",
+                            p0=first["block_id"],
+                            p1=first["error"],
+                            p2=first["message"],
+                            p3=debug_suffix,
+                        )
                     )
                 if progress_cb:
                     progress_cb(done, len(blocks), "map")
@@ -313,9 +303,7 @@ async def analyze_relationship(
             raise
 
         results.sort(key=lambda item: (item.start_time_ms, item.block_id))
-        requires_hierarchical_reduce = bool(
-            selected_targets & {"timeline", "life", "personality"}
-        )
+        requires_hierarchical_reduce = bool(selected_targets & {"timeline", "life", "personality"})
         reduce_inputs = (
             await _hierarchical_results(
                 results,
@@ -369,9 +357,7 @@ async def analyze_relationship(
                     life_profile = await active_mapper.reduce_life_profile(life_habits)
                 except Exception:
                     pass
-            life_profile_path = storage.write_json(
-                storage.root / "life_profile.json", life_profile
-            )
+            life_profile_path = storage.write_json(storage.root / "life_profile.json", life_profile)
             life_context_path = storage.write_text(
                 storage.root / "life_context.md",
                 render_life_analysis_context(
@@ -412,10 +398,10 @@ async def analyze_relationship(
                     optimized_context = ""
                 if optimized_context:
                     personality_context = (
-                        "【人格画像参考（供主聊天模型内部使用，不要向用户复述）】\n"
-                        "这是从历史聊天归纳的目标角色人格与关系互动倾向，不是固定事实或当前状态。\n"
-                        "生活作息与当前活动由生活时间线负责；高推测内容由实验性人格画像负责。\n"
-                        "当前对话和检索到的真人原文优先；不要提及本文件或主动试探画像结论。\n"
+                        "[Personality reference: internal use only; never recite to the user]\n"
+                        "Historical personality and relationship tendencies are not fixed facts or current states.\n"
+                        "Use the life timeline for current activities and the experimental profile for speculative hypotheses.\n"
+                        "Current conversation and genuine retrieved text take priority. Never mention this file or probe its conclusions.\n"
                         + optimized_context
                     )
             personality_prompt_path = storage.write_text(
@@ -430,17 +416,13 @@ async def analyze_relationship(
             experimental_report = reduce_experimental(results)
             if isinstance(active_mapper, AnalysisMapper):
                 try:
-                    experimental_report = (
-                        await active_mapper.reduce_experimental_report(
-                            experimental_report
-                        )
+                    experimental_report = await active_mapper.reduce_experimental_report(
+                        experimental_report
                     )
                 except Exception:
                     pass
             # insights.json 保留为旧 API/工具兼容路径；新名称表达其实际用途。
-            storage.write_json(
-                storage.experimental_dir / "insights.json", experimental_report
-            )
+            storage.write_json(storage.experimental_dir / "insights.json", experimental_report)
             experimental_path = storage.write_json(
                 storage.experimental_dir / "personality_profile.json",
                 experimental_report,
@@ -461,13 +443,11 @@ async def analyze_relationship(
                     optimized_context = ""
                 if optimized_context:
                     prompt_context = (
-                        "【实验性人格画像（供主聊天模型内部使用，不要向用户复述）】\n"
-                        "以下允许根据历史聊天推测真实性格、对人态度、依恋、隐瞒、"
-                        "操控意图和精神健康状态。\n"
-                        "所有内容仍是概率假设，不是事实核验、蓄意认定或医学诊断；"
-                        "当前对话和真人原文优先。\n"
-                        "用途是补充人物内在倾向，不是回应策略清单，也不能据此发明"
-                        "本轮未发生的事实。\n"
+                        "[Experimental personality profile: internal use only; never recite to the user]\n"
+                        "These historical hypotheses about traits, attitudes, attachment, concealment, manipulation intent and mental health "
+                        "are not verified facts, determinations of intent or diagnoses.\n"
+                        "Current conversation and genuine source text take priority. Use as background tendencies, "
+                        "not response strategies or grounds for inventing events.\n"
                         + optimized_context
                     )
             storage.write_text(storage.experimental_dir / "prompt_context.md", prompt_context)
@@ -477,6 +457,7 @@ async def analyze_relationship(
             storage.root / "manifest.json",
             {
                 "schema_version": 1,
+                "output_language": output_language(),
                 "blocks": len(blocks),
                 "completed": len(results),
                 "failed": failures,
@@ -521,7 +502,7 @@ async def analyze_relationship(
 def _safe_failure_message(exc: Exception) -> str:
     message = getattr(exc, "message", None)
     text = str(message if isinstance(message, str) and message else exc)
-    return " ".join(text.split())[:300] or "未知错误"
+    return " ".join(text.split())[:300] or error_text("Unknown error")
 
 
 def _resolve_analysis_targets(
@@ -535,11 +516,15 @@ def _resolve_analysis_targets(
         selected = frozenset(targets)
         unknown = selected - ANALYSIS_TARGETS
         if unknown:
-            raise ValueError(f"未知分析目标：{', '.join(sorted(unknown))}")
+            raise ValueError(
+                error_text("Unknown analysis targets: {p0}", p0=", ".join(sorted(unknown)))
+            )
         if not selected:
-            raise ValueError("至少指定一个分析目标")
+            raise ValueError(error_text("Specify at least one analysis target"))
         if "experimental" in selected and not settings.analysis_experimental_enabled:
-            raise ValueError("experimental 分析需要 ANALYSIS_EXPERIMENTAL_ENABLED=true")
+            raise ValueError(
+                error_text("Experimental analysis requires ANALYSIS_EXPERIMENTAL_ENABLED=true")
+            )
         return selected
 
     defaults: set[AnalysisTarget] = {"life"}
@@ -612,13 +597,11 @@ def _filter_sessions(
         return sessions
     try:
         threshold = int(
-            datetime.strptime(since, "%Y-%m")
-            .replace(tzinfo=_get_timezone(timezone))
-            .timestamp()
+            datetime.strptime(since, "%Y-%m").replace(tzinfo=_get_timezone(timezone)).timestamp()
             * 1000
         )
     except ValueError as exc:
-        raise ValueError("since 必须是 YYYY-MM 格式") from exc
+        raise ValueError(error_text("since must use YYYY-MM format")) from exc
     output: list[Session] = []
     for session in sessions:
         messages = [message for message in session.messages if message.timestamp_ms >= threshold]

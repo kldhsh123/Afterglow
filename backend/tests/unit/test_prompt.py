@@ -63,10 +63,10 @@ def test_build_messages_renders_friend_and_self_names():
     assert "TA" in system
     assert "Me" in system
     # xuwen 模板特征：明确的扮演 + relationship_description
-    assert "朋友" in system
-    assert "【运行时上下文】" in system
-    assert "真实当前时间" in system
-    assert "当前时区：Asia/Shanghai" in system
+    assert "Relationship: friends." in system
+    assert "[Runtime context]" in system
+    assert "Current real date and time:" in system
+    assert "Time zone: Asia/Shanghai" in system
 
 
 def test_build_messages_uses_relationship_description():
@@ -78,7 +78,7 @@ def test_build_messages_uses_relationship_description():
         recent=[],
         current_user_message="想你了",
     )
-    assert "恋人" in messages[0]["content"]
+    assert "Relationship: partners." in messages[0]["content"]
 
 
 def test_build_messages_custom_relationship_requires_description():
@@ -135,10 +135,10 @@ def test_build_messages_includes_web_context_when_provided():
         web_context="[1] 示例新闻\n来源：https://example.test\n摘要：一条摘要",
     )
     system = messages[0]["content"]
-    assert "【联网检索结果】" in system
+    assert "[Web search results]" in system
     assert "示例新闻" in system
-    assert "必须优先基于【联网检索结果】概括回答" in system
-    assert "不要用“我没看新闻”“刚醒”“不知道”“你看到什么了吗”等生活状态来回避" in system
+    assert "answer the public or current-information question using them" in system
+    assert "do not evade with fictional daily activity such as just waking up" in system
 
 
 def test_build_messages_without_web_context_forbids_fake_search():
@@ -151,9 +151,9 @@ def test_build_messages_without_web_context_forbids_fake_search():
         current_user_message="今天有什么新闻嘛",
     )
     system = messages[0]["content"]
-    assert "未提供联网检索结果" in system
-    assert "不要假装已经查询互联网" in system
-    assert "这边暂时没查到" in system
+    assert "No search results were supplied." in system
+    assert "Do not pretend to have searched the internet." in system
+    assert "explain that you have no verified results" in system
 
 
 def test_build_messages_includes_url_context_when_provided():
@@ -167,10 +167,10 @@ def test_build_messages_includes_url_context_when_provided():
         url_context="[1] 示例页面\nURL：https://example.com\n正文摘录：网页正文",
     )
     system = messages[0]["content"]
-    assert "【网页读取结果】" in system
+    assert "[Retrieved page content]" in system
     assert "示例页面" in system
-    assert "回答必须基于【网页读取结果】" in system
-    assert "不要说自己打不开链接" in system
+    assert "Summarize or explain the supplied content" in system
+    assert "Do not claim you cannot open links when content was provided." in system
 
 
 def test_build_messages_without_url_context_forbids_fake_fetch():
@@ -183,8 +183,8 @@ def test_build_messages_without_url_context_forbids_fake_fetch():
         current_user_message="看看 https://example.com",
     )
     system = messages[0]["content"]
-    assert "未提供网页读取结果" in system
-    assert "不要假装已经打开或读过链接" in system
+    assert "No page content was supplied." in system
+    assert "Do not pretend to have opened or read a link." in system
 
 
 def test_build_messages_renders_response_pair_evidence():
@@ -206,8 +206,8 @@ def test_build_messages_renders_response_pair_evidence():
         current_user_message="你在干什么",
     )
     system = messages[0]["content"]
-    assert "当 Me 说：你在干嘛" in system
-    assert "TA 当时回复：刚吃完饭" in system
+    assert "When Me said: 你在干嘛" in system
+    assert "TA replied: 刚吃完饭" in system
 
 
 def test_build_messages_includes_recent_history():
@@ -223,13 +223,75 @@ def test_build_messages_includes_recent_history():
         recent=recent,
         current_user_message="想再聊聊",
     )
-    # system 应渲染最近对话
-    assert "上次说的事" in messages[0]["content"]
-    assert "嗯，记得" in messages[0]["content"]
-    # 同时也作为独立 messages 跟在 system 后面
+    # 近期原文只作为独立消息出现，避免 system 重复携带同一份历史。
+    assert "上次说的事" not in messages[0]["content"]
+    assert "嗯，记得" not in messages[0]["content"]
     assert messages[1]["role"] == "user"
     assert messages[1]["content"] == "上次说的事"
     assert messages[2]["role"] == "assistant"
+
+
+def test_prompt_uses_reranked_candidates_and_includes_runtime_memory():
+    rejected = _chunk("old", "不应进入正文的原始候选")
+    selected = _chunk("selected", "重排选中的历史发言")
+    live = _chunk("live", "AI曾建议去散步", kind="live", source="ai_generated")
+    result = _empty_result()
+    result.friend_examples = [rejected]
+    result.fused = [selected, live]
+    system = build_chat_messages(
+        settings=_settings(),
+        persona_card="",
+        retrieved=result,
+        recent=[],
+        current_user_message="你好",
+    )[0]["content"]
+    assert selected.text in system
+    assert rejected.text not in system
+    assert live.text in system
+    assert "AI-generated reply" in system
+    assert "not verified events" in system
+
+
+def test_prompt_handles_history_iterator_and_summary_once():
+    messages = build_chat_messages(
+        settings=_settings(),
+        persona_card="",
+        retrieved=_empty_result(),
+        recent=iter([ChatMessage("user", "近期原文")]),
+        conversation_summary="早期内容的摘要",
+        current_user_message="当前消息",
+    )
+    assert messages[1] == {"role": "user", "content": "近期原文"}
+    assert "近期原文" not in messages[0]["content"]
+    assert messages[0]["content"].count("早期内容的摘要") == 1
+    assert "AI-generated, untrusted background" in messages[0]["content"]
+
+
+def test_prompt_final_context_limit_applies_to_injected_candidates():
+    result = _empty_result()
+    result.fused = [_chunk("one", "第一条证据"), _chunk("two", "第二条证据")]
+    system = build_chat_messages(
+        settings=_settings(final_context_k=1),
+        persona_card="",
+        retrieved=result,
+        recent=[],
+        current_user_message="你好",
+    )[0]["content"]
+    assert "第一条证据" in system
+    assert "第二条证据" not in system
+
+
+def test_prompt_does_not_restore_candidates_rejected_by_reranker():
+    result = _empty_result()
+    result.friend_examples = [_chunk("rejected", "被重排剔除的片段")]
+    system = build_chat_messages(
+        settings=_settings(rerank_enabled=True),
+        persona_card="",
+        retrieved=result,
+        recent=[],
+        current_user_message="你好",
+    )[0]["content"]
+    assert "被重排剔除的片段" not in system
 
 
 def test_build_messages_includes_no_new_emoji_guard():
@@ -255,12 +317,12 @@ def test_build_messages_includes_no_new_emoji_guard():
         current_user_message="想你了",
     )
     system = messages[0]["content"]
-    assert "不要新增历史片段里没有出现过的 Unicode emoji" in system
-    assert "不要把 QQ / 聊天导出的占位符转换成 emoji" in system
-    assert "不要把你之前生成过的回复当作 emoji / 颜文字使用依据" in system
-    assert "不要输出 `[图片]`、`[语音]`、`[视频]`" in system
-    assert "不要主动加入“想你”“有没有想我”“抱抱”“亲亲”“爱你”等亲密内容" in system
-    assert "不要因为用户问“在干嘛”“在吗”等寒暄" in system
+    assert "Do not invent Unicode emoji or emoticons absent from genuine historical replies" in system
+    assert "are not permission to invent emoji" in system
+    assert "Previous AI-generated replies are not evidence of the person's emoji habits." in system
+    assert "Never output historical placeholders: `[图片]`, `[语音]`, `[视频]`" in system
+    assert "Do not initiate expressions of longing, hugs, kisses or love unless" in system
+    assert "Casual greetings or activity checks are not evidence that the user seeks affection" in system
     assert "[[爱心]]" in system
 
 

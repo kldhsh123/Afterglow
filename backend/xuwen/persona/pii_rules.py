@@ -21,6 +21,7 @@ from pathlib import Path
 import yaml
 
 from xuwen.core.errors import ConfigError
+from xuwen.error_i18n import error_text
 
 
 @dataclass(slots=True, frozen=True)
@@ -153,7 +154,7 @@ def load_rules(path: Path | None = None) -> list[PIIRule]:
         return list(DEFAULT_RULES)
 
     if not path.exists():
-        raise ConfigError(f"找不到 PII 规则文件：{path}")
+        raise ConfigError(error_text("PII rules file not found: {p0}", p0=path))
 
     text = path.read_text(encoding="utf-8")
     if path.suffix.lower() in {".yaml", ".yml"}:
@@ -162,7 +163,7 @@ def load_rules(path: Path | None = None) -> list[PIIRule]:
         raw = json.loads(text)
 
     if not isinstance(raw, list):
-        raise ConfigError("PII 规则文件必须是规则对象数组")
+        raise ConfigError(error_text("The PII rules file must be an array of rule objects"))
 
     custom: list[PIIRule] = []
     for entry in raw:

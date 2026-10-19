@@ -3,16 +3,12 @@
 import { computed } from 'vue'
 import { useSettingsStore } from '@/stores/settings'
 import { Heart } from 'lucide-vue-next'
+import { useLocale } from '@/composables/useLocale'
 
 const settings = useSettingsStore()
-const target = computed(() => settings.friendName || '朋友')
-
-const samples = [
-  '在吗',
-  '最近怎么样',
-  '我有点想你了',
-  '想跟你聊聊今天发生的事',
-]
+const { t, list } = useLocale()
+const target = computed(() => settings.friendName || t('remaining.friend'))
+const samples = computed(() => list('empty.samples'))
 
 const emit = defineEmits<{ (e: 'pick', text: string): void }>()
 </script>
@@ -23,11 +19,8 @@ const emit = defineEmits<{ (e: 'pick', text: string): void }>()
                 flex items-center justify-center text-accent dark:text-night-accent mb-5">
       <Heart :size="28" />
     </div>
-    <h2 class="text-xl font-medium mb-2">{{ settings.appSlogan }}</h2>
-    <p class="text-sm text-ink-soft dark:text-night-text-soft max-w-md mb-8">
-      你可以像平时那样跟 <span class="font-medium">{{ target }}</span> 聊聊。
-      ta 的语气、用词、节奏来自你们的真实历史聊天。
-    </p>
+    <h2 class="text-xl font-medium mb-2">{{ settings.appSlogan === '把曾经对你好的话，续成往后的陪伴' ? t('onboarding.slogan') : settings.appSlogan }}</h2>
+    <p class="text-sm text-ink-soft dark:text-night-text-soft max-w-md mb-8">{{ t('empty.talk', { name: target }) }}</p>
     <div class="flex flex-wrap gap-2 justify-center max-w-md">
       <button
         v-for="s in samples"

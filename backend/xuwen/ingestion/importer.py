@@ -22,6 +22,7 @@ from typing import Any
 
 from xuwen.chat_api.llm_client import LLMClient
 from xuwen.config import Settings
+from xuwen.content_i18n import content_text
 from xuwen.core.errors import IngestionError
 from xuwen.core.models import (
     ChunkBundle,
@@ -31,6 +32,7 @@ from xuwen.core.models import (
     MessageKind,
     ResponsePairChunk,
 )
+from xuwen.error_i18n import error_text
 from xuwen.ingestion.adaptive_chunker import build_adaptive_windows
 from xuwen.ingestion.chunk_cache import AdaptiveChunkCache
 from xuwen.ingestion.chunker import (
@@ -72,9 +74,11 @@ class _EmbeddingCircuitBreaker:
         self._consecutive_failed += result.failed_batches
         if self._consecutive_failed >= self._failure_limit:
             raise IngestionError(
-                f"embedding 连续 {self._consecutive_failed} 个请求失败，"
-                f"判定为系统性故障，终止导入（已入库部分重跑时自动跳过）。"
-                f"最后错误：{result.last_error}"
+                error_text(
+                    "Embedding failed for {p0} consecutive requests. Import stopped due to a likely service failure. Previously stored records will be skipped on the next run. Last error: {p1}",
+                    p0=self._consecutive_failed,
+                    p1=result.last_error,
+                )
             ) from result.last_error
 
 
@@ -122,7 +126,7 @@ async def import_history(
                 pass
 
     start = time.perf_counter()
-    _stage("正在解析消息")
+    _stage(content_text("Parsing messages"))
     payload = load_qq_json(json_path)
 
     # 1) parse（plugin 自动识别）
@@ -141,12 +145,12 @@ async def import_history(
             pass
 
     # 2）清洗
-    _stage(f"正在清洗与去重 {len(parsed)} 条消息")
+    _stage(content_text("Cleaning and deduplicating {p0} messages", p0=len(parsed)))
     cleaner = Cleaner(settings, json_emoji_mode=json_emoji_mode)
     cleaned = cleaner.clean_many(parsed)
 
     # 3）切分
-    _stage("正在切分会话")
+    _stage(content_text("Splitting sessions"))
     sessions = split_sessions(cleaned, settings)
     has_processable_sessions = any(
         any(message.kind != MessageKind.SYSTEM for message in session.messages)
@@ -172,7 +176,11 @@ async def import_history(
         if settings.chunking_strategy == "adaptive":
             chunk_cache: AdaptiveChunkCache | None = None
             if settings.adaptive_chunk_model_enabled:
-                _stage(f"正在调用小模型切分话题边界（{len(sessions)} 个会话）")
+                _stage(
+                    content_text(
+                        "Using the small model to split topics ({p0} sessions)", p0=len(sessions)
+                    )
+                )
                 adaptive_llm = LLMClient(
                     settings,
                     api_url=settings.resolved_adaptive_chunk_api_url,
@@ -183,15 +191,30 @@ async def import_history(
                 # 模型切分结果缓存：中断重跑 / 重复导入时命中即免调模型
                 chunk_cache = AdaptiveChunkCache(settings.adaptive_chunk_cache_path)
             else:
-                _stage(f"正在用启发式 adaptive 切分窗口（{len(sessions)} 个会话）")
+                _stage(
+                    content_text(
+                        "Using adaptive heuristics to split windows ({p0} sessions)",
+                        p0=len(sessions),
+                    )
+                )
 
             def _on_split_progress(done: int, total: int) -> None:
                 # 模型切分时一个会话内部可能有多次小模型调用，串行执行；
                 # 每完成一个会话才回调一次，及时把进度推给前端
                 if settings.adaptive_chunk_model_enabled:
-                    _stage(f"正在调用小模型切分话题边界 {done}/{total} 个会话")
+                    _stage(
+                        content_text(
+                            "Using the small model to split topics: {p0}/{p1} sessions",
+                            p0=done,
+                            p1=total,
+                        )
+                    )
                 else:
-                    _stage(f"启发式 adaptive 切分 {done}/{total} 个会话")
+                    _stage(
+                        content_text(
+                            "Adaptive heuristic splitting: {p0}/{p1} sessions", p0=done, p1=total
+                        )
+                    )
                 # 同时通过 split_progress_cb 让 UI 进度数字也动起来
                 if split_progress_cb is not None:
                     try:
@@ -210,18 +233,21 @@ async def import_history(
             )
             if chunk_cache is not None and (chunk_cache.hits or chunk_cache.misses):
                 _stage(
-                    f"话题切分完成（缓存命中 {chunk_cache.hits}/"
-                    f"{chunk_cache.hits + chunk_cache.misses} 批）"
+                    content_text(
+                        "Topic splitting complete (cache hits: {p0}/{p1} batches)",
+                        p0=chunk_cache.hits,
+                        p1=chunk_cache.hits + chunk_cache.misses,
+                    )
                 )
         else:
-            _stage(f"正在切分窗口（{len(sessions)} 个会话）")
+            _stage(content_text("Splitting windows ({p0} sessions)", p0=len(sessions)))
             windows = build_windows(sessions, settings)
     finally:
         if adaptive_llm is not None:
             await adaptive_llm.aclose()
 
     # 4) chunk —— 直接基于 sessions，确保 friend chunk 的上下文不跨 session
-    _stage("正在构建 chunks")
+    _stage(content_text("Building chunks"))
     friend_chunks = build_friend_chunks(sessions, settings)
     window_chunks = build_window_chunks(windows, settings)
     response_pair_chunks = build_response_pair_chunks(sessions, settings)
@@ -235,8 +261,9 @@ async def import_history(
     notes: list[str] = []
     if not bundle.friend_chunks:
         notes.append(
-            "未产出任何朋友单条 chunk，请确认 FRIEND_UID 是否正确"
-            "（检查 .env 中 SELF_UID/FRIEND_UID 与导出 JSON 的 chatInfo.selfUid 是否对应）。"
+            content_text(
+                "No friend-message chunks were produced. Check FRIEND_UID and ensure SELF_UID/FRIEND_UID in .env match chatInfo.selfUid in the exported JSON."
+            )
         )
 
     if not bundle.friend_chunks and not bundle.window_chunks:
@@ -255,7 +282,7 @@ async def import_history(
             upserted_window=0,
             upserted_response_pairs=0,
             duration_seconds=round(time.perf_counter() - start, 3),
-            notes=notes or ["未产出任何 chunk，请检查导入数据"],
+            notes=notes or [content_text("No chunks were produced. Check the imported data")],
         )
 
     # 5) embed + upsert（每批边 embed 边写库，支持中断续跑）
@@ -285,11 +312,13 @@ async def import_history(
         # 用的是 chunks_by_id 去重后的数；微小偏差可以接受。
         done_per_track = [0, 0, 0]
         total_all = (
-            len(bundle.friend_chunks)
-            + len(bundle.window_chunks)
-            + len(bundle.response_pair_chunks)
+            len(bundle.friend_chunks) + len(bundle.window_chunks) + len(bundle.response_pair_chunks)
         )
-        _stage(f"开始向量化（共 {total_all} 个 chunk，首批可能略慢）")
+        _stage(
+            content_text(
+                "Starting embedding ({p0} chunks; the first batch may take longer)", p0=total_all
+            )
+        )
 
         def _make_track_cb(track_idx: int) -> Callable[[int, int], None] | None:
             if chunk_progress_cb is None:
@@ -301,9 +330,7 @@ async def import_history(
 
             return _cb
 
-        circuit_breaker = _EmbeddingCircuitBreaker(
-            settings.embedding_max_consecutive_failures
-        )
+        circuit_breaker = _EmbeddingCircuitBreaker(settings.embedding_max_consecutive_failures)
         track_tasks = [
             asyncio.create_task(
                 _embed_and_upsert_track(
@@ -372,17 +399,25 @@ async def import_history(
     embedded_pair = pair_stats["embedded"]
     if skipped_friend or skipped_window or skipped_pair:
         notes.append(
-            f"续跑跳过已入库的 chunk："
-            f"friend {skipped_friend} / window {skipped_window} / pair {skipped_pair}"
+            content_text(
+                "Resume skipped stored chunks: friend {p0} / window {p1} / pair {p2}",
+                p0=skipped_friend,
+                p1=skipped_window,
+                p2=skipped_pair,
+            )
         )
     failed_friend = friend_stats["failed"]
     failed_window = window_stats["failed"]
     failed_pair = pair_stats["failed"]
     if failed_friend or failed_window or failed_pair:
         notes.append(
-            f"向量化失败已跳过 {failed_friend + failed_window + failed_pair} 个 chunk"
-            f"（friend {failed_friend} / window {failed_window} / pair {failed_pair}）。"
-            "重新导入同一文件会自动只补这些失败条目。"
+            content_text(
+                "Skipped {p0} chunks after embedding failures (friend {p1} / window {p2} / pair {p3}). Importing the same file again will retry only these missing entries.",
+                p0=failed_friend + failed_window + failed_pair,
+                p1=failed_friend,
+                p2=failed_window,
+                p3=failed_pair,
+            )
         )
 
     # 生成 / 更新作息画像 circadian_profile.json
@@ -406,7 +441,7 @@ async def import_history(
             import logging
 
             logging.getLogger(__name__).warning(
-                "circadian profile 生成失败，已忽略", exc_info=True
+                content_text("Daily rhythm profile generation failed; skipped"), exc_info=True
             )
 
     if update_proactive:
@@ -431,7 +466,7 @@ async def import_history(
             import logging
 
             logging.getLogger(__name__).warning(
-                "proactive profile 生成失败，已忽略", exc_info=True
+                content_text("Proactive profile generation failed; skipped"), exc_info=True
             )
 
     duration = round(time.perf_counter() - start, 3)
@@ -451,6 +486,9 @@ async def import_history(
         upserted_response_pairs=n_pair,
         duration_seconds=duration,
         notes=notes,
+        failed_friend=failed_friend,
+        failed_window=failed_window,
+        failed_response_pairs=failed_pair,
     )
 
     # 如果启用了打标，导入完成后顺手跑一遍（仅对未打标 chunk 操作）。
@@ -466,11 +504,19 @@ async def import_history(
                 progress_cb=label_progress_cb,
             )
             report.notes.append(
-                f"打标：{label_report.labeled}/{label_report.total_unlabeled} 条已标，"
-                f"耗时 {label_report.duration_seconds}s"
+                content_text(
+                    "Labeling: {p0}/{p1} labeled in {p2}s",
+                    p0=label_report.labeled,
+                    p1=label_report.total_unlabeled,
+                    p2=label_report.duration_seconds,
+                )
             )
         except Exception as e:  # 打标失败不影响导入
-            report.notes.append(f"打标失败：{type(e).__name__}（可稍后用 cli label 手动重试）")
+            report.notes.append(
+                content_text(
+                    "Labeling failed: {p0}. Retry later with cli label", p0=type(e).__name__
+                )
+            )
 
     return report
 
@@ -539,9 +585,7 @@ async def _embed_and_upsert_track(
     upsert_tasks: list[asyncio.Task[int]] = []
     breaker = circuit_breaker or _EmbeddingCircuitBreaker(max_consecutive_failures)
 
-    async def _upsert_one(
-        batch_: list[Any], embeddings_: dict[str, list[float]]
-    ) -> int:
+    async def _upsert_one(batch_: list[Any], embeddings_: dict[str, list[float]]) -> int:
         try:
             return await upsert_fn(batch_, embeddings_)
         finally:
@@ -556,9 +600,7 @@ async def _embed_and_upsert_track(
             result = await embedder.embed_texts_tolerant(texts)
             breaker.record(result)
             ok_pairs = [
-                (c, vec)
-                for c, vec in zip(batch, result.vectors, strict=True)
-                if vec is not None
+                (c, vec) for c, vec in zip(batch, result.vectors, strict=True) if vec is not None
             ]
             stats["failed"] += len(batch) - len(ok_pairs)
             stats["embedded"] += len(ok_pairs)

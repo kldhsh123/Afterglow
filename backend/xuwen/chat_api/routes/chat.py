@@ -7,7 +7,7 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -31,6 +31,7 @@ from xuwen.chat_api.companion_prompt import (
     build_persona_card_with_companion_context,
     render_life_memory_context_from_recent,
 )
+from xuwen.chat_api.conversation_context import prepare_conversation_context
 from xuwen.chat_api.image_store import ImageError, save_data_url
 from xuwen.chat_api.llm_client import GenerationParams
 from xuwen.chat_api.output_filter import AssistantOutputFilter, sanitize_assistant_text
@@ -63,9 +64,11 @@ from xuwen.companion.response_policy import (
     refine_decision_with_llm,
 )
 from xuwen.config import Settings
+from xuwen.content_i18n import content_text
 from xuwen.core.errors import RetrievalError, XuwenError
 from xuwen.core.models import RetrievalQuery
 from xuwen.core.time import local_now
+from xuwen.error_i18n import error_text
 from xuwen.memory.writer import WritebackTurn
 from xuwen.persona.prompt import ChatMessage as PromptMessage
 from xuwen.persona.prompt import build_chat_messages
@@ -112,7 +115,10 @@ async def chat_completions(
     trace_id = str(getattr(request.state, "request_id", "") or "")
     user_messages = [m for m in req.messages if m.role == "user"]
     if not user_messages:
-        raise HTTPException(status_code=400, detail="messages 中至少要有一条 role=user")
+        raise HTTPException(
+            status_code=400,
+            detail=error_text("messages must contain at least one entry with role=user"),
+        )
     last_user = user_messages[-1]
 
     image_shas: list[str] = []
@@ -126,7 +132,9 @@ async def chat_completions(
         if not state.settings.vision_enabled:
             raise HTTPException(
                 status_code=400,
-                detail="未启用视觉理解。请在后端 .env 设置 VISION_ENABLED=true。",
+                detail=error_text(
+                    "Vision is disabled. Set VISION_ENABLED=true in the backend .env"
+                ),
             )
         for url in images_in_last:
             try:
@@ -141,7 +149,9 @@ async def chat_completions(
             ):
                 raise HTTPException(
                     status_code=400,
-                    detail="主模型不支持视觉，且 VISION_API_URL / VISION_API_KEY 未配置。",
+                    detail=error_text(
+                        "The main model does not support vision, and VISION_API_URL / VISION_API_KEY are not configured"
+                    ),
                 )
 
     if req.caller_id:
@@ -198,19 +208,19 @@ async def chat_completions(
                 )
         except TimeoutError:
             logger.warning(
-                "VLM 描图超时 %.1fs，使用占位描述",
+                content_text("VLM description timed out after %.1fs; using a placeholder"),
                 state.settings.vision_timeout_seconds,
             )
             state.metrics.record("vision.describe", 0.0, error="TimeoutError")
             vlm_descriptions = ["[图片：识别超时]"] * len(images_in_last)
         except Exception:
-            logger.warning("VLM 描图失败，使用占位描述", exc_info=True)
+            logger.warning(
+                content_text("VLM description failed; using a placeholder"), exc_info=True
+            )
             state.metrics.record("vision.describe", 0.0, error="Exception")
-            vlm_descriptions = ["[图片：识别失败]"] * len(images_in_last)
+            vlm_descriptions = [content_text("[Image: recognition failed]")] * len(images_in_last)
     if vlm_descriptions:
-        desc_block = "\n".join(
-            f"[图片{i + 1}描述：{d}]" for i, d in enumerate(vlm_descriptions)
-        )
+        desc_block = "\n".join(f"[图片{i + 1}描述：{d}]" for i, d in enumerate(vlm_descriptions))
         current_user_text = (current_user_text + "\n" + desc_block).strip()
 
     retrieval_query = current_user_text if current_user_text else "（用户发了一张图片）"
@@ -237,7 +247,7 @@ async def chat_completions(
             return result
         except TimeoutError:
             logger.warning(
-                "检索超时 %.1fs，停止本轮聊天",
+                content_text("Retrieval timed out after %.1fs; stopping this chat turn"),
                 state.settings.retrieval_timeout_seconds,
             )
             state.metrics.record(
@@ -248,12 +258,14 @@ async def chat_completions(
             raise HTTPException(
                 status_code=504,
                 detail=(
-                    f"记忆检索超时（>{state.settings.retrieval_timeout_seconds:g}s）。"
-                    "本轮已停止：请先检查 Embedding/向量模型连通性。"
+                    error_text(
+                        "Memory retrieval timed out (>{p0:g}s). This turn was stopped. Check embedding service connectivity",
+                        p0=state.settings.retrieval_timeout_seconds,
+                    )
                 ),
             ) from None
         except RetrievalError as e:
-            logger.warning("检索失败，停止本轮聊天：%s", e.message)
+            logger.warning(content_text("Retrieval failed; stopping this chat turn: %s"), e.message)
             state.metrics.record(
                 "retrieval",
                 (time.perf_counter() - _retrieval_start) * 1000,
@@ -261,7 +273,9 @@ async def chat_completions(
             )
             raise HTTPException(
                 status_code=503,
-                detail=f"记忆检索失败，本轮已停止：{e.message}",
+                detail=error_text(
+                    "Memory retrieval failed; this turn was stopped: {p0}", p0=e.message
+                ),
             ) from e
 
     async def _web_search_or_skip() -> str:
@@ -282,7 +296,7 @@ async def chat_completions(
             )
             return render_web_context(results)
         except Exception:
-            logger.warning("web_search 调用失败", exc_info=True)
+            logger.warning(content_text("web_search failed"), exc_info=True)
             return ""
 
     async def _resolve_urls_or_skip() -> list[str]:
@@ -298,7 +312,7 @@ async def chat_completions(
                 metrics=state.metrics,
             )
         except Exception:
-            logger.warning("resolve_fetch_urls 失败", exc_info=True)
+            logger.warning(content_text("resolve_fetch_urls failed"), exc_info=True)
             return []
 
     # life 进 Layer A 并发：memory_context 改用 recent（不依赖 retrieved），
@@ -317,7 +331,9 @@ async def chat_completions(
                         current_user_text=current_user_text,
                         recent=recent,
                         relationship_context=life_markdown,
-                        memory_context=render_life_memory_context_from_recent(recent, state.settings),
+                        memory_context=render_life_memory_context_from_recent(
+                            recent, state.settings
+                        ),
                         trigger="chat",
                         trace_id=trace_id,
                         metrics=state.metrics,
@@ -326,7 +342,9 @@ async def chat_completions(
                 )
             except TimeoutError:
                 logger.warning(
-                    "life 决策超时 %.1fs，沿用当前 snapshot",
+                    content_text(
+                        "Life decision timed out after %.1fs; retaining the current snapshot"
+                    ),
                     state.settings.life_timeout_seconds,
                 )
                 state.metrics.record("life.decide", 0.0, error="TimeoutError")
@@ -345,7 +363,9 @@ async def chat_completions(
             )
         except TimeoutError:
             logger.warning(
-                "关系记忆渲染超时 %.1fs，降级为空上下文",
+                content_text(
+                    "Relationship memory rendering timed out after %.1fs; using empty context"
+                ),
                 _CHAT_RELATIONSHIP_TIMEOUT_SECONDS,
             )
             state.metrics.record("relationship.context", 0.0, error="TimeoutError")
@@ -354,11 +374,20 @@ async def chat_completions(
     # Layer A：只放"无论是否回复都需要"的预决策任务（检索 / 关系记忆 / life）。
     # Web Search / URL Resolve 涉及外部 API 调用 + 用户隐私文本外发，必须等 decision
     # 确认 should_reply=True 才能启动；否则用户说"别回我"也会触发搜索调用（隐私 + 费用泄漏）。
-    retrieved, relationship_block, life = await asyncio.gather(
+    retrieved, relationship_block, life, conversation_context = await asyncio.gather(
         _retrieve_with_metrics(),
         _relationship_context_or_empty(),
         _life_in_parallel(),
+        prepare_conversation_context(
+            recent,
+            settings=state.settings,
+            llm=state.life_llm,
+            conversation_id=req.conversation_id or req.caller_id,
+            metrics=state.metrics,
+            trace_id=trace_id,
+        ),
     )
+    recent = conversation_context.recent
 
     # 模型名固定使用后端配置的 CHAT_MODEL；req.model 接受但忽略
     model_name = state.settings.chat_model
@@ -376,7 +405,7 @@ async def chat_completions(
             )
             return render_url_context(url_results)
         except Exception:
-            logger.warning("fetch_many 失败", exc_info=True)
+            logger.warning(content_text("fetch_many failed"), exc_info=True)
             return ""
 
     response_decision = decide_response_policy(
@@ -412,7 +441,9 @@ async def chat_completions(
             )
         except TimeoutError:
             logger.warning(
-                "互动策略小模型超时 %.1fs，沿用规则层决策",
+                content_text(
+                    "Response-policy model timed out after %.1fs; retaining the rule decision"
+                ),
                 state.settings.response_policy_timeout_seconds,
             )
             state.metrics.record("response.policy.refined", 0.0, error="TimeoutError")
@@ -518,9 +549,10 @@ async def chat_completions(
         persona_card=persona_card,
         retrieved=retrieved,
         recent=recent,
-        current_user_message=current_user_text or "（图片）",
+        current_user_message=current_user_text or content_text("(Image)"),
         web_context=web_context,
         url_context=url_context,
+        conversation_summary=conversation_context.summary,
     )
 
     if (
@@ -535,9 +567,7 @@ async def chat_completions(
                 {"type": "text", "text": text_for_user},
             ]
             for url in images_in_last:
-                multimodal_content.append(
-                    {"type": "image_url", "image_url": {"url": url}}
-                )
+                multimodal_content.append({"type": "image_url", "image_url": {"url": url}})
             messages[-1] = {"role": "user", "content": multimodal_content}  # type: ignore[dict-item]
 
     params = GenerationParams(
@@ -638,8 +668,10 @@ async def chat_completions(
                         retry_stripped,
                         valid_sticker_names=valid_names,
                     )
-                    if retry_text and retry_text != "嗯" and not looks_like_sticker_only_intent(
-                        retry_stripped
+                    if (
+                        retry_text
+                        and retry_text != "嗯"
+                        and not looks_like_sticker_only_intent(retry_stripped)
                     ):
                         assistant_text = retry_text
                         accepted_life_events = retry_extraction.events
@@ -650,11 +682,15 @@ async def chat_completions(
                             detail=f"trace={trace_id},mode={response_decision.reply_mode}",
                         )
                 except Exception:
-                    logger.warning("sticker retry 失败，回退到短句兜底", exc_info=True)
+                    logger.warning(
+                        content_text("Sticker retry failed; using a brief fallback"), exc_info=True
+                    )
             if not retried:
                 accepted_life_events = ()
                 assistant_text = (
-                    fallback_for_rejected_sticker(response_decision.reply_mode)
+                    fallback_for_rejected_sticker(
+                        response_decision.reply_mode, user_text=current_user_text
+                    )
                     or assistant_text
                 )
                 state.metrics.record(
@@ -720,41 +756,43 @@ async def chat_completions(
     await _ack_turn(state, turn_snapshot)
     # Feature #9：从主模型原始输出抽 <schedule-hint>，调用小模型解析为 ScheduleTask。
     # 失败/未启用时为 None；不影响正常回复链路。
-    schedule_tasks_field = None
-    schedule_hints = extract_schedule_hints(
-        raw_assistant_text,
-        max_hints=state.settings.schedule_max_hints_per_turn,
-    )
-    schedule_reason = "ok"
-    schedule_start = time.perf_counter()
-    if ai_silenced:
-        schedule_reason = "ai_silenced"
-    elif not state.settings.schedule_extract_enabled:
-        schedule_reason = "disabled"
-    elif not schedule_hints:
-        schedule_reason = "no_hints_from_main_model"
-    else:
-        tasks = await extract_schedule_tasks(
-            schedule_hints,
-            llm=state.schedule_extractor_llm,
-            settings=state.settings,
-            now=local_now(state.settings.app_timezone),
-            trace_id=trace_id,
-            metrics=state.metrics,
+    async def _schedule_tasks_for_response() -> list[ScheduleTask] | None:
+        schedule_tasks_field = None
+        schedule_hints = extract_schedule_hints(
+            raw_assistant_text,
+            max_hints=state.settings.schedule_max_hints_per_turn,
         )
-        schedule_tasks_field = tasks or None
-        if not tasks:
-            schedule_reason = "extractor_returned_empty"
-    _record_schedule_debug(
-        state,
-        trace_id=trace_id,
-        enabled=state.settings.schedule_extract_enabled,
-        stream=req.stream,
-        reason=schedule_reason,
-        hints=schedule_hints,
-        task_count=len(schedule_tasks_field or []),
-        latency_ms=(time.perf_counter() - schedule_start) * 1000,
-    )
+        schedule_reason = "ok"
+        schedule_start = time.perf_counter()
+        if ai_silenced:
+            schedule_reason = "ai_silenced"
+        elif not state.settings.schedule_extract_enabled:
+            schedule_reason = "disabled"
+        elif not schedule_hints:
+            schedule_reason = "no_hints_from_main_model"
+        else:
+            tasks = await extract_schedule_tasks(
+                schedule_hints,
+                llm=state.schedule_extractor_llm,
+                settings=state.settings,
+                now=local_now(state.settings.app_timezone),
+                trace_id=trace_id,
+                metrics=state.metrics,
+            )
+            schedule_tasks_field = tasks or None
+            if not tasks:
+                schedule_reason = "extractor_returned_empty"
+        _record_schedule_debug(
+            state,
+            trace_id=trace_id,
+            enabled=state.settings.schedule_extract_enabled,
+            stream=req.stream,
+            reason=schedule_reason,
+            hints=schedule_hints,
+            task_count=len(schedule_tasks_field or []),
+            latency_ms=(time.perf_counter() - schedule_start) * 1000,
+        )
+        return schedule_tasks_field
 
     # 假流式：客户端传 stream=true 但后端配置不启用真流式 → 把完整内容包装成
     # 单个 content chunk + 收尾，按 OpenAI SSE 协议返回，客户端无感。
@@ -765,24 +803,21 @@ async def chat_completions(
                 trace_id=trace_id,
                 assistant_text=assistant_text,
                 policy=policy_hint,
-                schedule_tasks=schedule_tasks_field,
-                finish_reason=(
-                    state.settings.silence_finish_reason if ai_silenced else "stop"
-                ),
+                schedule_loader=_schedule_tasks_for_response,
+                finish_reason=(state.settings.silence_finish_reason if ai_silenced else "stop"),
                 silenced=ai_silenced,
             ),
             media_type="text/event-stream",
         )
 
+    schedule_tasks_field = await _schedule_tasks_for_response()
     return ChatCompletionResponse(
         model=model_name,
         choices=[
             Choice(
                 index=0,
                 message=APIChatMessage(role="assistant", content=assistant_text),
-                finish_reason=(
-                    state.settings.silence_finish_reason if ai_silenced else "stop"
-                ),
+                finish_reason=(state.settings.silence_finish_reason if ai_silenced else "stop"),
             )
         ],
         usage=Usage(),
@@ -799,6 +834,7 @@ async def _pseudo_stream_chunks(
     assistant_text: str,
     policy: PolicyHint,
     schedule_tasks: list[ScheduleTask] | None = None,
+    schedule_loader: Callable[[], Awaitable[list[ScheduleTask] | None]] | None = None,
     finish_reason: str = "stop",
     silenced: bool = False,
 ) -> AsyncIterator[bytes]:
@@ -827,11 +863,12 @@ async def _pseudo_stream_chunks(
             payload.update(extra)
         return payload
 
-    yield _format_sse(
-        _chunk({"role": "assistant"}, extra={"policy": policy.model_dump()})
-    )
+    yield _format_sse(_chunk({"role": "assistant"}, extra={"policy": policy.model_dump()}))
     if assistant_text and not silenced:
         yield _format_sse(_chunk({"content": assistant_text}))
+    # 正文整条先发送，任务提取只推迟收尾；保留原有单条消息的呈现方式。
+    if schedule_loader is not None:
+        schedule_tasks = await schedule_loader()
     final = _chunk({}, finish=finish_reason)
     final["policy"] = policy.model_dump()
     if silenced:
@@ -894,9 +931,7 @@ async def _stream_response(
             yield chunk
         return
 
-    yield _format_sse(
-        _chunk_dict({"role": "assistant"}, extra={"policy": policy.model_dump()})
-    )
+    yield _format_sse(_chunk_dict({"role": "assistant"}, extra={"policy": policy.model_dump()}))
 
     _stream_start = time.perf_counter()
     tail = ""
@@ -965,7 +1000,7 @@ async def _stream_response(
     # 用户什么也没看到。这里在 finish chunk 之前补发一段 fallback delta。
     full_text = "".join(buffer)
     if not full_text.strip() and not ai_silenced and looks_like_sticker_only_intent(raw_full):
-        fallback = fallback_for_rejected_sticker(policy.reply_mode)
+        fallback = fallback_for_rejected_sticker(policy.reply_mode, user_text=user_text)
         if fallback:
             buffer.append(fallback)
             yield _format_sse(_chunk_dict({"content": fallback}))
@@ -1108,9 +1143,7 @@ async def _stream_silenced(
             payload.update(extra)
         return payload
 
-    yield _format_sse(
-        _chunk({"role": "assistant"}, extra={"policy": policy.model_dump()})
-    )
+    yield _format_sse(_chunk({"role": "assistant"}, extra={"policy": policy.model_dump()}))
     final = _chunk({}, finish=settings.silence_finish_reason)
     final["policy"] = policy.model_dump()
     final["silenced"] = True
@@ -1154,7 +1187,11 @@ async def _remember_relationship_turn(
             entry=decision.relationship_memory,
         )
     except Exception:
-        logger.warning("关系记忆写入失败，已忽略：trace=%s", trace_id, exc_info=True)
+        logger.warning(
+            content_text("Relationship memory write failed; ignored: trace=%s"),
+            trace_id,
+            exc_info=True,
+        )
         state.metrics.record("relationship.remember", 0.0, error="Exception")
 
 

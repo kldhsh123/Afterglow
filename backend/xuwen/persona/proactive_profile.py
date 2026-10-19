@@ -14,12 +14,15 @@ from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from xuwen.analysis.models import ProactiveAnalysisReport
+from xuwen.content_i18n import content_text
 from xuwen.core.models import MessageKind, NormalizedMessage, Session
 from xuwen.core.time import now_ms
 
 PROACTIVE_PROFILE_FILENAME = "proactive_profile.json"
 
-IdleGapBucket = Literal["short", "one_to_three_hours", "three_to_eight_hours", "overnight", "multi_day"]
+IdleGapBucket = Literal[
+    "short", "one_to_three_hours", "three_to_eight_hours", "overnight", "multi_day"
+]
 OpeningType = Literal[
     "greeting",
     "life_check",
@@ -58,16 +61,44 @@ _OPENING_TYPES: tuple[OpeningType, ...] = (
 )
 _SPEAKER_KEYS = ("friend", "self", "other", "unknown")
 
-_PLACEHOLDER_RE = re.compile(r"^\[(图片|语音|视频|文件|表情|动画表情|撤回)\]$")
-_CARE_RE = re.compile(r"累|难受|还好吗|咋样|怎么样|没事吧|注意|早点|休息|吃药|生病|考试|忙完")
-_LIFE_CHECK_RE = re.compile(r"在吗|在不在|干嘛|干什么|忙吗|醒了|起了|睡了吗|吃了|到家|回家")
-_GREETING_RE = re.compile(r"^(hi|hello|hey|嗨|哈喽|早|早安|晚安|晚上好|下午好|在吗)[呀啊嘛吗~～!！。 ]*$", re.I)
-_SELF_SHARE_RE = re.compile(r"我刚|我在|我今天|我去|刚刚|睡着了|睡过了|笑死我|给你看|跟你说|我发现")
-_PLAYFUL_RE = re.compile(r"哈哈|笑死|救命|草|绷不住|可恶|笨蛋|嘿嘿|？{2,}|!{2,}|！{2,}")
-_AFFECTION_RE = re.compile(r"么么|啵|亲|抱抱|贴贴|爱你|想你|宝宝|宝贝|老婆|老公", re.I)
-_WAKE_RE = re.compile(r"起床|起来|醒醒|醒了没|早八|早安")
-_QUESTION_PROBE_RE = re.compile(r"[?？]|吗|嘛|呢|是不是|能不能|要不要|有没有|你是|行不行|可以不|可以吗")
-_NIGHT_RE = re.compile(r"睡|晚安|怎么还没睡|熬夜|失眠|困|休息")
+_PLACEHOLDER_RE = re.compile(
+    "^\\[(图片|语音|视频|文件|表情|动画表情|撤回|image|voice|video|file|sticker|recalled)\\]$", re.I
+)
+_CARE_RE = re.compile(
+    "累|难受|还好吗|咋样|怎么样|没事吧|注意|早点|休息|吃药|生病|考试|忙完|\\b(?:tired|feeling unwell|are you okay|how are you|take care|take a break|medicine|sick|exam|finished work)\\b",
+    re.I,
+)
+_LIFE_CHECK_RE = re.compile(
+    "在吗|在不在|干嘛|干什么|忙吗|醒了|起了|睡了吗|吃了|到家|回家|\\b(?:are you there|what are you doing|what are you up to|are you busy|are you awake|have you eaten|got home)\\b",
+    re.I,
+)
+_GREETING_RE = re.compile(
+    "^(hi|hello|hey|good morning|good night|good evening|good afternoon|嗨|哈喽|早|早安|晚安|晚上好|下午好|在吗)[呀啊嘛吗~～!！。 .]*$",
+    re.I,
+)
+_SELF_SHARE_RE = re.compile(
+    "我刚|我在|我今天|我去|刚刚|睡着了|睡过了|笑死我|给你看|跟你说|我发现|\\b(?:i just|i am|i\\x27m|i went|i overslept|let me show you|guess what|i found)\\b",
+    re.I,
+)
+_PLAYFUL_RE = re.compile(
+    "哈哈|笑死|救命|草|绷不住|可恶|笨蛋|嘿嘿|？{2,}|!{2,}|！{2,}|\\b(?:haha|lol|lmao|rofl|silly|hehe)\\b",
+    re.I,
+)
+_AFFECTION_RE = re.compile(
+    "么么|啵|亲|抱抱|贴贴|爱你|想你|宝宝|宝贝|老婆|老公|\\b(?:love you|miss you|hugs?|kisses|babe|baby|sweetheart)\\b",
+    re.I,
+)
+_WAKE_RE = re.compile(
+    "起床|起来|醒醒|醒了没|早八|早安|\\b(?:wake up|rise and shine|morning nudge)\\b", re.I
+)
+_QUESTION_PROBE_RE = re.compile(
+    "[?？]|吗|嘛|呢|是不是|能不能|要不要|有没有|你是|行不行|可以不|可以吗|\\b(?:can you|could you|would you|do you|did you|have you|are you)\\b",
+    re.I,
+)
+_NIGHT_RE = re.compile(
+    "睡|晚安|怎么还没睡|熬夜|失眠|困|休息|\\b(?:sleep|asleep|good night|still up|still awake|insomnia|sleepy|rest)\\b",
+    re.I,
+)
 
 
 @dataclass(slots=True)
@@ -394,7 +425,13 @@ def classify_opening(text: str, *, hour: int | None = None) -> OpeningType:
         return "self_share"
     if _PLAYFUL_RE.search(stripped):
         return "playful"
-    if stripped.startswith("[回复") or (len(stripped) <= 24 and re.search(r"昨天|昨晚|刚才|之前|那个|上次|你说", stripped)):
+    if stripped.startswith("[回复") or (
+        len(stripped) <= 24 and re.search(r"昨天|昨晚|刚才|之前|那个|上次|你说", stripped)
+    ):
+        return "continue_topic"
+    if len(stripped) <= 100 and re.search(
+        r"\b(?:yesterday|last night|earlier|last time|you said|that topic)\b", stripped, re.I
+    ):
         return "continue_topic"
     if _is_short_ping(stripped):
         return "short_ping"
@@ -486,14 +523,20 @@ def _summary(
     opening_counts: Counter[OpeningType],
 ) -> str:
     if not samples:
-        return "历史中没有足够的 TA 主动开聊样本，运行时会走保守低频策略。"
+        return content_text(
+            "Not enough historical proactive openings by the other person; runtime will use a conservative, infrequent schedule."
+        )
     active_hours = [f"{hour:02d}:00" for hour, _ in hour_counts.most_common(3)]
     gap = idle_counts.most_common(1)[0][0]
     opening = opening_counts.most_common(1)[0][0]
-    return (
-        f"共识别 {len(samples)} 次 TA 主动开聊样本（用户首发长间隔会话 {self_started} 次，"
-        f"总 session {total_sessions} 段）；高频时间：{', '.join(active_hours)}；"
-        f"常见空闲间隔：{gap}；常见开场类型：{opening}。"
+    return content_text(
+        "Identified {p0} proactive openings by the other person ({p1} long-gap sessions started by the user; {p2} sessions total). Frequent hours: {p3}; typical idle gap: {p4}; typical opening type: {p5}.",
+        p0=len(samples),
+        p1=self_started,
+        p2=total_sessions,
+        p3=", ".join(active_hours),
+        p4=gap,
+        p5=opening,
     )
 
 
@@ -596,7 +639,7 @@ def _parse_speaker_line(
     speaker = speaker.strip()
     content = content.strip()
     friend_labels = {friend_name.strip(), "TA", "ta"}
-    self_labels = {self_name.strip(), "我", "用户", "Me"}
+    self_labels = {self_name.strip(), content_text("Me"), content_text("User"), "Me"}
     if speaker in friend_labels:
         return ("friend", content)
     if speaker in self_labels:
@@ -631,7 +674,9 @@ def _profile_from_dict(data: dict[str, Any]) -> ProactiveProfile:
                     weekday=_bounded_int(item.get("weekday"), 0, 6),
                     idle_gap_minutes=max(0, int(item.get("idle_gap_minutes") or 0)),
                     idle_bucket=_coerce_idle_bucket(item.get("idle_bucket")),
-                    previous_last_speaker=_speaker_key(str(item.get("previous_last_speaker") or "")),
+                    previous_last_speaker=_speaker_key(
+                        str(item.get("previous_last_speaker") or "")
+                    ),
                     opening_type=_coerce_opening_type(item.get("opening_type")),
                     opening_text=str(item.get("opening_text") or ""),
                     previous_tail=str(item.get("previous_tail") or ""),
