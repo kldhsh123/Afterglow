@@ -258,7 +258,7 @@ async def test_embed_does_not_leak_response_body_on_4xx():
 
 
 @pytest.mark.asyncio
-async def test_embed_non_json_response_wrapped():
+async def test_embed_non_json_response_wrapped(chinese_language):
     """非 JSON 响应应该被包装成 EmbeddingError，不抛裸 JSONDecodeError。"""
     settings = _settings()
     async with httpx.AsyncClient() as raw:

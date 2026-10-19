@@ -409,6 +409,7 @@ async def run_import_task(task_id: str, settings: Settings) -> None:
         )
         reports: list[dict[str, Any]] = []
         warnings: list[str] = []
+        failed_chunks = 0
         total = len(task.files)
         for idx, path in enumerate(task.files):
             display_name = task.file_names[idx]
@@ -426,6 +427,17 @@ async def run_import_task(task_id: str, settings: Settings) -> None:
             except Exception:
                 report_dict = {"raw": str(report)}
             reports.append({"file": display_name, "report": report_dict})
+            file_failed = getattr(report, "failed_chunks", 0)
+            if file_failed:
+                failed_chunks += file_failed
+                warning = content_text(
+                    "Skipped {p0} chunks after embedding failures (friend {p1} / window {p2} / pair {p3}). Importing the same file again will retry only these missing entries.",
+                    p0=file_failed,
+                    p1=report.failed_friend,
+                    p2=report.failed_window,
+                    p3=report.failed_response_pairs,
+                )
+                warnings.append(f"{display_name}: {warning}")
             _log(
                 content_text(
                     "  → Complete: {p0} friend chunks, {p1} dialogue windows, {p2} response pairs",
@@ -434,6 +446,29 @@ async def run_import_task(task_id: str, settings: Settings) -> None:
                     p2=getattr(report, "response_pairs", 0),
                 )
             )
+
+        # 所有文件入库后统一建索引，避免逐文件重复训练。失败只警告，已导入数据保留。
+        index_report: dict[str, str] = {}
+        if settings.lance_index_min_rows > 0:
+            stage = content_text("Building vector indexes for imported records…")
+            _log(stage)
+            mgr.update(task_id, stage=stage, progress=0.86)
+            try:
+                from xuwen.memory.store import MemoryStore
+
+                store = MemoryStore(settings)
+                await store.connect()
+                index_report = await store.ensure_vector_indices()
+                for table, result in index_report.items():
+                    _log(f"  → {table}: {result}")
+                    if result.startswith(("error:", "count_error:")):
+                        warnings.append(f"{table}: {result}")
+            except Exception as e:
+                warning = content_text(
+                    "Vector index building failed: {p0}: {p1}", p0=type(e).__name__, p1=e
+                )
+                _log(warning)
+                warnings.append(warning)
 
         # ===== 阶段 2：persona 画像 =====
         if task.files:
@@ -508,7 +543,7 @@ async def run_import_task(task_id: str, settings: Settings) -> None:
             progress=1.0,
             status="done",
             error="\n".join(warnings),
-            report={"files": reports},
+            report={"files": reports, "vector_indices": index_report, "failed_chunks": failed_chunks},
         )
     except asyncio.CancelledError:
         _log(content_text("Task {p0} cancelled; processed records were preserved", p0=task_id))

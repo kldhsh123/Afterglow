@@ -39,17 +39,17 @@ def test_explain_network_error_never_empty(exc: Exception) -> None:
     assert not msg.rstrip().endswith(("：", ":")), f"{type(exc).__name__} 解释以悬空冒号结尾：{msg!r}"
 
 
-def test_timeout_classified_by_type() -> None:
+def test_timeout_classified_by_type(chinese_language) -> None:
     """超时类异常即便 str() 为空也应被识别为'连接超时'（旧实现的类名判断失效）。"""
     for exc in (httpx.ConnectTimeout(""), httpx.ReadTimeout(""), httpx.PoolTimeout("")):
         assert "超时" in _explain_network_error(exc)
 
 
-def test_proxy_error_classified() -> None:
+def test_proxy_error_classified(chinese_language) -> None:
     assert "代理" in _explain_network_error(httpx.ProxyError(""))
 
 
-def test_connect_error_subcauses() -> None:
+def test_connect_error_subcauses(chinese_language) -> None:
     """ConnectError 聚合了 DNS / 拒绝连接 / SSL，能拿到文本时应给出针对性提示。"""
     assert "域名解析" in _explain_network_error(
         httpx.ConnectError("[Errno -2] Name or service not known")
@@ -94,7 +94,7 @@ def test_describe_exc_uses_cause_when_str_empty() -> None:
 
 
 @pytest.mark.asyncio
-async def test_chat_rejects_html_success_response() -> None:
+async def test_chat_rejects_html_success_response(chinese_language) -> None:
     """A provider homepage must not count as a successful API connectivity test."""
     with respx.mock(base_url="https://provider.test/v1") as router:
         router.post("/chat/completions").mock(

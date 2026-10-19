@@ -59,6 +59,7 @@ def test_documents_extract_unsupported_format(settings: Settings):
         r = client.post(
             "/v1/documents/extract",
             files={"file": ("x.bin", io.BytesIO(b"binary"), "application/octet-stream")},
+            headers={"Accept-Language": "zh-CN"},
         )
     assert r.status_code == 400
     assert "不支持" in r.json()["detail"]

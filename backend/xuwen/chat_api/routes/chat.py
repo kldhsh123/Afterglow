@@ -7,7 +7,7 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -31,6 +31,7 @@ from xuwen.chat_api.companion_prompt import (
     build_persona_card_with_companion_context,
     render_life_memory_context_from_recent,
 )
+from xuwen.chat_api.conversation_context import prepare_conversation_context
 from xuwen.chat_api.image_store import ImageError, save_data_url
 from xuwen.chat_api.llm_client import GenerationParams
 from xuwen.chat_api.output_filter import AssistantOutputFilter, sanitize_assistant_text
@@ -373,11 +374,20 @@ async def chat_completions(
     # Layer A：只放"无论是否回复都需要"的预决策任务（检索 / 关系记忆 / life）。
     # Web Search / URL Resolve 涉及外部 API 调用 + 用户隐私文本外发，必须等 decision
     # 确认 should_reply=True 才能启动；否则用户说"别回我"也会触发搜索调用（隐私 + 费用泄漏）。
-    retrieved, relationship_block, life = await asyncio.gather(
+    retrieved, relationship_block, life, conversation_context = await asyncio.gather(
         _retrieve_with_metrics(),
         _relationship_context_or_empty(),
         _life_in_parallel(),
+        prepare_conversation_context(
+            recent,
+            settings=state.settings,
+            llm=state.life_llm,
+            conversation_id=req.conversation_id or req.caller_id,
+            metrics=state.metrics,
+            trace_id=trace_id,
+        ),
     )
+    recent = conversation_context.recent
 
     # 模型名固定使用后端配置的 CHAT_MODEL；req.model 接受但忽略
     model_name = state.settings.chat_model
@@ -542,6 +552,7 @@ async def chat_completions(
         current_user_message=current_user_text or content_text("(Image)"),
         web_context=web_context,
         url_context=url_context,
+        conversation_summary=conversation_context.summary,
     )
 
     if (
@@ -745,41 +756,43 @@ async def chat_completions(
     await _ack_turn(state, turn_snapshot)
     # Feature #9：从主模型原始输出抽 <schedule-hint>，调用小模型解析为 ScheduleTask。
     # 失败/未启用时为 None；不影响正常回复链路。
-    schedule_tasks_field = None
-    schedule_hints = extract_schedule_hints(
-        raw_assistant_text,
-        max_hints=state.settings.schedule_max_hints_per_turn,
-    )
-    schedule_reason = "ok"
-    schedule_start = time.perf_counter()
-    if ai_silenced:
-        schedule_reason = "ai_silenced"
-    elif not state.settings.schedule_extract_enabled:
-        schedule_reason = "disabled"
-    elif not schedule_hints:
-        schedule_reason = "no_hints_from_main_model"
-    else:
-        tasks = await extract_schedule_tasks(
-            schedule_hints,
-            llm=state.schedule_extractor_llm,
-            settings=state.settings,
-            now=local_now(state.settings.app_timezone),
-            trace_id=trace_id,
-            metrics=state.metrics,
+    async def _schedule_tasks_for_response() -> list[ScheduleTask] | None:
+        schedule_tasks_field = None
+        schedule_hints = extract_schedule_hints(
+            raw_assistant_text,
+            max_hints=state.settings.schedule_max_hints_per_turn,
         )
-        schedule_tasks_field = tasks or None
-        if not tasks:
-            schedule_reason = "extractor_returned_empty"
-    _record_schedule_debug(
-        state,
-        trace_id=trace_id,
-        enabled=state.settings.schedule_extract_enabled,
-        stream=req.stream,
-        reason=schedule_reason,
-        hints=schedule_hints,
-        task_count=len(schedule_tasks_field or []),
-        latency_ms=(time.perf_counter() - schedule_start) * 1000,
-    )
+        schedule_reason = "ok"
+        schedule_start = time.perf_counter()
+        if ai_silenced:
+            schedule_reason = "ai_silenced"
+        elif not state.settings.schedule_extract_enabled:
+            schedule_reason = "disabled"
+        elif not schedule_hints:
+            schedule_reason = "no_hints_from_main_model"
+        else:
+            tasks = await extract_schedule_tasks(
+                schedule_hints,
+                llm=state.schedule_extractor_llm,
+                settings=state.settings,
+                now=local_now(state.settings.app_timezone),
+                trace_id=trace_id,
+                metrics=state.metrics,
+            )
+            schedule_tasks_field = tasks or None
+            if not tasks:
+                schedule_reason = "extractor_returned_empty"
+        _record_schedule_debug(
+            state,
+            trace_id=trace_id,
+            enabled=state.settings.schedule_extract_enabled,
+            stream=req.stream,
+            reason=schedule_reason,
+            hints=schedule_hints,
+            task_count=len(schedule_tasks_field or []),
+            latency_ms=(time.perf_counter() - schedule_start) * 1000,
+        )
+        return schedule_tasks_field
 
     # 假流式：客户端传 stream=true 但后端配置不启用真流式 → 把完整内容包装成
     # 单个 content chunk + 收尾，按 OpenAI SSE 协议返回，客户端无感。
@@ -790,13 +803,14 @@ async def chat_completions(
                 trace_id=trace_id,
                 assistant_text=assistant_text,
                 policy=policy_hint,
-                schedule_tasks=schedule_tasks_field,
+                schedule_loader=_schedule_tasks_for_response,
                 finish_reason=(state.settings.silence_finish_reason if ai_silenced else "stop"),
                 silenced=ai_silenced,
             ),
             media_type="text/event-stream",
         )
 
+    schedule_tasks_field = await _schedule_tasks_for_response()
     return ChatCompletionResponse(
         model=model_name,
         choices=[
@@ -820,6 +834,7 @@ async def _pseudo_stream_chunks(
     assistant_text: str,
     policy: PolicyHint,
     schedule_tasks: list[ScheduleTask] | None = None,
+    schedule_loader: Callable[[], Awaitable[list[ScheduleTask] | None]] | None = None,
     finish_reason: str = "stop",
     silenced: bool = False,
 ) -> AsyncIterator[bytes]:
@@ -851,6 +866,9 @@ async def _pseudo_stream_chunks(
     yield _format_sse(_chunk({"role": "assistant"}, extra={"policy": policy.model_dump()}))
     if assistant_text and not silenced:
         yield _format_sse(_chunk({"content": assistant_text}))
+    # 正文整条先发送，任务提取只推迟收尾；保留原有单条消息的呈现方式。
+    if schedule_loader is not None:
+        schedule_tasks = await schedule_loader()
     final = _chunk({}, finish=finish_reason)
     final["policy"] = policy.model_dump()
     if silenced:

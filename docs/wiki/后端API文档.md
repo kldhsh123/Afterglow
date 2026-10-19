@@ -28,6 +28,8 @@ x-api-key: <XUWEN_API_KEY>
 所有请求都会带响应头 `x-request-id`。聊天、记忆检索和主动话题接口还会在响应体里返回
 `trace_id`，用于在 `/debug/stats` 里追踪完整模型调用链路。
 
+HTTP 文案和分析生成输出使用 `Accept-Language: en` 或 `zh-CN`，支持简繁中文标签及 q 权重，无支持项回退后端 `XUWEN_LANGUAGE`（默认英文）。主动消息始终使用后端配置，普通聊天尊重对话及明确语言要求。错误码、枚举、字段名、原文证据和已持久化内容不翻译；缺翻译有固定可读兜底。配置向导使用独立会话 token。
+
 ## 核心接口
 
 ### `POST /v1/chat/completions`
@@ -161,7 +163,7 @@ OpenAI 兼容聊天接口，也是第三方程序最应该接入的主接口。
 流式请求使用 OpenAI 风格 SSE：
 
 ```bash
-curl -N http://127.0.0.1:8000/v1/chat/completions \
+curl -H "Accept-Language: zh-CN" -N http://127.0.0.1:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $XUWEN_API_KEY" \
   -d '{
@@ -224,7 +226,7 @@ OpenAI Responses API 兼容端点（中等子集）。和 `/v1/chat/completions`
 请求示例：
 
 ```bash
-curl http://127.0.0.1:8000/v1/responses \
+curl -H "Accept-Language: zh-CN" http://127.0.0.1:8000/v1/responses \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $XUWEN_API_KEY" \
   -d '{
@@ -375,7 +377,7 @@ event: response.created → event: response.in_progress
 外部调度器或 IM bot 调试；默认只返回即时决策，不维护 pending candidate。功能整体仍是实验性，
 不建议产品路径使用。
 
-主动画像由导入阶段生成到 `.data/persona/proactive_profile.json`；老数据缺少该文件时，
+运行时优先使用独立 `proactive_analysis.json`，再回退导入期 `.data/persona/proactive_profile.json`；缺少有效画像时，
 后端会从 `dialogue_windows` 兜底重建。功能默认关闭，需设置 `PROACTIVE_ENABLED=true`。
 
 请求示例：
@@ -586,7 +588,7 @@ event: response.created → event: response.in_progress
 **错误：** `400`（缺文件名 / 文件为空 / 扩展名不支持 / 解析失败）
 
 ```bash
-curl -F "file=@notes.pdf" \
+curl -H "Accept-Language: zh-CN" -F "file=@notes.pdf" \
   -H "Authorization: Bearer $XUWEN_API_KEY" \
   http://127.0.0.1:8000/v1/documents/extract
 ```
@@ -686,6 +688,8 @@ curl -F "file=@notes.pdf" \
 **错误：** `404`（sha 对不上文件）
 
 ## 关系分析接口
+
+生成报告语言由请求头选择，读取已保存报告时保持原语言，不自动翻译。缓存只复用相同输出语言，旧缓存重算。
 
 关系分析从保留逐条时间戳的原始聊天文件重新解析，不从 LanceDB 反推。所有端点都使用主 API 鉴权。
 

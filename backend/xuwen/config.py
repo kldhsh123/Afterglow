@@ -184,6 +184,16 @@ class Settings(LanguageSettings):
     # 想恢复真流式（调试 / 测试）可设为 true。
     response_streaming_enabled: bool = False
 
+    # 长会话压缩只影响模型上下文；原始聊天和长期关系记忆仍由各自系统保存。
+    conversation_summary_enabled: bool = True
+    conversation_summary_trigger_chars: int = Field(default=16_000, ge=1)
+    conversation_summary_trigger_messages: int = Field(default=40, ge=2)
+    conversation_summary_keep_messages: int = Field(default=16, ge=1)
+    conversation_summary_recent_chars: int = Field(default=8_000, ge=1)
+    conversation_summary_max_chars: int = Field(default=3_000, ge=1)
+    conversation_summary_batch_chars: int = Field(default=12_000, ge=256)
+    conversation_summary_timeout_seconds: float = Field(default=30.0, gt=0, allow_inf_nan=False)
+
     # ----- 版本更新检查 -----
     # 默认开启：后端启动时一次性调用 update_check_url 查询最新发布版本。
     # 结果通过 /info 接口的 update 字段对外暴露，前端可据此显示升级提示。

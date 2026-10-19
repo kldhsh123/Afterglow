@@ -1,0 +1,103 @@
+name: docs-pages
+
+on:
+  pull_request:
+    paths:
+      - 'docs/**'
+      - 'assets/brand/**'
+      - 'backend/xuwen/config.py'
+      - 'backend/.env.example*'
+      - '.github/scripts/prepare_env_editor.py'
+      - '.github/scripts/test_prepare_docs.py'
+      - 'README*.md'
+      - 'readme/**'
+      - '.github/scripts/prepare_docs.py'
+      - '.github/scripts/prepare_wiki.py'
+      - '.github/workflows/docs-pages.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'assets/brand/**'
+      - 'backend/xuwen/config.py'
+      - 'backend/.env.example*'
+      - '.github/scripts/prepare_env_editor.py'
+      - '.github/scripts/test_prepare_docs.py'
+      - 'README*.md'
+      - 'readme/**'
+      - '.github/scripts/prepare_docs.py'
+      - '.github/scripts/prepare_wiki.py'
+      - '.github/workflows/docs-pages.yml'
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      base_path:
+        description: 'Optional base path, e.g. /Afterglow/ or / for a custom domain'
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-pages-${{ github.event.pull_request.number || 'publish' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+      - name: Determine Pages base path
+        env:
+          INPUT_BASE: ${{ inputs.base_path }}
+          CONFIGURED_BASE: ${{ vars.DOCS_BASE }}
+        run: |
+          python3 - <<'PY'
+          import os, re
+          repo = os.environ['GITHUB_REPOSITORY'].split('/', 1)[1]
+          base = os.environ.get('INPUT_BASE') or os.environ.get('CONFIGURED_BASE') or ('/' if repo.lower().endswith('.github.io') else f'/{repo}/')
+          if not re.fullmatch(r'/(?:[A-Za-z0-9._-]+/)*', base):
+              raise SystemExit('Invalid DOCS_BASE; expected / or /project/')
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write(f'DOCS_BASE={base}\n')
+          PY
+      - run: npm ci
+        working-directory: docs
+      - run: npm test
+        working-directory: docs
+      - run: npm run build
+        working-directory: docs
+      - run: npm run check:dist
+        working-directory: docs
+      - uses: actions/upload-pages-artifact@v4
+        if: github.event_name != 'pull_request'
+        with:
+          path: docs/.vitepress/dist
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy documentation
+        id: deployment
+        uses: actions/deploy-pages@v4

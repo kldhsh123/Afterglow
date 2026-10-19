@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from xuwen.config import Settings, get_settings
+from xuwen.prompt_language import language_scope
 
 # 项目根目录：backend/ 上一层，即仓库根
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -18,6 +20,13 @@ SAMPLE_JSON = FIXTURES_DIR / "sample_chat.json"
 
 # 缩减示例（来自用户）—— 末尾可能截断，仅作可选集成测试用
 USER_SAMPLE_JSON = REPO_ROOT / "开发缓存" / "缩减示例.json"
+
+
+@pytest.fixture()
+def chinese_language() -> Iterator[None]:
+    """断言中文提示的测试显式选择中文，并在测试结束后恢复语言。"""
+    with language_scope("zh-CN"):
+        yield
 
 
 @pytest.fixture(autouse=True)
@@ -56,6 +65,7 @@ def _isolate_dotenv(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
                 "SELF_",
                 "FRIEND_",
                 "CHAT_MODEL",
+                "CONVERSATION_",
                 "SESSION_GAP_",
                 "WINDOW_",
                 "CHUNKING_",

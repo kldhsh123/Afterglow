@@ -146,7 +146,7 @@ def test_inspect_self_listed_first_in_wechat(tmp_path: Path) -> None:
     assert result.candidates[0].uid == "wxid_me"
 
 
-def test_inspect_unknown_format_returns_error(tmp_path: Path) -> None:
+def test_inspect_unknown_format_returns_error(chinese_language, tmp_path: Path) -> None:
     p = tmp_path / "random.json"
     p.write_text(json.dumps({"hello": "world"}), encoding="utf-8")
     result = inspect_chat_file(p)

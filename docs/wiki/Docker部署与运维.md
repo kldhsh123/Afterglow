@@ -9,17 +9,25 @@ mkdir -p ~/afterglow && cd ~/afterglow
 curl -O https://raw.githubusercontent.com/kldhsh123/Afterglow/main/docker/compose.standalone.yaml
 mv compose.standalone.yaml compose.yaml
 
+# 首次创建语言和容器访问配置；已有 .env 请编辑对应字段
+if [ ! -f .env ]; then
+  printf '%s\n' 'XUWEN_LANGUAGE=zh-CN' 'CONFIG_UI_LOCALHOST_ONLY=false' > .env
+fi
 docker compose pull          # 从 GHCR 拉公开镜像（amd64 / arm64 都有）
 docker compose up -d
 ```
 
-容器首次启动会自动检测到挂载目录是空的，**进入配置向导首次模式**。看一次性 setup token：
+容器首次启动会检测到缺少身份、模型等关键配置，**进入配置向导首次模式**。看一次性 setup token：
 
 ```bash
 docker compose logs backend | grep -iE "token|/config/"
 ```
 
 浏览器打开 `http://localhost:8000/config/`，把 token 粘进向导第 1 步，8 步走完即生效。向导写入的 `.env` 直接落到 `~/afterglow/.env`，备份在 `.env-backups/`，重启即用。
+
+本页示例在首次启动前创建含 `XUWEN_LANGUAGE=zh-CN` 和 `CONFIG_UI_LOCALHOST_ONLY=false` 的宿主 `.env`，所以启动提示为中文且容器外可访问向导；已有 `.env` 时请手动核对这两个字段。完成向导后执行 `docker compose restart backend` 加载配置。后端未设置语言时默认英文，改为 `XUWEN_LANGUAGE=en` 可切换英文；页面语言下拉框独立。
+
+独立 Compose 读取挂载目录中的 `.env`；仅在宿主命令前写 `XUWEN_LANGUAGE=zh-CN docker compose up -d` 不会把该变量传入容器。CLI 命令可用 `--language zh-CN` / `--language en` 单独选择输出语言，示例见下文。
 
 完成后目录结构：
 
@@ -51,14 +59,14 @@ docker compose pull && docker compose up -d
 
 # 导入聊天记录（把待导入 JSON 放到挂载目录下任何子路径）
 docker compose run --rm backend \
-  python -m xuwen.ingestion.cli import .imports/qq.json
+  python -m xuwen.ingestion.cli import .imports/qq.json --language zh-CN
 
 # 可选：离线导入历史图片（目录内可包含多个 JSON/JSONL 和任意层级图片目录）
 docker compose run --rm backend \
-  python -m xuwen.ingestion.cli import-images .imports/export-dir --plugin afterglow_v1
+  python -m xuwen.ingestion.cli import-images .imports/export-dir --plugin afterglow_v1 --language zh-CN
 
 # 大库建索引
-docker compose run --rm backend python -m xuwen.ingestion.cli index
+docker compose run --rm backend python -m xuwen.ingestion.cli index --language zh-CN
 
 # 临时停 / 完全停（数据保留）
 docker compose stop
@@ -70,7 +78,7 @@ docker compose exec backend bash
 
 ### 前端怎么办
 
-镜像里**只有后端**。前端按[快速开始](快速开始.md#启动前端可选)运行 `pnpm dev`，
+镜像包含后端与配置向导，不包含主聊天前端。前端按[快速开始](快速开始.md#启动前端可选)运行 `pnpm dev`，
 或自行用 Nginx 托管 `frontend/dist`。后端容器对外暴露 8000，前端请求发送到该端口。
 
 ### 与源码部署互操作
@@ -82,7 +90,7 @@ docker compose exec backend bash
 ```bash
 # 今天用源码模式
 cd ~/afterglow
-uv run --project /path/to/Afterglow/backend \
+XUWEN_LANGUAGE=zh-CN uv run --project /path/to/Afterglow/backend \
   uvicorn xuwen.chat_api.app:create_app --factory --reload
 
 # 关掉后明天换 Docker

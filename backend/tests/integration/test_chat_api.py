@@ -172,14 +172,16 @@ def test_chat_completions_non_stream_filters_history_placeholders(settings: Sett
 def test_chat_completions_updates_relationship_memory(settings: Settings):
     settings = settings.model_copy(update={"response_policy_model_enabled": True})
     app = create_app(settings)
+    calls = {"policy_refine": 0}
 
     def llm_response(req: httpx.Request) -> httpx.Response:
         body = json.loads(req.read())
         messages = body.get("messages") or []
         system_text = str(messages[0].get("content") or "") if messages else ""
-        if "生活时间线控制器" in system_text:
+        if system_text.startswith("You control a character's virtual daily timeline"):
             content = "{}"
-        elif "互动决策辅助" in system_text:
+        elif system_text.startswith("You assist interaction decisions"):
+            calls["policy_refine"] += 1
             content = json.dumps(
                 {
                     "relationship_memory": {
@@ -224,6 +226,8 @@ def test_chat_completions_updates_relationship_memory(settings: Settings):
             )
             stats = client.get("/memory/stats")
     assert r.status_code == 200, r.text
+    assert calls["policy_refine"] == 1
+    assert r.json()["choices"][0]["message"]["content"] == "记住啦"
     memory_file = settings.persona_data_dir / "relationship_memory.md"
     assert "用户喜欢吃甜食" in memory_file.read_text(encoding="utf-8")
     assert stats.json()["relationship_memories"] == 1
@@ -552,14 +556,16 @@ def test_chat_completions_includes_policy_field_in_normal_path(settings: Setting
 
 
 def test_companion_proactive_endpoint(settings: Settings):
+    settings = settings.model_copy(update={"xuwen_language": "zh-CN"})
     app = create_app(settings)
     calls = {"opening_judge": 0}
 
     def _proactive_response(req: httpx.Request) -> httpx.Response:
         body = json.loads(req.read())
         system_prompt = str(body.get("messages", [{}])[0].get("content", ""))
-        if "你只做质量判断" in system_prompt:
+        if system_prompt.startswith("Judge quality only;"):
             calls["opening_judge"] += 1
+            assert "Candidate: '中午吃了吗'" in body["messages"][1]["content"]
             content = json.dumps(
                 {
                     "should_rewrite": False,

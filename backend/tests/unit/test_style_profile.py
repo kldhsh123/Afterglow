@@ -50,9 +50,9 @@ def test_build_style_profile_groups_response_pairs_by_scene(tmp_path):
     loaded = load_style_profile(path)
     rendered = render_style_profile_for_query(loaded, "你在干什么")
 
-    assert "场景画像：寒暄 / 在干嘛" in rendered
+    assert f"[Scene profile: {scenes['life_check'].title}]" in rendered
     assert "刚吃完饭" in rendered
-    assert "场景画像：想念 / 亲密表达" not in rendered
+    assert f"[Scene profile: {scenes['miss_you'].title}]" not in rendered
 
 
 def test_random_burst_profile_is_gated_by_query_tone():
@@ -73,10 +73,10 @@ def test_random_burst_profile_is_gated_by_query_tone():
     light = render_random_burst_block(profile, "哈哈救命")
     serious = render_random_burst_block(profile, "你今天在干什么")
 
-    assert "本轮允许：是" in light
+    assert "Allowed this turn: yes" in light
     assert "啊啊啊救命笑死" in light
-    assert "本轮允许：否" in serious
-    assert "事实/状态/解释或安慰" in serious
+    assert "Allowed this turn: no" in serious
+    assert "This request needs facts, current state, explanation or comfort" in serious
 
 
 def _settings():

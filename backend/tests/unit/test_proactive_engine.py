@@ -138,8 +138,8 @@ async def test_proactive_engine_sends_when_profile_and_gates_match(tmp_path):
     assert decision.should_send is True
     assert decision.score >= settings.proactive_score_threshold
     assert decision.skip_reasons == []
-    assert "画像摘要" in decision.private_context
-    assert "不要解释调度" in decision.topic_hint
+    assert "Profile summary:" in decision.private_context
+    assert "Do not explain scheduling or system decisions." in decision.topic_hint
 
 
 @pytest.mark.asyncio
@@ -202,7 +202,7 @@ async def test_proactive_poll_schedules_then_becomes_ready(tmp_path):
     )
     assert due.state == "ready"
     assert due.should_send is True
-    assert "画像摘要" in due.private_context
+    assert "Profile summary:" in due.private_context
 
 
 @pytest.mark.asyncio

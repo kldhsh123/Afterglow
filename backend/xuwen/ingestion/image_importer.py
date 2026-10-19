@@ -97,14 +97,16 @@ async def import_history_images(
         )
 
     root = Path(export_dir)
-    payloads = _load_chat_payloads(root)
+    sources = _load_chat_sources(root)
     parsed: list[NormalizedMessage] = []
-    image_refs: list[ImportImageRef] = []
-    for payload in payloads:
+    image_refs: list[tuple[ImportImageRef, Path]] = []
+    for source_path, payload in sources:
         plugin = select_plugin(payload, preferred=plugin_name)
         parsed.extend(plugin.parse(payload, settings))
         if isinstance(plugin, ImageReferenceImportPlugin):
-            image_refs.extend(plugin.extract_image_refs(payload))
+            image_refs.extend(
+                (ref, source_path.parent) for ref in plugin.extract_image_refs(payload)
+            )
     parsed.sort(key=lambda message: (message.timestamp_ms, message.seq))
     cleaned = Cleaner(settings).clean_many(parsed)
     sessions = split_sessions(cleaned, settings)
@@ -113,11 +115,17 @@ async def import_history_images(
 
     resolved: list[_ResolvedImageRef] = []
     missing = 0
-    for ref in image_refs:
+    for ref, source_dir in image_refs:
         msg = msg_index.get(ref.message_id)
         if msg is None:
             continue
-        path = _find_image_file(root, image_files, ref.image_name)
+        path = _find_image_file(
+            root,
+            image_files,
+            ref.image_name,
+            source_dir=source_dir,
+            allow_global_fallback=not msg.raw_type.startswith(("telegram_", "discord_")),
+        )
         if path is None:
             missing += 1
             continue
@@ -212,6 +220,10 @@ async def import_history_images(
 
 
 def _load_chat_payloads(root: Path) -> list[dict[str, Any]]:
+    return [payload for _, payload in _load_chat_sources(root)]
+
+
+def _load_chat_sources(root: Path) -> list[tuple[Path, dict[str, Any]]]:
     if not root.is_dir():
         raise IngestionError(error_text("Not a directory: {p0}", p0=root))
     candidates = sorted(
@@ -219,7 +231,7 @@ def _load_chat_payloads(root: Path) -> list[dict[str, Any]]:
         for path in root.rglob("*")
         if path.is_file() and path.suffix.lower() in CHAT_FILE_SUFFIXES
     )
-    payloads: list[dict[str, Any]] = []
+    sources: list[tuple[Path, dict[str, Any]]] = []
     errors: list[str] = []
     for path in candidates:
         try:
@@ -229,8 +241,8 @@ def _load_chat_payloads(root: Path) -> list[dict[str, Any]]:
                 errors.append(f"{path.relative_to(root)}：{e}")
             continue
         if detect_plugin(payload) is not None:
-            payloads.append(payload)
-    if errors and payloads:
+            sources.append((path, payload))
+    if errors and sources:
         logger.warning(
             content_text("Image import skipped %d invalid JSONL files: %s"),
             len(errors),
@@ -240,9 +252,9 @@ def _load_chat_payloads(root: Path) -> list[dict[str, Any]]:
         raise IngestionError(
             error_text("The directory contains invalid JSONL: {p0}", p0="；".join(errors[:5]))
         )
-    if not payloads:
+    if not sources:
         raise IngestionError(error_text("No recognizable chat files in the image import directory"))
-    return payloads
+    return sources
 
 
 def _safe_name(value: str) -> str:
@@ -264,28 +276,39 @@ def _find_image_file(
     root: Path,
     image_files: dict[str, list[Path]],
     image_name: str,
+    *,
+    source_dir: Path | None = None,
+    allow_global_fallback: bool = True,
 ) -> Path | None:
+    root = root.resolve()
+    source_dir = (source_dir or root).resolve()
     relative = image_name.replace("\\", "/").strip().lstrip("/")
     if relative:
-        candidate = (root / relative).resolve()
-        try:
-            candidate.relative_to(root.resolve())
-        except ValueError:
-            candidate = root
-        if candidate.is_file() and candidate.suffix.lower() in _IMAGE_EXTS:
-            return candidate
+        bases = (source_dir, root) if allow_global_fallback else (source_dir,)
+        for base in dict.fromkeys(bases):
+            candidate = (base / relative).resolve()
+            if (
+                candidate.is_relative_to(root)
+                and candidate.is_file()
+                and candidate.suffix.lower() in _IMAGE_EXTS
+            ):
+                return candidate
 
     name = _safe_name(image_name)
     if not name:
         return None
     lowered = name.lower()
-    exact = image_files.get(lowered)
-    if exact:
-        return exact[0]
-    for indexed_name, candidates in image_files.items():
-        if indexed_name.endswith(f"_{lowered}") and candidates:
-            return candidates[0]
-    return None
+    candidates = image_files.get(lowered) or [
+        path
+        for indexed_name, paths in image_files.items()
+        if indexed_name.endswith(f"_{lowered}")
+        for path in paths
+    ]
+    safe = list(dict.fromkeys(p.resolve() for p in candidates if p.resolve().is_relative_to(root)))
+    local = [p for p in safe if p.is_relative_to(source_dir)]
+    # 兼容共享 resources 目录，但不在多个同名文件中静默选首项。
+    matches = (local or safe) if allow_global_fallback else local
+    return matches[0] if len(matches) == 1 else None
 
 
 def _index_messages(

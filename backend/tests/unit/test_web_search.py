@@ -28,8 +28,8 @@ def test_render_web_context_formats_results():
         ]
     )
     assert "示例结果" in text
-    assert "来源：https://example.test/news" in text
-    assert "摘要：这是当前公开网页摘要" in text
+    assert "Source: https://example.test/news" in text
+    assert "Summary: 这是当前公开网页摘要" in text
 
 
 def test_parse_tavily_results():

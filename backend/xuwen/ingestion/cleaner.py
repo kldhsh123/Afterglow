@@ -159,7 +159,9 @@ class Cleaner:
 
         text = msg.text or ""
         text = _CONTROL_RE.sub("", text)
-        text = self._normalize_brackets(text)
+        # 新平台的方括号是普通正文；媒体占位由对应插件明确提供。
+        if not msg.raw_type.startswith(("discord_", "telegram_", "whatsapp_")):
+            text = self._normalize_brackets(text)
         text = self._normalize_mentions(text)
         text = self._normalize_uids(text)
 

@@ -68,7 +68,7 @@ export-dir/
 文本导入完成后，手动运行图片导入：
 
 ```bash
-uv run python -m xuwen.ingestion.cli import-images export-dir --plugin afterglow_v1
+uv run python -m xuwen.ingestion.cli import-images export-dir --plugin afterglow_v1 --language zh-CN
 ```
 
 JSONL 同时支持两种形式。推荐使用 `_type=header/participant/message` 的 typed records：
@@ -89,7 +89,7 @@ JSONL 同时支持两种形式。推荐使用 `_type=header/participant/message`
 ```bash
 uv run python -m xuwen.ingestion.cli import \
   chunk-001.jsonl chunk-002.jsonl \
-  --plugin afterglow_v1
+  --plugin afterglow_v1 --language zh-CN
 ```
 
 多文件导入当前是批量逐文件处理，而不是先拼接为一个逻辑 JSONL 流：
@@ -111,6 +111,8 @@ uv run python -m xuwen.ingestion.cli import \
 uv run python scripts/analyze_persona.py \
   chunk-001.jsonl chunk-002.jsonl
 ```
+
+`scripts/analyze_persona.py` 和 `scripts/check_proactive_quality.py` 是独立辅助脚本，目前没有 `--language` 参数，部分控制台提示仍为中文。不要给它们追加该参数；需要选择语言的导入或分析任务请使用主 CLI 的 `--language zh-CN` / `--language en`。
 
 所有画像输入必须属于同一个目标人物。跨平台或多账号时，应在 `.env` 的 `SELF_UID` / `FRIEND_UID`
 中配置该人物对应的全部 UID；不同人物必须分开生成画像。

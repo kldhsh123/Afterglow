@@ -43,7 +43,7 @@ const relationshipLabel = computed({
   }[settings.relationshipDescription] ?? settings.relationshipDescription),
   set: (value: string) => { settings.relationshipDescription = value },
 })
-const analysisGuideUrl = 'https://github.com/kldhsh123/Afterglow/wiki/高级与实验功能#聊天记录分析'
+const analysisGuideUrl = computed(() => `https://kldhsh123.github.io/Afterglow/${locale.value === 'zh-CN' ? 'zh' : 'en'}/advanced.html#section-1`)
 
 onMounted(async () => {
   try {

@@ -131,10 +131,10 @@ def test_render_url_context_formats_results():
             )
         ]
     )
-    assert "【网页读取结果】" not in text
+    assert "[Retrieved page content]" not in text
     assert "示例页面" in text
-    assert "URL：https://example.com/a" in text
-    assert "正文摘录：这是网页正文。" in text
+    assert "URL: https://example.com/a" in text
+    assert "Content excerpt: 这是网页正文。" in text
 
 
 class _FakeIntentLLM:

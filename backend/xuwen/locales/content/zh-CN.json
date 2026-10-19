@@ -1,4 +1,6 @@
 {
+  "Building vector indexes for imported records…": "正在为已导入的记录构建向量索引…",
+  "Vector index building failed: {p0}: {p1}": "向量索引构建失败：{p0}：{p1}",
   "Character observations": "目标角色观察",
   "Relationship observations": "关系互动观察",
   "# Relationship and personality analysis": "# 关系与性格分析",

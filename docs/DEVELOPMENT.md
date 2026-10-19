@@ -1,7 +1,7 @@
-# 开发文档已移动
+# Development · 开发文档
 
-完整内容位于 [`docs/wiki/开发文档.md`](wiki/开发文档.md)。此文件仅用于兼容旧链接。
+[English](https://kldhsh123.github.io/Afterglow/en/development.html) | [简体中文](https://kldhsh123.github.io/Afterglow/zh/development.html)
 
-## Afterglow Chat v1
+Sources / 文档源：[English](en/development.md) · [中文](wiki/开发文档.md)。
 
-格式规范已移动到 [《Afterglow Chat v1 格式》](wiki/Afterglow专用导入格式.md)。
+Afterglow Chat v1: [English](en/chat-format.md) · [中文](wiki/Afterglow专用导入格式.md)。

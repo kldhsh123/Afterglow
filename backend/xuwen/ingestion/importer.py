@@ -486,6 +486,9 @@ async def import_history(
         upserted_response_pairs=n_pair,
         duration_seconds=duration,
         notes=notes,
+        failed_friend=failed_friend,
+        failed_window=failed_window,
+        failed_response_pairs=failed_pair,
     )
 
     # 如果启用了打标，导入完成后顺手跑一遍（仅对未打标 chunk 操作）。

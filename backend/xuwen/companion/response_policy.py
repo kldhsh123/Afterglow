@@ -65,7 +65,7 @@ RetrievalFocus = Literal[
 ]
 MaxLength = Literal["very_short", "short", "medium"]
 
-_IMAGE_PATTERNS = (
+_IMAGE_PATTERNS: tuple[str, ...] = (
     "发图",
     "发张图",
     "图片",
@@ -75,7 +75,7 @@ _IMAGE_PATTERNS = (
     "看看图",
     "看看照片",
 )
-_STICKER_PATTERNS = (
+_STICKER_PATTERNS: tuple[str, ...] = (
     "表情",
     "表情包",
     "贴纸",
@@ -83,7 +83,7 @@ _STICKER_PATTERNS = (
     "来个表情",
     "发个表情",
 )
-_SERIOUS_PATTERNS = (
+_SERIOUS_PATTERNS: tuple[str, ...] = (
     "怎么办",
     "难受",
     "崩溃",
@@ -101,7 +101,7 @@ _SERIOUS_PATTERNS = (
     "疼",
     "病",
 )
-_UNSAFE_PATTERNS = (
+_UNSAFE_PATTERNS: tuple[str, ...] = (
     "想死",
     "不想活",
     "自杀",
@@ -110,7 +110,7 @@ _UNSAFE_PATTERNS = (
     "死了算了",
     "活不下去",
 )
-_ANGRY_PATTERNS = (
+_ANGRY_PATTERNS: tuple[str, ...] = (
     "烦死",
     "别烦",
     "闭嘴",
@@ -120,7 +120,7 @@ _ANGRY_PATTERNS = (
     "你别",
     "气死",
 )
-_SILENCE_PATTERNS = (
+_SILENCE_PATTERNS: tuple[str, ...] = (
     "别说话",
     "先别回",
     "别理我",
@@ -128,7 +128,7 @@ _SILENCE_PATTERNS = (
     "安静会",
     "算了不聊",
 )
-_INTIMATE_PATTERNS = (
+_INTIMATE_PATTERNS: tuple[str, ...] = (
     "想你",
     "抱抱",
     "亲亲",
@@ -137,7 +137,7 @@ _INTIMATE_PATTERNS = (
     "撒娇",
     "哄我",
 )
-_JOKE_PATTERNS = (
+_JOKE_PATTERNS: tuple[str, ...] = (
     "哈哈",
     "hhh",
     "笑死",
@@ -147,7 +147,7 @@ _JOKE_PATTERNS = (
     "抽象",
     "发疯",
 )
-_QUESTION_LIFE_PATTERNS = (
+_QUESTION_LIFE_PATTERNS: tuple[str, ...] = (
     "在干嘛",
     "在干什么",
     "吃了吗",

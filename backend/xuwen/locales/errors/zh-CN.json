@@ -1,4 +1,6 @@
 {
+  "Conversation summarization returned empty text": "会话摘要返回了空内容，本轮对话已停止",
+  "Conversation summarization timed out": "会话摘要生成超时，本轮对话已停止",
   "The model output root is not a JSON object": "模型输出根节点不是 JSON 对象",
   "The phase output is missing the phases array": "阶段输出缺少 phases 数组",
   "No JSON object found in the model output": "模型输出中没有 JSON 对象",

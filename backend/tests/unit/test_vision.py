@@ -158,7 +158,7 @@ async def test_vision_client_handles_list_content(settings: Settings):
 
 
 @pytest.mark.asyncio
-async def test_vision_client_swallows_single_image_failure(settings: Settings):
+async def test_vision_client_swallows_single_image_failure(chinese_language, settings: Settings):
     """单张图片识别失败应返回占位，不影响其它张。"""
     async with httpx.AsyncClient() as raw:
         client = VisionClient(settings, client=raw)
@@ -180,7 +180,7 @@ async def test_vision_client_swallows_single_image_failure(settings: Settings):
 
 
 @pytest.mark.asyncio
-async def test_vision_client_does_not_leak_response_body(settings: Settings):
+async def test_vision_client_does_not_leak_response_body(chinese_language, settings: Settings):
     async with httpx.AsyncClient() as raw:
         client = VisionClient(settings, client=raw)
         with respx.mock(base_url="https://vlm.test/v1") as router:

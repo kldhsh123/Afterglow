@@ -39,6 +39,7 @@ from xuwen.chat_api.companion_prompt import (
     empty_retrieval_result,
     render_life_memory_context_from_recent,
 )
+from xuwen.chat_api.conversation_context import prepare_conversation_context
 from xuwen.chat_api.image_store import ImageError, save_data_url
 from xuwen.chat_api.llm_client import GenerationParams
 from xuwen.chat_api.output_filter import AssistantOutputFilter, sanitize_assistant_text
@@ -286,11 +287,20 @@ async def responses(
     # Layer A：只放"无论是否回复都需要"的预决策任务（检索 / 关系记忆 / life）。
     # Web Search / URL Resolve 涉及外部 API 调用 + 用户隐私文本外发，必须等 decision
     # 确认 should_reply=True 才能启动；否则用户说"别回我"也会触发搜索调用（隐私 + 费用泄漏）。
-    retrieved, relationship_block, life = await asyncio.gather(
+    retrieved, relationship_block, life, conversation_context = await asyncio.gather(
         _retrieve_with_metrics(),
         _relationship_context_or_empty(),
         _life_in_parallel(),
+        prepare_conversation_context(
+            recent,
+            settings=state.settings,
+            llm=state.life_llm,
+            conversation_id=conversation_id,
+            metrics=state.metrics,
+            trace_id=trace_id,
+        ),
     )
+    recent = conversation_context.recent
 
     # model 字段占位：永远用 .env 的 CHAT_MODEL
     model_name = state.settings.chat_model
@@ -448,6 +458,7 @@ async def responses(
         current_user_message=current_user_text or content_text("(Image)"),
         web_context=web_context,
         url_context=url_context,
+        conversation_summary=conversation_context.summary,
     )
 
     if (

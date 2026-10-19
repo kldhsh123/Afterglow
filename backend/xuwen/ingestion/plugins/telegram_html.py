@@ -53,7 +53,7 @@ def _records(source: str) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     sender = ""
     for node in soup.select(".history > .message"):
-        classes = node.get("class", [])
+        classes = node.get_attribute_list("class")
         body = node.select_one(":scope > .body")
         if body is None:
             continue
@@ -90,7 +90,7 @@ def _records(source: str) -> list[dict[str, Any]]:
         images: list[str] = []
         if media:
             for item in media.select(".photo_wrap, .sticker_wrap, .media"):
-                media_classes = " ".join(item.get("class", []))
+                media_classes = " ".join(item.get_attribute_list("class"))
                 href = str(item.get("href", ""))
                 if (
                     "sticker" in media_classes

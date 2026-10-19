@@ -166,8 +166,8 @@ def test_render_sticker_block_for_prompt(settings: Settings):
 def test_render_sticker_block_empty():
     # 即使没有可用 sticker 也要返回一段警告，提醒模型"不要自创输出"
     block = render_sticker_block_for_prompt([])
-    assert "绝对不要" in block
-    assert "sticker" in block
+    assert "None available." in block
+    assert "Never output [sticker:xxx] placeholders." in block
 
 
 # ---------------------------------------------------------------------------

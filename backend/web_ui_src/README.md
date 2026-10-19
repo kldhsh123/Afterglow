@@ -1,3 +1,5 @@
+[中文文档](https://kldhsh123.github.io/Afterglow/zh/quickstart.html) | [English documentation](https://kldhsh123.github.io/Afterglow/en/quickstart.html)
+
 # Afterglow 配置 UI 源码
 
 后端自带的配置向导。构建产物输出到 `../xuwen/web_ui/static/`，由后端 FastAPI 直接 serve。
@@ -41,7 +43,7 @@ web_ui_src/
 ├── index.html
 └── src/
     ├── main.ts
-    ├── App.vue           # 6 步向导主组件
+    ├── App.vue           # 8 步向导主组件
     ├── api.ts            # 后端 API 客户端
     └── styles.css
 ```

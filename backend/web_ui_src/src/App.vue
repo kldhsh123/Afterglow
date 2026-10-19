@@ -520,6 +520,19 @@ function mergeCandidates(prev: IdentityCandidate[], next: IdentityCandidate[]): 
   return Array.from(map.values())
 }
 
+function refreshFileInspection() {
+  let candidates: IdentityCandidate[] = []
+  for (const file of uploadedFiles.value) {
+    candidates = mergeCandidates(candidates, file.candidates || [])
+  }
+  inspectCandidates.value = candidates
+  inspectFormat.value = uploadedFiles.value.find(file => file.format && file.format !== 'unknown')?.format || ''
+  inspectError.value = uploadedFiles.value
+    .filter(file => file.error)
+    .map(file => `${file.name}：${file.error}`)
+    .join('；')
+}
+
 async function onIdentifyFilesPicked(ev: Event) {
   const target = ev.target as HTMLInputElement
   const files = Array.from(target.files || [])
@@ -532,19 +545,8 @@ async function onIdentifyFilesPicked(ev: Event) {
     uploadedFiles.value.push(...res.uploaded)
 
     // 合并候选 + 更新格式
-    let allCandidates: IdentityCandidate[] = [...inspectCandidates.value]
-    const fileErrors: string[] = []
-    for (const f of res.uploaded) {
-      if (f.error) fileErrors.push(`${f.name}：${f.error}`)
-      if (f.candidates && f.candidates.length) {
-        allCandidates = mergeCandidates(allCandidates, f.candidates)
-      }
-      if (f.format && f.format !== 'unknown' && !inspectFormat.value) {
-        inspectFormat.value = f.format
-      }
-    }
-    inspectCandidates.value = allCandidates
-    if (fileErrors.length) inspectError.value = fileErrors.join('；')
+    refreshFileInspection()
+    const allCandidates = inspectCandidates.value
 
     // 自动应用 role_hint=self/friend 到尚未填写的字段
     const self = allCandidates.find(c => c.role_hint === 'self')
@@ -620,6 +622,7 @@ const unassignedCandidates = computed<IdentityCandidate[]>(() => {
 // ---- 导入流程 ----
 function removeUploaded(idx: number) {
   uploadedFiles.value.splice(idx, 1)
+  refreshFileInspection()
   persistUploadedFiles(uploadedFiles.value)
 }
 
@@ -651,6 +654,7 @@ async function startImport() {
     // 已上传的文件路径可能因为后端重启 / 清理而失效，提示用户重新上传
     if (msg.includes('文件不存在') || msg.includes('not exist') || msg.includes('404')) {
       uploadedFiles.value = []
+      refreshFileInspection()
       persistUploadedFiles([])
       saveError.value = t('uploadedFilesAreMissingFromTheBackend')
     }
@@ -1020,6 +1024,7 @@ onMounted(async () => {
   // 恢复持久化的上传列表
   const persisted = loadPersistedFiles()
   if (persisted.length) uploadedFiles.value = persisted
+  refreshFileInspection()
 
   // 有保存的访问令牌 → 自动校验、进入向导并恢复未完成的导入（在 checkToken 内部）
   // 没有访问令牌或令牌失效时停在第 0 步，等待用户手动粘贴。
@@ -2182,8 +2187,8 @@ onMounted(async () => {
                 @click="cancelImport">
                 {{ t('cancelImportProcessedRecordsAreKept') }}
               </button>
-              <!-- 失败/取消后允许用户重新开始（chunk_id 去重会自动跳过已入库部分） -->
-              <button v-if="['failed', 'cancelled'].includes(importTask.status)"
+              <!-- 部分失败也可补导；chunk_id 去重会跳过已经入库的部分。 -->
+              <button v-if="['failed', 'cancelled'].includes(importTask.status) || (importTask.status === 'done' && importTask.report?.failed_chunks > 0)"
                 :disabled="importStarting"
                 class="w-full py-2 rounded-full text-sm
                        border border-accent/40 text-accent dark:text-night-accent

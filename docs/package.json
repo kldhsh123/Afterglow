@@ -1,0 +1,22 @@
+{
+  "name": "afterglow-docs",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "prepare:docs": "python3 ../.github/scripts/prepare_docs.py site",
+    "dev": "npm run prepare:docs && vitepress dev",
+    "build": "npm run check && npm run prepare:docs && vitepress build",
+    "preview": "vitepress preview",
+    "check": "node scripts/check.mjs",
+    "test": "node --test scripts/*.test.mjs && python3 -m unittest discover -s ../.github/scripts -p test_prepare_docs.py",
+    "check:dist": "node scripts/check-dist.mjs"
+  },
+  "devDependencies": {
+    "vitepress": "1.6.4",
+    "vitepress-plugin-mermaid": "2.0.17",
+    "mermaid": "^11.12.0"
+  }
+}

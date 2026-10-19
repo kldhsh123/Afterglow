@@ -1,4 +1,6 @@
 {
+  "Building vector indexes for imported records…": "Building vector indexes for imported records…",
+  "Vector index building failed: {p0}: {p1}": "Vector index building failed: {p0}: {p1}",
   "Character observations": "Character observations",
   "Relationship observations": "Relationship observations",
   "# Relationship and personality analysis": "# Relationship and personality analysis",

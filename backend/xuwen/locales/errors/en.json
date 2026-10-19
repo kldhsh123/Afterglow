@@ -1,4 +1,6 @@
 {
+  "Conversation summarization returned empty text": "Conversation summarization returned empty text",
+  "Conversation summarization timed out": "Conversation summarization timed out",
   "The model output root is not a JSON object": "The model output root is not a JSON object",
   "The phase output is missing the phases array": "The phase output is missing the phases array",
   "No JSON object found in the model output": "No JSON object found in the model output",

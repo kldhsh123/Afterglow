@@ -1,0 +1,7 @@
+/* Keep reference tables usable on small screens without changing the app design. */
+.vp-doc table { display: block; overflow-x: auto; }
+.vp-doc .mermaid { overflow-x: auto; }
+.vp-doc .mermaid svg { max-width: none; min-width: 600px; }
+.VPNavBarTranslations, .VPNavScreenTranslations, .VPNavBarExtra .translations { display: none !important; }
+
+.VPNavBarTitle .logo { width: 32px; height: 32px; }

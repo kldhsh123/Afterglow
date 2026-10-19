@@ -45,7 +45,7 @@ def _session(session_id: str, messages: list[NormalizedMessage]) -> Session:
     )
 
 
-def test_compute_proactive_profile_learns_friend_initiated_sessions():
+def test_compute_proactive_profile_learns_friend_initiated_sessions(chinese_language):
     sessions = [
         _session(
             "s1",

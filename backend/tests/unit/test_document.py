@@ -56,7 +56,7 @@ def test_extract_csv_to_markdown_table():
     assert "| 示例甲 | 8 |" in doc.text
 
 
-def test_extract_csv_truncates_large():
+def test_extract_csv_truncates_large(chinese_language):
     buf = io.StringIO()
     writer = _csv.writer(buf)
     writer.writerow(["i"])
@@ -132,13 +132,13 @@ def test_extract_xlsx_basic():
     assert "92" in result.text
 
 
-def test_extract_unknown_extension_rejected():
+def test_extract_unknown_extension_rejected(chinese_language):
     with pytest.raises(DocumentError) as exc:
         extract(b"binary", "mystery.bin")
     assert "暂不支持" in exc.value.message
 
 
-def test_extract_oversize_rejected():
+def test_extract_oversize_rejected(chinese_language):
     with pytest.raises(DocumentError) as exc:
         extract(b"x" * 10, "tiny.txt", max_bytes=5)
     assert "过大" in exc.value.message

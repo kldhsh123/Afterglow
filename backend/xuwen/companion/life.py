@@ -30,7 +30,7 @@ _TIMELINE_LIMIT = 80
 _MAX_FIELD_CHARS = 80
 _MIN_UPDATE_INTERVAL = timedelta(minutes=10)
 _MAX_UPDATE_INTERVAL = timedelta(hours=10)
-_LIFE_INTERRUPT_PATTERNS = (
+_LIFE_INTERRUPT_PATTERNS: tuple[str, ...] = (
     "在干嘛",
     "在干什么",
     "干嘛呢",

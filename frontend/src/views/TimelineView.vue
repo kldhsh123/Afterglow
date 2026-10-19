@@ -29,7 +29,7 @@ const report = ref<TimelineReport | null>(null)
 const loading = ref(true)
 const error = ref('')
 const expanded = ref(new Set<string>())
-const analysisGuideUrl = 'https://github.com/kldhsh123/Afterglow/wiki/高级与实验功能#聊天记录分析'
+const analysisGuideUrl = computed(() => `https://kldhsh123.github.io/Afterglow/${locale.value === 'zh-CN' ? 'zh' : 'en'}/advanced.html#section-1`)
 
 const iconByType = {
   milestone: Flag,

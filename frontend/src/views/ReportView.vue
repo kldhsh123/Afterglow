@@ -33,7 +33,7 @@ const error = ref('')
 const experimentalError = ref('')
 const showDisclaimer = ref(false)
 const consentChecked = ref(false)
-const analysisGuideUrl = 'https://github.com/kldhsh123/Afterglow/wiki/高级与实验功能#聊天记录分析'
+const analysisGuideUrl = computed(() => `https://kldhsh123.github.io/Afterglow/${locale.value === 'zh-CN' ? 'zh' : 'en'}/advanced.html#section-1`)
 
 const categoryLabels = computed<Record<ExperimentalCategory, string>>(() => ({
   personality_hypothesis: t('report.categories.personality_hypothesis'), interpersonal_style: t('report.categories.interpersonal_style'), attachment: t('report.categories.attachment'),

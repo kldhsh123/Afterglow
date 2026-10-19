@@ -1,3 +1,5 @@
+[中文文档](https://kldhsh123.github.io/Afterglow/zh/development.html) | [English documentation](https://kldhsh123.github.io/Afterglow/en/development.html)
+
 # Afterglow（续温）前端
 
 > 把曾经对你好的话，续成往后的陪伴。

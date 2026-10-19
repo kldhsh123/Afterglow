@@ -312,11 +312,13 @@ def _chunk_id(prefix: str, source_id: str) -> str:
 def _chunk_id_for_message(m: NormalizedMessage) -> str:
     """为一条 friend 消息生成确定性 chunk_id。
 
-    同时纳入 message_id / seq / timestamp_ms / sender_uid，避免：
-    - message_id 缺失或重复时的冲突
-    - 同 id 不同内容（重复导入但来源不同）误覆盖
+    新平台使用稳定消息 ID、时间和发送者，避免范围导出改变文件内序号后重复入库。
+    旧格式保留 seq 参与哈希，兼容缺失或重复 message_id 的导出。
     """
-    raw = f"{m.message_id}|{m.seq}|{m.timestamp_ms}|{m.sender_uid}"
+    if _has_stable_message_id(m):
+        raw = f"{m.message_id}|{m.timestamp_ms}|{m.sender_uid}"
+    else:
+        raw = f"{m.message_id}|{m.seq}|{m.timestamp_ms}|{m.sender_uid}"
     h = hashlib.sha1(raw.encode(), usedforsecurity=False)
     return f"friend-{h.hexdigest()[:16]}"
 
@@ -327,12 +329,24 @@ def _chunk_id_for_pair(
 ) -> str:
     raw = "|".join(
         [
-            *(f"u:{m.message_id}:{m.seq}:{m.timestamp_ms}" for m in user_msgs),
-            *(f"f:{m.message_id}:{m.seq}:{m.timestamp_ms}" for m in friend_msgs),
+            *(f"u:{_pair_message_identity(m)}" for m in user_msgs),
+            *(f"f:{_pair_message_identity(m)}" for m in friend_msgs),
         ]
     )
     h = hashlib.sha1(raw.encode(), usedforsecurity=False)
     return f"pair-{h.hexdigest()[:16]}"
+
+
+def _has_stable_message_id(message: NormalizedMessage) -> bool:
+    return bool(message.message_id) and message.raw_type.startswith(
+        ("discord_", "telegram_", "whatsapp_")
+    )
+
+
+def _pair_message_identity(message: NormalizedMessage) -> str:
+    if _has_stable_message_id(message):
+        return f"{message.message_id}:{message.timestamp_ms}:{message.sender_uid}"
+    return f"{message.message_id}:{message.seq}:{message.timestamp_ms}"
 
 
 def _estimate_warmth(text: str) -> float:

@@ -125,7 +125,7 @@ def test_policy_serious_for_unsafe_message():
     assert decision.reply_mode == "serious"
     assert decision.risk_level == "high"
     assert decision.user_state == "unsafe"
-    assert any("不要调侃" in item for item in decision.do_not)
+    assert any("Do not tease, act clingy, joke" in item for item in decision.do_not)
 
 
 def test_policy_silence_when_user_requests_quiet():
@@ -178,7 +178,7 @@ def test_policy_life_question_focuses_life_state():
     )
 
     assert decision.retrieval_focus == "life_state"
-    assert any("生活状态层" in item for item in decision.instructions)
+    assert any("Use the current life-state block" in item for item in decision.instructions)
 
 
 def test_policy_weak_evidence_shifts_topic():
@@ -206,7 +206,7 @@ def test_policy_busy_life_adds_delay_and_do_not():
     )
 
     assert decision.reply_delay_seconds == 15
-    assert any("不要假装一直在线秒回" in item for item in decision.do_not)
+    assert any("Do not pretend to be instantly available all the time" in item for item in decision.do_not)
 
 
 def test_policy_render_prompt_block_contains_decision():
@@ -220,9 +220,9 @@ def test_policy_render_prompt_block_contains_decision():
     )
     block = decision.render_prompt_block()
 
-    assert "【本轮互动决策" in block
-    assert "回复模式" in block
-    assert "不要向用户解释这些标签" in block
+    assert "[Interaction decision:" in block
+    assert "Reply mode: playful" in block
+    assert "never explain these labels to the user" in block
 
 
 def test_policy_render_prompt_block_injects_silence_permission():
@@ -237,7 +237,7 @@ def test_policy_render_prompt_block_injects_silence_permission():
     )
     block = decision.render_prompt_block(silence_sentinel="[silent]")
 
-    assert "【沉默权限" in block
+    assert "[Optional silence]" in block
     assert "[silent]" in block
 
 
@@ -255,9 +255,9 @@ def test_policy_render_prompt_block_no_silence_for_unsafe():
     block = decision.render_prompt_block(silence_sentinel="[silent]")
 
     # unsafe 路径绝不允许 AI 自主沉默
-    assert "【沉默权限" not in block
+    assert "[Optional silence]" not in block
     # do_not 里必须有禁止沉默条款
-    assert any("不要选择沉默" in item for item in decision.do_not)
+    assert any("Never choose silence or output the silence marker" in item for item in decision.do_not)
 
 
 def test_policy_render_prompt_block_no_silence_when_already_silenced():
@@ -272,7 +272,7 @@ def test_policy_render_prompt_block_no_silence_when_already_silenced():
     )
     assert decision.reply_mode == "silence"
     block = decision.render_prompt_block(silence_sentinel="[silent]")
-    assert "【沉默权限" not in block
+    assert "[Optional silence]" not in block
 
 
 def test_policy_render_prompt_block_no_silence_without_sentinel():
@@ -286,7 +286,7 @@ def test_policy_render_prompt_block_no_silence_without_sentinel():
         recent=[],
     )
     block = decision.render_prompt_block()
-    assert "【沉默权限" not in block
+    assert "[Optional silence]" not in block
 
 
 # ---------------------------------------------------------------------------
@@ -655,8 +655,8 @@ async def test_refine_forces_safe_policy_when_llm_detects_unsafe():
     assert result.risk_level == "high"
     assert result.user_state == "unsafe"
     assert result.max_length == "medium"
-    assert any("不要调侃" in item for item in result.do_not)
-    assert any("立刻求助" in item for item in result.instructions)
+    assert any("Do not tease, act clingy, joke" in item for item in result.do_not)
+    assert any("seeking help now" in item for item in result.instructions)
 
 
 @pytest.mark.asyncio

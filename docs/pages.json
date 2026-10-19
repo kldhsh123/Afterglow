@@ -1,0 +1,97 @@
+[
+  {
+    "slug": "index",
+    "zh": "Home",
+    "group": "start"
+  },
+  {
+    "slug": "quickstart",
+    "zh": "快速开始",
+    "group": "start"
+  },
+  {
+    "slug": "configuration",
+    "zh": "配置参考",
+    "group": "start"
+  },
+  {
+    "slug": "environment",
+    "zh": "后端环境变量",
+    "group": "start"
+  },
+  {
+    "slug": "config-editor",
+    "zh": "配置文件编辑器",
+    "group": "start"
+  },
+  {
+    "slug": "docker",
+    "zh": "Docker部署与运维",
+    "group": "start"
+  },
+  {
+    "slug": "troubleshooting",
+    "zh": "故障排查",
+    "group": "start"
+  },
+  {
+    "slug": "faq",
+    "zh": "常见问题",
+    "group": "start"
+  },
+  {
+    "slug": "privacy",
+    "zh": "负责任使用与数据隐私",
+    "group": "data"
+  },
+  {
+    "slug": "exporting",
+    "zh": "导出聊天记录",
+    "group": "data"
+  },
+  {
+    "slug": "importing",
+    "zh": "导入聊天记录",
+    "group": "data"
+  },
+  {
+    "slug": "chat-format",
+    "zh": "Afterglow专用导入格式",
+    "group": "data"
+  },
+  {
+    "slug": "persona-templates",
+    "zh": "自定义人格模板",
+    "group": "data"
+  },
+  {
+    "slug": "advanced",
+    "zh": "高级与实验功能",
+    "group": "reference"
+  },
+  {
+    "slug": "architecture",
+    "zh": "整体架构",
+    "group": "reference"
+  },
+  {
+    "slug": "api",
+    "zh": "后端API文档",
+    "group": "reference"
+  },
+  {
+    "slug": "development",
+    "zh": "开发文档",
+    "group": "development"
+  },
+  {
+    "slug": "documentation",
+    "zh": "文档维护",
+    "group": "development"
+  },
+  {
+    "slug": "acknowledgements",
+    "zh": "致谢",
+    "group": "development"
+  }
+]

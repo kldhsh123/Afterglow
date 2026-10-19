@@ -112,7 +112,7 @@ async def test_complete_chat_returns_content():
 
 
 @pytest.mark.asyncio
-async def test_complete_chat_reports_content_filter_instead_of_returning_empty_text():
+async def test_complete_chat_reports_content_filter_instead_of_returning_empty_text(chinese_language):
     settings = _settings()
     async with httpx.AsyncClient() as raw:
         client = LLMClient(settings, client=raw)
@@ -299,7 +299,7 @@ async def test_complete_chat_does_not_leak_response_body():
 
 
 @pytest.mark.asyncio
-async def test_complete_responses_rejects_failed_status():
+async def test_complete_responses_rejects_failed_status(chinese_language):
     settings = _settings()
     async with httpx.AsyncClient() as raw:
         client = LLMClient(settings, client=raw, api_protocol="responses")
@@ -319,7 +319,7 @@ async def test_complete_responses_rejects_failed_status():
 
 
 @pytest.mark.asyncio
-async def test_complete_responses_refusal_raises_without_reply():
+async def test_complete_responses_refusal_raises_without_reply(chinese_language):
     settings = _settings()
     async with httpx.AsyncClient() as raw:
         client = LLMClient(settings, client=raw, api_protocol="responses")
@@ -370,7 +370,7 @@ async def test_stream_chat_yields_delta_content():
 
 
 @pytest.mark.asyncio
-async def test_stream_responses_refusal_raises_without_yielding_text():
+async def test_stream_responses_refusal_raises_without_yielding_text(chinese_language):
     settings = _settings()
     sse_body = (
         'data: {"type":"response.refusal.delta","delta":"不能处理"}\n\n'
@@ -398,7 +398,7 @@ async def test_stream_responses_refusal_raises_without_yielding_text():
 
 
 @pytest.mark.asyncio
-async def test_stream_chat_rejects_redirect_response():
+async def test_stream_chat_rejects_redirect_response(chinese_language):
     settings = _settings()
     async with httpx.AsyncClient() as raw:
         client = LLMClient(settings, client=raw, max_retries=1)
@@ -414,7 +414,7 @@ async def test_stream_chat_rejects_redirect_response():
 
 
 @pytest.mark.asyncio
-async def test_stream_chat_reports_content_filter_instead_of_empty_stream():
+async def test_stream_chat_reports_content_filter_instead_of_empty_stream(chinese_language):
     settings = _settings()
     sse_body = (
         'data: {"choices":[{"delta":{},"finish_reason":"content_filter"}]}\n\n'
