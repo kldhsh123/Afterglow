@@ -1,0 +1,65 @@
+# Adapted from AstrBot's issue templates:
+# https://github.com/AstrBotDevs/AstrBot/tree/master/.github/ISSUE_TEMPLATE
+# Adjusted for Afterglow's bug reporting process.
+name: '🐛 Bug report (English)'
+title: '[Bug]'
+description: Report a bug to help us improve Afterglow.
+labels: ['bug']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for taking the time to report a bug! Please describe the problem clearly. If possible, include a reproducible example to help us resolve it faster.
+
+  - type: textarea
+    attributes:
+      label: What happened?
+      description: Describe the problem you encountered.
+      placeholder: Give a clear and specific description of the unexpected behavior.
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: Steps to reproduce
+      description: List the steps needed to reproduce the problem.
+      placeholder: |
+        1. Open '...'
+        2. Click '...'
+        3. Observe the error.
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: Afterglow version
+      description: Provide the version of Afterglow you are using.
+      placeholder: Enter your Afterglow version.
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: Error logs
+      description: Include complete debug-level logs or screenshots. Long logs are welcome!
+      placeholder: Paste the full error logs or attach screenshots.
+    validations:
+      required: true
+
+  - type: checkboxes
+    attributes:
+      label: Would you like to submit a PR?
+      description: This is optional. We are happy to guide you through contributing, especially if you already have an idea for a fix.
+      options:
+        - label: Yes, I would like to submit a PR!
+
+  - type: checkboxes
+    attributes:
+      label: Code of Conduct
+      options:
+        - label: I have read and agree to follow the [Code of Conduct](https://docs.github.com/en/site-policy/github-terms/github-community-code-of-conduct).
+          required: true
+
+  - type: markdown
+    attributes:
+      value: Thank you for filling out this form!

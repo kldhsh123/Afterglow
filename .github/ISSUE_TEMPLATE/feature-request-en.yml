@@ -1,0 +1,41 @@
+# Adapted from AstrBot's issue templates:
+# https://github.com/AstrBotDevs/AstrBot/tree/master/.github/ISSUE_TEMPLATE
+# Adjusted for Afterglow's feature request process.
+name: '🎉 Feature request (English)'
+title: '[Feature]'
+description: Suggest a feature to help us improve Afterglow.
+labels: ['增强']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for taking the time to suggest a feature! Please explain your idea clearly.
+
+  - type: textarea
+    attributes:
+      label: Description
+      description: Briefly describe the feature you would like to see.
+
+  - type: textarea
+    attributes:
+      label: Use case
+      description: What would you like to be able to do?
+      placeholder: Give a clear and specific description of how you would use this feature.
+
+  - type: checkboxes
+    attributes:
+      label: Would you like to submit a PR?
+      description: This is optional, but contributions are welcome.
+      options:
+        - label: Yes, I would like to submit a PR!
+
+  - type: checkboxes
+    attributes:
+      label: Code of Conduct
+      options:
+        - label: I have read and agree to follow the [Code of Conduct](https://docs.github.com/en/site-policy/github-terms/github-community-code-of-conduct).
+          required: true
+
+  - type: markdown
+    attributes:
+      value: Thank you for filling out this form!
