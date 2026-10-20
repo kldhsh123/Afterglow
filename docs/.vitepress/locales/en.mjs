@@ -1,4 +1,50 @@
 export default {
+  website: "Website",
+  home: {
+    "eyebrow": "Afterglow documentation",
+    "title": "Their words, still here.",
+    "accent": "Warmth, carried forward.",
+    "description": "Build a local AI companion from the conversations you choose to keep. From your first import to a familiar reply, this is where you begin.",
+    "primary": "Get started",
+    "secondary": "Visit the website",
+    "tags": [
+      "Locally hosted",
+      "Memories from your conversations",
+      "OpenAI-compatible API"
+    ],
+    "letterLabel": "A place for familiar words",
+    "letterTitle": "Some words stay with us.",
+    "letterAccent": "Give their warmth a place to live.",
+    "letterNote": "Your conversations become memories. A familiar voice finds its way into the everyday.",
+    "letterSteps": [
+      "Conversations",
+      "Memories",
+      "Companionship"
+    ],
+    "startTitle": "Your first conversation starts here.",
+    "startDescription": "New to Afterglow, bringing your own chat history, or connecting a client? Take the path you need.",
+    "guideTitle": "Make yourself at home",
+    "guideDescription": "Start the backend, use the configuration UI and setup wizard, and have your first conversation.",
+    "guideAction": "Open the quick start",
+    "routes": [
+      {
+        "slug": "importing",
+        "title": "Bring your conversations",
+        "description": "Supported exports, imports, and memory preparation."
+      },
+      {
+        "slug": "quickstart",
+        "hash": "section-2",
+        "title": "Configure with the setup UI",
+        "description": "Follow the wizard to test models, import chats, and save your configuration."
+      },
+      {
+        "slug": "api",
+        "title": "Connect your favorite client",
+        "description": "Chat Completions and Responses API reference."
+      }
+    ]
+  },
   skipToContent: "Skip to content",
   diagramError: "The diagram could not be rendered. Its source is available through the edit link below.",
   diagramExpand: 'View at original size', diagramFit: 'Fit to width', diagramRegion: 'Diagram; scroll horizontally to see details',
@@ -41,7 +87,7 @@ export default {
 },
   label: 'English', lang: 'en', title: 'Afterglow Docs',
   description: 'Deployment, configuration, importing and development for Afterglow',
-  groups: {start: 'Getting started', data: 'Data and imports', reference: 'Reference', development: 'Development'},
+  groups: {start: 'Getting started', data: 'Data and imports', advanced: 'Advanced use', reference: 'Reference', development: 'Development'},
   pages: {
     'config-editor': 'Configuration editor', exporting: 'Exporting chats',
     index: 'Documentation', quickstart: 'Quick start', configuration: 'Configuration', environment: 'Environment variables',

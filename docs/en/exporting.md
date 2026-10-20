@@ -95,7 +95,7 @@ Discord's official personal-data package is a different format and does not incl
 
 ## Verify and import
 
-Check that both sides, the expected date range and original IDs are present. Use the [configuration editor](config-editor.md) or setup wizard to configure model services and identities, then follow [Importing chats](importing.md).
+Check that both sides, the expected date range and original IDs are present. Use the backend [configuration UI and setup wizard](quickstart.md) to configure model services and identities, then follow [Importing chats](importing.md).
 
 ```bash
 cd backend

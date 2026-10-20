@@ -5,7 +5,7 @@ Afterglow uses `pydantic-settings` to read process environment variables and `.e
 > [!IMPORTANT]
 > `.env` contains model keys, access passwords and identities. Never commit it. Fully restart after changes; `uvicorn --reload` does not rebuild cached Settings for `.env` edits.
 
-Use the [configuration editor](config-editor.md) to generate a file locally in your browser. Templates are available with [English comments](https://github.com/kldhsh123/Afterglow/blob/main/backend/.env.example) or [Chinese comments](https://github.com/kldhsh123/Afterglow/blob/main/backend/.env.example.zh-CN); their values are identical.
+For initial setup and everyday changes, use the backend [configuration UI and setup wizard](quickstart.md). Advanced users who manage files directly can use the [configuration editor](config-editor.md) to generate a file locally in the browser. Templates are available with [English comments](https://github.com/kldhsh123/Afterglow/blob/main/backend/.env.example) or [Chinese comments](https://github.com/kldhsh123/Afterglow/blob/main/backend/.env.example.zh-CN); their values are identical.
 
 ## Loading rules
 

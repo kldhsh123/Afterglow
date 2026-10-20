@@ -1,275 +1,265 @@
-[English development guide](https://kldhsh123.github.io/Afterglow/en/development.html) · [中文文档](https://kldhsh123.github.io/Afterglow/zh/)
+[English](CONTRIBUTING.md) | [简体中文](readme/CONTRIBUTING.zh-CN.md) · [Development guide](https://kldhsh123.github.io/Afterglow/en/development.html) · [English docs](https://kldhsh123.github.io/Afterglow/en/)
 
-# 贡献指南
+# Contributing
 
-感谢你考虑为 Afterglow 出力。这个文档帮你最快地把改动以一种**容易被合并**的形式提上来。
+Thank you for considering a contribution to Afterglow. This guide helps you prepare changes that are easy to review and merge.
 
-如果只是有个建议或发现 bug，**不需要读完整篇** —— 直接去 [Issues](https://github.com/kldhsh123/Afterglow/issues) 用对应模板开一个就行。
+If you only want to suggest an idea or report a bug, you do not need to read the whole guide. Open an [issue](https://github.com/kldhsh123/Afterglow/issues) using the appropriate template.
 
-## 贡献协议与代码所有权
+## Contribution agreement and code ownership
 
-**提交 Pull Request 即视为同意本节全部条款**。请仔细阅读。
+**By submitting a pull request, you agree to all terms in this section.** Please read them carefully.
 
-通过向本仓库提交 Pull Request（PR）或以其他方式贡献代码，即表示您同意以下条款：
+By submitting a pull request (PR) or otherwise contributing code to this repository, you agree that:
 
-- 您保留对自身贡献的版权。
-- **您授予仓库所有者（kldhsh123 及其指定继承者/受让人）永久的、不可撤销的、非独占的、全球范围的、免费的权利**：使用、复制、修改、合并、发布、分发、转授权（sublicense）和以任何形式再许可（relicense）您的贡献，包括将贡献纳入项目整体并**变更整个项目的许可证**。
-- 此授权适用于当前及未来任何许可证。
-- 您的贡献默认以项目当前许可证（AGPL-3.0）分发，但仓库所有者有权随时变更整个项目的许可证，而无需另行获得您的同意。
-- 如果您对特定贡献有额外限制，请在 PR 描述中**明确说明**，否则视为无限制授权。
-- 本条款构成贡献者许可协议（CLA）的一部分。
+- You retain copyright in your contributions.
+- **You grant the repository owner (kldhsh123 and their designated successors or assignees) a perpetual, irrevocable, non-exclusive, worldwide, royalty-free right** to use, copy, modify, merge, publish, distribute, sublicense, and relicense your contributions in any form, including incorporating them into the project and **changing the license of the entire project**.
+- This grant applies to any current or future license.
+- Your contributions are distributed under the project's current license (AGPL-3.0) by default. The repository owner may change the license of the entire project at any time without obtaining further consent from you.
+- If a particular contribution has additional restrictions, **state them explicitly in the PR description**. Otherwise, the grant is considered unrestricted.
+- These terms form part of the Contributor License Agreement (CLA).
 
-此设计旨在让 Afterglow 项目能长期灵活发展，同时尊重每位贡献者的劳动。
+These terms allow Afterglow to evolve over the long term while respecting each contributor's work.
 
-## 在动手之前
+## Before you start
 
-- 用户文档中英文同等维护，分别放在 `docs/wiki/` 与 `docs/en/`。Issue、PR 和提交说明均可使用中英文；变量名 / 标识符使用英文。新增用户提示通过语言文件提供，已有中文注释不必机械翻译。
-- 不要在 Issue / PR 里贴**真实聊天记录**或 API key。所有截图和日志请先脱敏，特别是 `u_xxx` / `wxid_xxx` / `sk-xxx` / `tvly-xxx` 这种东西。
-- 项目在 `dev` 分支推进，发布前 squash 到 `main`。**请把 PR 提到 `dev`**。
-- 如果是大改动（新增模型适配、改检索策略、动 prompt 模板等），**建议先开 Issue 讨论**，避免实现完发现方向不被接受。
+- Maintain user documentation equally in Chinese (`docs/wiki/`) and English (`docs/en/`). Issues, PRs, and commit messages may use either language; use English for variable names and identifiers. Add new user-facing messages through locale files. Existing Chinese comments do not need mechanical translation.
+- Do not paste **real chat records** or API keys into issues or PRs. Redact screenshots and logs first, especially values such as `u_xxx`, `wxid_xxx`, `sk-xxx`, and `tvly-xxx`.
+- Development happens on `dev`, with changes squashed into `main` for releases. **Target your PR at `dev`.**
+- For substantial changes, such as a new model adapter, retrieval strategy, or prompt template, open an issue first to discuss the direction before implementing it.
 
-## 不作为缺陷处理的设计边界
+## Intentional design boundaries
 
-提交 Issue 或着手“修复”前，请先确认问题是否属于下面两项刻意保留的设计。未经讨论，不要提交改变这些边界的 PR。
+Before reporting an issue or preparing a fix, check whether it concerns either of the following intentional design decisions. Discuss changes to these boundaries before submitting a PR.
 
-### 主聊天调用链采用 fail-fast
+### The main chat pipeline fails fast
 
-在主聊天调用链中，任一关键步骤发生错误时，程序会立即终止当前请求并返回具体错误信息。这属于项目的刻意设计，而非异常行为。
+If a critical step in the main chat pipeline fails, the application stops the current request and returns a specific error. This is intentional behavior.
 
-Afterglow 更重视单次对话链路的完整性和最终生成效果。如果在检索、状态处理、关系记忆或 Prompt 构建等关键环节发生异常后仍继续执行，可能导致上下文缺失、错误状态进入 Prompt，或聊天效果明显下降。因此，目前采用 fail-fast 策略，不接受通过吞掉异常、注入空结果或无提示降级来让主请求“继续跑完”的修复。
+Afterglow prioritizes the integrity of each conversation pipeline and the quality of the final response. Continuing after a failure in retrieval, state handling, relationship memory, or prompt construction can leave context missing, put incorrect state into the prompt, or substantially reduce response quality. Fixes that swallow exceptions, inject empty results, or silently degrade the main request are therefore not accepted.
 
-这里的“主聊天调用链”指 `/v1/chat/completions`、`/v1/responses` 等在线回复请求从上下文准备到最终生成的关键路径。离线导入、目录扫描等批处理任务可以按各自契约跳过单个坏文件并给出警告，不受这一条限制。
+The main chat pipeline means the critical path from context preparation to final generation for online requests such as `/v1/chat/completions` and `/v1/responses`. Offline imports, directory scans, and other batch tasks may skip individual invalid files with warnings according to their own contracts.
 
-### 当前只面向个人单用户场景
+### The project currently targets personal, single-user use
 
-Afterglow 当前的设计目标是个人使用场景，不包含多人同时使用、租户隔离或高并发服务场景。代码内部为了降低单次请求延迟而使用并发，不代表系统承诺支持多个用户共享同一实例和状态。
+Afterglow is designed for personal use. It does not target simultaneous use by multiple users, tenant isolation, or high-concurrency services. Internal concurrency reduces the latency of individual requests; it does not imply support for multiple users sharing an instance and its state.
 
-因此，单纯针对多用户并发、共享状态竞争、租户间数据隔离或高并发吞吐提出的问题，现阶段不属于项目目标范围，也不会作为有效缺陷处理。若未来项目定位发生变化，再考虑补充相应的并发隔离、线程安全与容量设计。
+Issues solely about concurrent users, shared-state contention, tenant data isolation, or high-concurrency throughput are currently outside the project's scope and are not treated as valid defects. Concurrency isolation, thread safety, and capacity design may be revisited if the project's goals change.
 
-## 找事做
+## Finding something to work on
 
-| 想做什么 | 入口 |
+| Contribution | Where to start |
 |---|---|
-| 修小 bug / 改文档错别字 | 直接发 PR |
-| 新增导入插件（其它聊天平台） | 看 [`docs/wiki/开发文档.md`](docs/wiki/开发文档.md#导入插件开发) |
-| 改进配置向导 UI | 改 `backend/web_ui_src/`，详见 [`backend/web_ui_src/README.md`](backend/web_ui_src/README.md) |
-| 改主聊天前端（时光信笺） | 改 `frontend/`，详见 [`frontend/README.md`](frontend/README.md) |
-| 新增 / 改 prompt 模板 | `backend/xuwen/persona/templates/*.md.j2` |
-| 调检索 / 决策策略 | `backend/xuwen/memory/` 和 `backend/xuwen/companion/` |
+| Small bug fix or documentation typo | Submit a PR directly |
+| Import plugin for another chat platform | [Import plugin development](docs/en/development.md#developing-import-plugins) |
+| Configuration wizard UI | `backend/web_ui_src/`; see its [README](backend/web_ui_src/README.md) |
+| Main chat frontend (时光信笺) | `frontend/`; see its [README](frontend/README.md) |
+| New or updated prompt templates | `backend/xuwen/persona/templates/*.md.j2` |
+| Retrieval or decision strategies | `backend/xuwen/memory/` and `backend/xuwen/companion/` |
 
-## 开发环境
+## Development environment
 
-最快上手：
+To get started:
 
 ```bash
 git clone https://github.com/<your-fork>/Afterglow.git
 cd Afterglow
 git remote add upstream https://github.com/kldhsh123/Afterglow.git
 
-# 后端
+# Backend
 cd backend
 uv sync --extra dev
 
-# 主聊天前端（可选，跑 web_ui 不需要）
+# Main chat frontend (optional; not required for the configuration wizard)
 cd ../frontend
 pnpm install
 
-# 配置 UI 源码（改向导才需要，WSL 上建议用 npm）
+# Configuration UI source (only needed for wizard changes; npm is recommended on WSL)
 cd ../backend/web_ui_src
 npm install
 ```
 
-更详细的环境配置、模型和数据导入流程见
-[《快速开始》](docs/wiki/快速开始.md)、
-[《配置参考》](docs/wiki/配置参考.md)、
-[《后端环境变量》](docs/wiki/后端环境变量.md)、
-以及[《导入聊天记录》](docs/wiki/导入聊天记录.md)，本文不重复。
+For environment setup, models, and data imports, see [Quick start](docs/en/quickstart.md), [Configuration](docs/en/configuration.md), [Environment variables](docs/en/environment.md), and [Importing chats](docs/en/importing.md).
 
-## 项目结构（贡献者视角）
+## Project structure for contributors
 
-```
+```text
 Afterglow/
 ├── backend/
 │   ├── xuwen/
-│   │   ├── core/        # 领域模型 / 错误 / 时间工具
-│   │   ├── ingestion/   # 解析 / 清洗 / 切分 / 向量化 / plugin 注册
-│   │   ├── memory/      # LanceDB / 检索融合 / 回写
-│   │   ├── persona/     # 离线画像 / Prompt 模板（Jinja2）
-│   │   ├── companion/   # 生活时间线 / 关系记忆 / 互动决策
-│   │   ├── chat_api/    # FastAPI（OpenAI 兼容）
-│   │   └── web_ui/      # 配置向导子应用 + 构建产物
-│   ├── web_ui_src/      # 配置向导前端源码（构建到 ../xuwen/web_ui/static/）
-│   └── scripts/         # 离线脚本（import / analyze_persona / eval_retrieval）
-├── frontend/            # Vue 3 时光信笺主聊天 UI（测试调试用）
-├── docs/                # 中英文文档源，VitePress / GitHub Pages 与 Wiki 兼容镜像
-└── .github/             # Issue 模板 / FUNDING
+│   │   ├── core/        # Domain models, errors, and time utilities
+│   │   ├── ingestion/   # Parsing, cleaning, chunking, embeddings, plugin registry
+│   │   ├── memory/      # LanceDB, retrieval fusion, and writeback
+│   │   ├── persona/     # Offline profiles and Jinja2 prompt templates
+│   │   ├── companion/   # Life timeline, relationship memory, interaction decisions
+│   │   ├── chat_api/    # OpenAI-compatible FastAPI application
+│   │   └── web_ui/      # Configuration wizard app and built assets
+│   ├── web_ui_src/      # Wizard frontend; builds to ../xuwen/web_ui/static/
+│   └── scripts/         # Offline scripts: import, analyze_persona, eval_retrieval
+├── frontend/            # Vue 3 main chat UI (时光信笺), for testing and debugging
+├── docs/                # Chinese/English sources for VitePress, GitHub Pages, and Wiki
+└── .github/             # Issue templates and funding configuration
 ```
 
-## 工作流
+## Workflow
 
-1. **Fork + 克隆**，给你的分支起个含义清楚的名字：
-   - `feat/import-discord` / `fix/embedding-dim-mismatch` / `docs/api-cleanup`
-   - 不接受 `patch-1` / `update` / `temp` 这种名字
-2. **每个 PR 聚焦一件事**。"顺手改了下别的 bug"请拆成两个 PR。
-3. **提交前自检**（见下方"PR 提交清单"）。
-4. **PR 标题用中文也行，但要点明范围**：
-   - 好：`feat(ingestion): 支持 Discord 导出格式`
-   - 不好：`update`、`修了几个 bug`
-5. **目标分支 `dev`，不是 `main`**。
+1. **Fork and clone**, then choose a descriptive branch name, such as `feat/import-discord`, `fix/embedding-dim-mismatch`, or `docs/api-cleanup`. Names such as `patch-1`, `update`, and `temp` are not accepted.
+2. **Keep each PR focused on one thing.** Submit unrelated bug fixes in separate PRs.
+3. **Run the checks before submitting** using the checklist below.
+4. **Make the scope clear in the PR title.** Chinese and English are both welcome. `feat(ingestion): support Discord exports` is useful; `update` or `fixed some bugs` is not.
+5. **Target `dev`.**
 
-## 代码规范
+## Code conventions
 
-### Python（后端）
+### Python (backend)
 
-- Python 3.12+
-- 用 `ruff` 做 lint，配置在 `backend/pyproject.toml`
-- 用 `mypy` 做严格类型检查（`strict = true`）
-- 优先用 `from __future__ import annotations`
-- 类型注解必须写，特别是公共函数 / 模型 / 配置
+- Python 3.12+.
+- Use `ruff` for linting; configuration lives in `backend/pyproject.toml`.
+- Use `mypy` with strict type checking (`strict = true`).
+- Prefer `from __future__ import annotations`.
+- Add type annotations, especially for public functions, models, and configuration.
 
 ```bash
 cd backend
 uv run ruff check xuwen scripts
-uv run ruff format xuwen   # 可选，本项目不强制 format
+uv run ruff format xuwen   # Optional; formatting is not mandatory
 uv run mypy xuwen
 ```
 
-新加的 `FastAPI` 路由如果有 `Depends() / File()` 默认参数触发 B008，把对应文件名加进 `pyproject.toml` 的 `[tool.ruff.lint.per-file-ignores]`，**不要在代码里加 `# noqa`**。
+If a new FastAPI route triggers B008 for a `Depends()` or `File()` default argument, add that file to `[tool.ruff.lint.per-file-ignores]` in `pyproject.toml`. **Do not add `# noqa` in the code.**
 
-### TypeScript（前端 / 配置 UI）
+### TypeScript (frontend and configuration UI)
 
-- 主聊天前端在 `frontend/`，配置向导在 `backend/web_ui_src/`
-- 都用 `vue-tsc` 做类型检查
-- 没 ESLint，但 PR 里如果引入明显的类型逃逸（`any` 满天飞、`as unknown as`）会被指出
+- The main chat frontend lives in `frontend/`; the configuration wizard lives in `backend/web_ui_src/`.
+- Both use `vue-tsc` for type checking.
+- There is no ESLint setup, but avoid obvious type escapes such as excessive `any` or `as unknown as` assertions.
 
 ```bash
 cd frontend && npx vue-tsc --noEmit
 cd backend/web_ui_src && npx vue-tsc --noEmit
 ```
 
-### 注释 / 文档语言
+### Comment and documentation language
 
-- **中文为主**。仓库本来就是中文项目，PR 里贴英文注释会显得突兀。
-- 不要写 trivial 注释（`# 这里加 1` 之类）。要写就写"为什么这样"。
-- 函数 docstring 解释**意图**，不解释**做了什么**（代码自己会说）。
+- **Chinese is the primary language for code comments.** The repository originated as a Chinese-language project, so English-only comments in a PR can feel inconsistent.
+- Avoid trivial comments such as `# add 1 here`. Explain why a decision was made.
+- Function docstrings should explain intent rather than restating what the code does.
 
-### 测试
+### Tests
 
-后端测试位于 `backend/tests/`：
+Backend tests live in `backend/tests/`:
 
-- `tests/unit/`：不依赖外部服务的单元测试
-- `tests/integration/`：使用临时目录和 mock 服务验证 API、导入及数据流程
-- `tests/fixtures/`：随仓库维护的小型合成夹具，不得放入真实聊天记录或凭据
+- `tests/unit/`: unit tests without external services.
+- `tests/integration/`: API, import, and data-flow tests using temporary directories and mocked services.
+- `tests/fixtures/`: small, synthetic fixtures maintained in the repository. Never include real chat records or credentials.
 
-提交新功能或 bug 修复时，必须添加能覆盖新行为或回归场景的测试。测试不能依赖贡献者本机的 `.env`、`.data/` 或真实外部 API。
+New features and bug fixes must include tests covering the new behavior or regression. Tests must not depend on a contributor's local `.env`, `.data/`, or live external APIs.
 
 ```bash
 cd backend
 
-# 开发时按范围快速运行
+# Run focused tests during development
 uv run pytest tests/unit -q
 uv run pytest tests/integration -q
 
-# 提交前运行完整测试；CI 执行同一条命令
+# Run the full suite before submitting; CI uses the same command
 uv run pytest tests -q
 ```
 
-Pull Request 会触发 `.github/workflows/contributor-checks.yml`，自动执行后端 lint 和完整测试，并构建主聊天前端与配置向导。CI 不能替代本地检查；请在 PR 的“测试”一节列出实际执行的命令和结果。纯文档改动可以注明不适用。
+Pull requests trigger `.github/workflows/contributor-checks.yml`, which runs backend lint and the full test suite and builds the main chat frontend and configuration wizard. CI does not replace local checks. List the commands you actually ran and their results in the PR's Testing section. Documentation-only changes may state that tests are not applicable.
 
+## Project-specific conventions
 
-## 项目特殊约定（容易踩的坑）
+### 1. Never commit `.env` files
 
-### 1. `.env` 永远不能提交
+- `.gitignore` already excludes `backend/.env` and `backend/.data/`.
+- PRs containing `.env` changes will be rejected immediately.
+- Do not commit `.env` files generated by the configuration wizard.
+- Do not commit the `backend/.env-backups/` directory.
 
-- 仓库 `.gitignore` 已经忽略 `backend/.env` 和 `backend/.data/`
-- PR 里看到 `.env` 改动会立刻被拒
-- 配置向导生成的 `.env` 也别 commit
-- 备份目录 `backend/.env-backups/` 同样别 commit
+### 2. Commit configuration wizard build output with its source
 
-### 2. 配置向导构建产物必须随源码一起提交
-
-`backend/xuwen/web_ui/static/` 是 `backend/web_ui_src/` 的构建产物。**两边要同步提交**，否则普通用户拉下来跑后端会看到旧 UI 但 API 已经升级，行为对不上。
+`backend/xuwen/web_ui/static/` is generated from `backend/web_ui_src/`. **Commit both together.** Otherwise users running the backend may receive an outdated UI that no longer matches the API.
 
 ```bash
 cd backend/web_ui_src
 npm install
-npm run build      # 生成 ../xuwen/web_ui/static/
+npm run build      # Generates ../xuwen/web_ui/static/
 cd ../..
 git add backend/web_ui_src/ backend/xuwen/web_ui/static/
 git commit -m "feat(config-ui): ..."
 ```
 
-CI 会重新构建配置向导，并检查 `backend/xuwen/web_ui/static/` 是否产生未提交差异；源码与构建产物不同步时检查会失败。Code review 时仍请确认两边的改动属于同一功能。
+CI rebuilds the wizard and checks for uncommitted differences in `backend/xuwen/web_ui/static/`. It fails if source and output are out of sync. Reviewers should also confirm that both sets of changes belong to the same feature.
 
-### 3. 不要把真实聊天文件提交到仓库
+### 3. Never commit real chat files
 
-`开发缓存/` 目录已经在 `.gitignore`，放你自己的导出 JSON 用。**不要**把它放到任何其它位置，更不要在 PR 描述里贴片段。
+The `开发缓存/` directory is ignored by Git and can hold your own exported JSON files. Do not put them elsewhere in the repository or paste excerpts into PR descriptions.
 
-### 4. CLI 行为不能被破坏
+### 4. Preserve CLI behavior
 
-后端有两条入口：
+The backend has two entry points:
 
-- 配置向导（`uvicorn ...` + 首次模式 + 浏览器 UI）
-- CLI（`uv run python -m xuwen.ingestion.cli import ...`）
+- Configuration wizard: `uvicorn ...`, first-run mode, and the browser UI.
+- CLI: `uv run python -m xuwen.ingestion.cli import ...`.
 
+### 5. Preserve privacy redaction boundaries
 
-### 5. 隐私数据脱敏不要回退
+The PII rules in `backend/xuwen/persona/redactor.py` deliberately redact phone numbers, email addresses, identity card numbers, bank card numbers, and IP addresses. QQ numbers, URLs, and domain names are intentionally retained. Open an issue before changing these boundaries because they directly affect which user data is sent to external APIs.
 
-`backend/xuwen/persona/redactor.py` 的 PII 规则有明确边界：手机号 / 邮箱 / 身份证 / 银行卡 / IP 一定脱敏，QQ 号 / URL / 域名按设计保留。如果要改这套边界，**先开 Issue 讨论**，因为它直接关系到用户数据被发到外部 API 的内容。
+## Commit messages
 
-## Commit message
+Conventional Commits are recommended but not required:
 
-不强制 Conventional Commits，但推荐：
+```text
+feat(ingestion): support Discord exports
 
-```
-feat(ingestion): 支持 Discord 导出格式
-
-- 新增 discord_export plugin，自动识别 webhook 导出 JSON
-- 复用 NormalizedMessage 接口，下游流水线无需改动
+- Add a discord_export plugin that detects webhook-exported JSON
+- Reuse NormalizedMessage without changing the downstream pipeline
 
 Closes #123
 ```
 
-- 前缀类型：`feat` / `fix` / `docs` / `refactor` / `test` / `chore` / `perf`
-- 范围（括号里）选填，常见值：`ingestion` / `memory` / `chat-api` / `config-ui` / `frontend` / `persona` / `companion` / `docs`
-- 标题不超过 70 字符，详情写在正文
-- 一个 commit 干一件事；不要"修复 A 顺便重构 B 又加了 C 的测试"
+- Types: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`, and `perf`.
+- The optional scope commonly uses `ingestion`, `memory`, `chat-api`, `config-ui`, `frontend`, `persona`, `companion`, or `docs`.
+- Keep the subject within 70 characters; put details in the body.
+- Keep each commit focused on one thing. Split unrelated fixes and refactors into separate commits.
 
-## PR 提交清单
+## PR checklist
 
-发 PR 前请逐项过一遍：
+Before submitting:
 
-- [ ] 目标分支是 `dev`
-- [ ] `uv run ruff check xuwen scripts` 干净
-- [ ] `uv run mypy xuwen` 干净（或只剩跟改动无关的旧告警）
-- [ ] `uv run pytest tests -q` 全部通过
-- [ ] 改了 `backend/web_ui_src/` 也 `npm run build` 并把 `static/` 一起提交
-- [ ] 改了 `frontend/` 跑过 `npx vue-tsc --noEmit`
-- [ ] 没有 `.env` / `.data/` / 真实聊天 JSON 跟着进 PR
-- [ ] 新功能 / bug fix 带了对应的测试
-- [ ] 新增长文档已分别放入 `docs/wiki/` 和 `docs/en/`，更新 `docs/pages.json` 与两份语言导航，文档检查和构建通过
-- [ ] 标题 + 描述讲清楚"做了什么"和"为什么"
-- [ ] 如果对应一个 Issue，PR 里写 `Closes #N`
+- [ ] The target branch is `dev`.
+- [ ] `uv run ruff check xuwen scripts` passes.
+- [ ] `uv run mypy xuwen` passes, or only existing warnings unrelated to the change remain.
+- [ ] `uv run pytest tests -q` passes.
+- [ ] Changes to `backend/web_ui_src/` include `npm run build` output in `static/`.
+- [ ] Changes to `frontend/` have been checked with `npx vue-tsc --noEmit`.
+- [ ] No `.env` files, `.data/` contents, or real chat JSON files are included.
+- [ ] New features and bug fixes include relevant tests.
+- [ ] New long-form documentation exists in both `docs/wiki/` and `docs/en/`; `docs/pages.json` and both locale navigation files are updated, and documentation checks and builds pass.
+- [ ] The title and description explain what changed and why.
+- [ ] The description includes `Closes #N` when the PR resolves an issue.
 
-## Code review 期望
+## Code review expectations
 
-- 维护者会在工作日内给反馈，**但请有耐心**（这是个个人维护的项目，不是大公司组件）
-- review 评论可能直接（不绕弯），不针对人；如果有争议欢迎讨论
-- 通过后维护者会 squash merge 进 `dev`
+- The maintainer will respond on working days. Please be patient: this is a personally maintained project.
+- Review comments may be direct and are about the code. Discussion is welcome when you disagree.
+- Approved PRs are squash-merged into `dev`.
 
-## 行为准则
+## Code of conduct
 
-- 对其他贡献者保持基本尊重
-- 不接受涉及人身攻击 / 性别 / 政治 / 民族 / 性取向的言论
-- 与项目无关的话题请去项目 QQ 群（`330316577`）
-- 严重违规会直接 ban，不会有第二次警告
+- Treat other contributors with basic respect.
+- Comments involving personal attacks, gender, politics, ethnicity, or sexual orientation are not accepted.
+- Take unrelated topics to the project's QQ group (`330316577`).
+- Serious violations result in an immediate ban without a second warning.
 
-## 致谢
+## Acknowledgements
 
-每个被合并的 PR，作者都会出现在 git log 和 GitHub 的 Contributors 列表里。如果你的 PR 修了重要 bug 或加了关键功能，欢迎在 PR 描述里提一句"麻烦在 release notes 里挂个名"，发布时会注明。
+Every merged PR appears in the Git history and GitHub's contributor list. If your PR fixes an important bug or adds a major feature, feel free to request a mention in the release notes.
 
 ---
 
-最后 —— 这个项目本来就是为了"把曾经对你好的话续成往后的陪伴"做的。希望你的代码也能让这件事变得更好一点。
+Afterglow exists to carry the warmth of words once shared into companionship ahead. We hope your contribution helps make that possible.
 
-谢谢。
+Thank you.

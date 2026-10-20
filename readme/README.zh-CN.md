@@ -225,10 +225,10 @@ XUWEN_LANGUAGE=zh-CN uv run uvicorn xuwen.chat_api.app:create_app --factory --re
 ## 文档
 
 - **开始使用**：[快速开始](https://kldhsh123.github.io/Afterglow/zh/quickstart.html) · [配置参考](https://kldhsh123.github.io/Afterglow/zh/configuration.html) · [后端环境变量](https://kldhsh123.github.io/Afterglow/zh/environment.html) · [Docker](https://kldhsh123.github.io/Afterglow/zh/docker.html) · [故障排查](https://kldhsh123.github.io/Afterglow/zh/troubleshooting.html)
-- **数据导入**：[导入聊天记录](https://kldhsh123.github.io/Afterglow/zh/importing.html) · [Afterglow Chat v1](https://kldhsh123.github.io/Afterglow/zh/chat-format.html) · [人格模板](https://kldhsh123.github.io/Afterglow/zh/persona-templates.html)
-- **高级与实验功能**：[聊天记录分析、历史图片导入与主动消息](https://kldhsh123.github.io/Afterglow/zh/advanced.html)
+- **数据导入**：[聊天记录导出教程](https://kldhsh123.github.io/Afterglow/zh/exporting.html) · [导入聊天记录](https://kldhsh123.github.io/Afterglow/zh/importing.html) · [Afterglow Chat v1](https://kldhsh123.github.io/Afterglow/zh/chat-format.html) · [人格模板](https://kldhsh123.github.io/Afterglow/zh/persona-templates.html)
+- **高级使用**：[配置文件编辑器](https://kldhsh123.github.io/Afterglow/zh/config-editor.html) · [聊天记录分析、历史图片导入与主动消息](https://kldhsh123.github.io/Afterglow/zh/advanced.html)
 - **原理与参考**：[整体架构](https://kldhsh123.github.io/Afterglow/zh/architecture.html) · [后端 API](https://kldhsh123.github.io/Afterglow/zh/api.html) · [FAQ](https://kldhsh123.github.io/Afterglow/zh/faq.html) · [安全与隐私](https://kldhsh123.github.io/Afterglow/zh/privacy.html)
-- **开发贡献**：[开发文档](https://kldhsh123.github.io/Afterglow/zh/development.html) · [贡献指南](../CONTRIBUTING.md) · [文档维护](https://kldhsh123.github.io/Afterglow/zh/documentation.html)
+- **开发贡献**：[开发文档](https://kldhsh123.github.io/Afterglow/zh/development.html) · [贡献指南](CONTRIBUTING.zh-CN.md) · [文档维护](https://kldhsh123.github.io/Afterglow/zh/documentation.html)
 
 中文文档源位于 `docs/wiki/`，英文源位于 `docs/en/`；[文档网站](https://kldhsh123.github.io/Afterglow) 由 GitHub Actions 构建发布，旧 Wiki 保留兼容镜像。
 
@@ -236,7 +236,7 @@ XUWEN_LANGUAGE=zh-CN uv run uvicorn xuwen.chat_api.app:create_app --factory --re
 
 [Discord](https://discord.gg/CKrvgCyK4y) · [Discussions](https://github.com/kldhsh123/Afterglow/discussions) · [问题反馈](https://github.com/kldhsh123/Afterglow/issues) · [QQ 群 `330316577`](https://qm.qq.com/cgi-bin/qm/qr?k=7rvmrvR100Is9aAp0ZsjmfiG7e0Cv6ZB&jump_from=webapi&authKey=mEN/epjvPHcT+Sb61/XO0Mi5egs2xJBhZm9Wm5MmgEWrpNa0ZOY3fzUf+pvqfijD) · [致谢](https://kldhsh123.github.io/Afterglow/zh/acknowledgements.html)
 
-Issue 和 PR 都欢迎提交。开始修改前请先阅读 [CONTRIBUTING.md](../CONTRIBUTING.md)。
+Issue 和 PR 都欢迎提交。开始修改前请先阅读[贡献指南](CONTRIBUTING.zh-CN.md)。
 
 ## License
 
@@ -249,5 +249,3 @@ Issue 和 PR 都欢迎提交。开始修改前请先阅读 [CONTRIBUTING.md](../
 <sub>如果 Afterglow 帮你留住了一些温度，欢迎点一颗 Star。</sub>
 
 </div>
-
-[配置文件编辑器](https://kldhsh123.github.io/Afterglow/zh/config-editor.html) · [聊天记录导出教程](https://kldhsh123.github.io/Afterglow/zh/exporting.html)

@@ -53,6 +53,20 @@ class DocumentationGenerationTests(unittest.TestCase):
             self.assertIn("{#section-1}", guide)
             self.assertIn("[example](missing.md)", guide)
 
+    def test_homepage_hero_preserves_sections_and_stays_out_of_wiki(self):
+        self.generate()
+        for language in ("zh", "en"):
+            home = (self.root / f"site/{language}/index.md").read_text()
+            self.assertIn("layout: page", home)
+            self.assertIn("sidebar: false", home)
+            self.assertIn("<DocsHome />", home)
+            self.assertIn("## Home {#section-0}", home)
+            self.assertIn('<div class="vp-doc docs-home-index">', home)
+            guide = (self.root / f"site/{language}/guide.md").read_text()
+            self.assertNotIn("<DocsHome />", guide)
+        self.generate("wiki")
+        self.assertNotIn("<DocsHome />", (self.root / "wiki/Home.md").read_text())
+
     def test_wiki_preserves_chinese_names_and_adds_english_mirror(self):
         self.generate("wiki")
         self.assertTrue((self.root / "wiki/指南.md").is_file())

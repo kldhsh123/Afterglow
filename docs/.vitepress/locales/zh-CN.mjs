@@ -1,4 +1,50 @@
 export default {
+  website: "官网",
+  home: {
+    "eyebrow": "Afterglow 使用文档",
+    "title": "把曾经对你好的话，",
+    "accent": "续成往后的陪伴。",
+    "description": "从你珍惜的聊天记录出发，搭建一个本地运行的 AI 朋友。从第一次导入，到再次听见熟悉的语气，我们陪你一步步开始。",
+    "primary": "开始使用",
+    "secondary": "了解 Afterglow 官网",
+    "tags": [
+      "本地运行",
+      "从真实聊天中构建记忆",
+      "OpenAI 兼容 API"
+    ],
+    "letterLabel": "给熟悉的话语，一个归处",
+    "letterTitle": "有些话，值得好好记住。",
+    "letterAccent": "有些温柔，可以陪你更久。",
+    "letterNote": "把聊天记录整理成记忆，让熟悉的语气，慢慢回到日常。",
+    "letterSteps": [
+      "聊天记录",
+      "关系记忆",
+      "日常陪伴"
+    ],
+    "startTitle": "从这里，开始下一次对话。",
+    "startDescription": "第一次部署、带来自己的聊天记录，或接入常用客户端，选择你现在需要的一步。",
+    "guideTitle": "先把这份陪伴安顿好",
+    "guideDescription": "启动后端，使用配置 UI 和初始化向导，完成你的第一次对话。",
+    "guideAction": "阅读快速开始",
+    "routes": [
+      {
+        "slug": "importing",
+        "title": "带来你们的聊天记录",
+        "description": "了解支持的格式、导入方式和记忆准备。"
+      },
+      {
+        "slug": "quickstart",
+        "hash": "section-2",
+        "title": "使用配置 UI 完成设置",
+        "description": "跟随向导测试模型、导入聊天记录并保存配置。"
+      },
+      {
+        "slug": "api",
+        "title": "接入你喜欢的客户端",
+        "description": "查阅 Chat Completions 与 Responses API。"
+      }
+    ]
+  },
   skipToContent: "跳转到正文",
   diagramError: "图表加载失败，可通过下方的编辑链接查看源代码。",
   diagramExpand: '原尺寸查看', diagramFit: '适应宽度', diagramRegion: '图表，可横向滚动查看细节',
@@ -41,7 +87,7 @@ export default {
 },
   label: '简体中文', lang: 'zh-CN', title: 'Afterglow 文档',
   description: 'Afterglow 部署、配置、导入与开发文档',
-  groups: {start: '开始使用', data: '数据与导入', reference: '原理与参考', development: '开发与维护'},
+  groups: {start: '开始使用', data: '数据与导入', advanced: '高级使用', reference: '原理与参考', development: '开发与维护'},
   pages: {
     'config-editor': '配置文件编辑器', exporting: '导出聊天记录',
     index: '文档首页', quickstart: '快速开始', configuration: '配置参考', environment: '后端环境变量',

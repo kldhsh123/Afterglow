@@ -12,6 +12,7 @@ function theme(locale) {
   const text = locales[locale]
   return {
     nav: [
+      {text: text.website, link: 'https://afterglow.kldhsh.top/'},
       ...['quickstart', 'configuration', 'api'].map(slug => ({text: text.pages[slug], link: `/${locale}/${slug}`})),
       {text: text.qqGroup, link: qqGroupUrl},
     ],
@@ -43,6 +44,9 @@ export default withMermaid(defineConfig({
   description: en.description,
   base,
   head: [
+    ['link', {rel: 'preconnect', href: 'https://fonts.googleapis.com'}],
+    ['link', {rel: 'preconnect', href: 'https://fonts.gstatic.com', crossorigin: ''}],
+    ['link', {rel: 'stylesheet', href: 'https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;500;600;700&display=swap'}],
     ['link', {rel:'icon', type:'image/svg+xml', href:`${base}brand/favicon.svg`}],
     ['link', {rel:'alternate icon', href:`${base}brand/favicon.ico`}],
   ],

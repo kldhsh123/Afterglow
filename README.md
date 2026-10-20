@@ -227,8 +227,8 @@ Other sources can convert to [Afterglow Chat v1](https://kldhsh123.github.io/Aft
 ## Documentation
 
 - **Getting started:** [Quick start](https://kldhsh123.github.io/Afterglow/en/quickstart.html) · [Configuration](https://kldhsh123.github.io/Afterglow/en/configuration.html) · [Environment](https://kldhsh123.github.io/Afterglow/en/environment.html) · [Docker](https://kldhsh123.github.io/Afterglow/en/docker.html) · [Troubleshooting](https://kldhsh123.github.io/Afterglow/en/troubleshooting.html)
-- **Data:** [Imports](https://kldhsh123.github.io/Afterglow/en/importing.html) · [Afterglow Chat v1](https://kldhsh123.github.io/Afterglow/en/chat-format.html) · [Persona templates](https://kldhsh123.github.io/Afterglow/en/persona-templates.html)
-- **Advanced:** [Analysis, historical images and proactive messages](https://kldhsh123.github.io/Afterglow/en/advanced.html)
+- **Data:** [Export tutorials](https://kldhsh123.github.io/Afterglow/en/exporting.html) · [Imports](https://kldhsh123.github.io/Afterglow/en/importing.html) · [Afterglow Chat v1](https://kldhsh123.github.io/Afterglow/en/chat-format.html) · [Persona templates](https://kldhsh123.github.io/Afterglow/en/persona-templates.html)
+- **Advanced:** [Configuration file editor](https://kldhsh123.github.io/Afterglow/en/config-editor.html) · [Analysis, historical images and proactive messages](https://kldhsh123.github.io/Afterglow/en/advanced.html)
 - **Reference:** [Architecture](https://kldhsh123.github.io/Afterglow/en/architecture.html) · [API](https://kldhsh123.github.io/Afterglow/en/api.html) · [FAQ](https://kldhsh123.github.io/Afterglow/en/faq.html) · [Privacy](https://kldhsh123.github.io/Afterglow/en/privacy.html)
 - **Development:** [Development guide](https://kldhsh123.github.io/Afterglow/en/development.html) · [Contributing](CONTRIBUTING.md) · [Documentation maintenance](https://kldhsh123.github.io/Afterglow/en/documentation.html)
 
@@ -249,5 +249,3 @@ Issues and pull requests are welcome. Read the [contribution guide](CONTRIBUTING
 <div align="center">
 <sub>If Afterglow has helped you preserve some warmth, consider leaving a Star.</sub>
 </div>
-
-[Configuration file editor](https://kldhsh123.github.io/Afterglow/en/config-editor.html) · [Export tutorials](https://kldhsh123.github.io/Afterglow/en/exporting.html)

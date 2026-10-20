@@ -147,10 +147,23 @@ def generate(target: str, output: Path, site_url: str, wiki_url: str) -> None:
                 text = text.replace("```env\n", "```dotenv\n")
                 if page["slug"] == "config-editor":
                     text += "\n<ClientOnly><ConfigEditor /></ClientOnly>\n"
-                text = (
-                    f"---\nsourcePath: {path.relative_to(DOCS).as_posix()}\n---\n\n"
-                    + text
-                )
+                frontmatter = f"sourcePath: {path.relative_to(DOCS).as_posix()}\n"
+                if page["slug"] == "index":
+                    frontmatter += (
+                        "layout: page\npageClass: afterglow-home\nsidebar: false\n"
+                    )
+                    text = re.sub(
+                        r"^# (.+) (\{#section-0\})$",
+                        r"## \1 \2",
+                        text,
+                        flags=re.MULTILINE,
+                    )
+                    text = (
+                        '<DocsHome />\n\n<div class="vp-doc docs-home-index">\n\n'
+                        + text
+                        + "\n\n</div>\n"
+                    )
+                text = "---\n" + frontmatter + "---\n\n" + text
                 destination = output / language / f"{page['slug']}.md"
             else:
                 other = "en" if language == "zh" else "zh"

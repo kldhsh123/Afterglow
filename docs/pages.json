@@ -20,11 +20,6 @@
     "group": "start"
   },
   {
-    "slug": "config-editor",
-    "zh": "配置文件编辑器",
-    "group": "start"
-  },
-  {
     "slug": "docker",
     "zh": "Docker部署与运维",
     "group": "start"
@@ -65,9 +60,14 @@
     "group": "data"
   },
   {
+    "slug": "config-editor",
+    "zh": "配置文件编辑器",
+    "group": "advanced"
+  },
+  {
     "slug": "advanced",
     "zh": "高级与实验功能",
-    "group": "reference"
+    "group": "advanced"
   },
   {
     "slug": "architecture",

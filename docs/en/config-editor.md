@@ -1,5 +1,7 @@
 # Configuration file editor
 
+This tool is for advanced users who need to manage `.env` files directly. For initial setup and everyday configuration, use the backend [configuration UI and setup wizard](quickstart.md).
+
 Generate or edit a backend `.env` file in your browser. The interactive editor is available on the [documentation website](https://kldhsh123.github.io/Afterglow/en/config-editor.html). It does not require a running backend or a setup token.
 
 ## Using the editor

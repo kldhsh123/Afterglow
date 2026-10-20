@@ -8,7 +8,6 @@ Afterglow is a locally hosted AI companion. It builds retrievable memories and a
 
 - [Quick start](quickstart.md): setup wizard, running from source, frontend and client integration
 - [Configuration](configuration.md): required settings, model roles, authentication and offline use
-- [Configuration editor](config-editor.md): generate a .env file locally in your browser
 - [Environment variables](environment.md): `.env` fields, defaults, dependencies and security constraints
 - [Docker deployment](docker.md): containers, mounts and routine operations
 - [FAQ](faq.md)
@@ -22,9 +21,13 @@ Afterglow is a locally hosted AI companion. It builds retrievable memories and a
 - [Afterglow Chat v1 format](chat-format.md)
 - [Persona templates](persona-templates.md)
 
+## Advanced use
+
+- [Configuration editor](config-editor.md): for advanced users who need to generate or edit a `.env` file offline
+- [Advanced and experimental features](advanced.md): chat analysis, historical images and proactive messages
+
 ## Reference
 
-- [Advanced and experimental features](advanced.md): chat analysis, historical images and proactive messages
 - [Architecture](architecture.md)
 - [Backend API](api.md)
 - [Development](development.md)
