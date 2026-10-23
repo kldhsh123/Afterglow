@@ -11,6 +11,8 @@
 
 **Let the warmth of past conversations continue into companionship.**
 
+通过真实聊天记录构建可检索的关系记忆、角色设定与表达风格。结合 RAG、角色上下文和兼容 OpenAI 的 API，让 AI 在新的对话中延续熟悉的交流方式。
+
 Build retrievable relationship memories, persona and expressive style from real chat history. RAG, persona context and an OpenAI-compatible API bring familiar conversational patterns into new exchanges.
 
 <p>
