@@ -238,6 +238,18 @@ XUWEN_LANGUAGE=zh-CN uv run uvicorn xuwen.chat_api.app:create_app --factory --re
 
 Issue 和 PR 都欢迎提交。开始修改前请先阅读[贡献指南](CONTRIBUTING.zh-CN.md)。
 
+## 致谢
+
+感谢 [LINUX DO](https://linux.do) 社区对项目实现提出的建议。Afterglow 的许多实现细节来自这些反馈的反复打磨。
+
+特别感谢 [咕咚](https://github.com/GuDong2003)。他从项目初版开始持续使用 Afterglow，并不断反馈问题和优化建议，推动了多个版本的改进。
+
+感谢所有提交 Issue、PR、使用体验和脱敏复现材料的用户与贡献者。
+
+Issue 模板改编自 [AstrBot](https://github.com/AstrBotDevs/AstrBot/tree/master/.github/ISSUE_TEMPLATE)，已按 Afterglow 的问题反馈流程调整。AstrBot 与 Afterglow 均采用 [GNU AGPL v3.0](https://github.com/kldhsh123/Afterglow/blob/main/LICENSE)。
+
+也感谢 [二次元论坛](https://www.ecylt.top/) 与二次元 API 中转站曾经为项目提供模型服务支持。
+
 ## License
 
 [AGPL-3.0-or-later](../LICENSE)
