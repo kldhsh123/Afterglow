@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import secrets
 import time
@@ -18,6 +19,11 @@ from pydantic import BaseModel, SecretStr, ValidationError
 
 from xuwen.config import ChatApiProtocol, Settings
 from xuwen.error_i18n import error_text
+from xuwen.ingestion.ai_converter import (
+    conversion_mapping_path,
+    convert_unknown_file,
+    file_has_plugin,
+)
 from xuwen.web_ui.connectivity import (
     TestResult,
     test_embedding,
@@ -371,7 +377,7 @@ async def inspect_upload(
 ) -> dict[str, Any]:
     """单文件嗅探：识别 JSON / JSONL 格式和双方候选身份，不入库不保留。
 
-    用于配置向导第 1 步"从聊天文件识别"按钮。返回结构：
+    用于配置向导第 2 步"从聊天文件识别"按钮。返回结构：
         {
           "format": "<plugin-defined>" | "unknown",
           "total_messages": int,
@@ -431,7 +437,7 @@ async def upload_files(
     """上传一个或多个聊天记录 JSON / JSONL。仅保存到磁盘，不触发导入。
 
     每个文件同时做一次顶部嗅探，返回：消息数、格式识别结果、双方身份候选。
-    这样前端在向导第 1 步选文件时一次请求就能拿到全部信息（持久上传 + 身份识别）。
+    这样前端在向导第 2 步选文件时一次请求就能拿到全部信息（持久上传 + 身份识别）。
     """
     upload_dir = Path(settings.config_ui_uploads_dir)
     upload_dir.mkdir(parents=True, exist_ok=True)
@@ -502,6 +508,55 @@ class StartImportPayload(BaseModel):
     file_names: list[str]
     # 兼容旧版前端；画像现在始终合并 files 中的全部文件。
     persona_source: str | None = None
+
+
+class ConvertImportPayload(BaseModel):
+    path: str
+
+
+@router.post("/import/convert")
+async def convert_import_file(
+    payload: ConvertImportPayload,
+    settings: Settings = Depends(_settings_dep),
+) -> dict[str, Any]:
+    """分析一个已上传的未知格式文件，仅生成转换文件，不启动导入。"""
+    upload_dir = Path(settings.config_ui_uploads_dir).resolve()
+    source = Path(payload.path).resolve()
+    try:
+        source.relative_to(upload_dir)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=error_text(
+                "Invalid path: {p0}. Only files inside uploads are allowed", p0=payload.path
+            ),
+        ) from None
+    if not source.exists() or not source.is_file():
+        raise HTTPException(status_code=404, detail=error_text("File not found: {p0}", p0=payload.path))
+    if file_has_plugin(source):
+        raise HTTPException(status_code=400, detail=error_text("This chat file already has a matching import plugin"))
+    try:
+        converted = await convert_unknown_file(source, settings)
+        inspection = inspect_chat_file(converted)
+        metadata = json.loads(conversion_mapping_path(source).read_text(encoding="utf-8"))
+        if inspection.error or inspection.format == "unknown" or not inspection.total_messages:
+            raise ValueError(inspection.error or error_text("The conversion mapping did not select a valid message array"))
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {
+        "name": source.name,
+        "saved_as": str(converted),
+        "size": converted.stat().st_size,
+        "format": inspection.format,
+        "format_label": inspection.format_label,
+        "total_messages": inspection.total_messages,
+        "conversion_stats": metadata.get("statistics"),
+        "candidates": [
+            {"name": c.name, "uid": c.uid, "role_hint": c.role_hint}
+            for c in inspection.candidates
+        ],
+        "error": inspection.error,
+    }
 
 
 @router.post("/import/start")

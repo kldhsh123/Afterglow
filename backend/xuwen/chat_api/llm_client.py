@@ -25,7 +25,7 @@ from tenacity import (
     wait_exponential,
 )
 
-from xuwen.config import ChatApiProtocol, Settings
+from xuwen.config import ChatApiProtocol, ReasoningEffort, Settings
 from xuwen.core.errors import LLMError
 from xuwen.core.metrics import MetricsRecorder
 from xuwen.error_i18n import error_text
@@ -50,6 +50,9 @@ class GenerationParams:
     max_tokens: int | None = None
     presence_penalty: float | None = None
     frequency_penalty: float | None = None
+    json_object: bool = False
+    reasoning_effort: ReasoningEffort | None = None
+    disable_thinking: bool = False
 
 
 class LLMClient:
@@ -214,13 +217,23 @@ class LLMClient:
             payload["messages"] = messages
         if params is None:
             params = GenerationParams()
-        if self._include_reasoning_effort and self.settings.llm_reasoning_effort != "null":
+        reasoning_effort = params.reasoning_effort
+        if reasoning_effort is None and self._include_reasoning_effort:
+            reasoning_effort = self.settings.llm_reasoning_effort
+        if reasoning_effort is not None and reasoning_effort != "null":
             if self._api_protocol == "responses":
                 payload["reasoning"] = {
-                    "effort": self.settings.llm_reasoning_effort,
+                    "effort": reasoning_effort,
                 }
             else:
-                payload["reasoning_effort"] = self.settings.llm_reasoning_effort
+                payload["reasoning_effort"] = reasoning_effort
+        if params.disable_thinking and self._api_protocol == "chat_completions":
+            payload["thinking"] = {"type": "disabled"}
+        if params.json_object:
+            if self._api_protocol == "responses":
+                payload["text"] = {"format": {"type": "json_object"}}
+            else:
+                payload["response_format"] = {"type": "json_object"}
         if params.temperature is not None:
             payload["temperature"] = params.temperature
         if params.top_p is not None:
@@ -461,8 +474,37 @@ class LLMClient:
                     if self._api_protocol == "responses"
                     else error_text("The LLM response is missing choices[0].message.content")
                 ),
-                detail={"request_id": request_id},
+                detail={"request_id": request_id, "reason": "invalid_response"},
             ) from e
+        # 结构化调用必须有完整的最终正文，不能把思考内容或截断的 JSON 当作成功。
+        structured = "response_format" in payload or "format" in payload.get("text", {})
+        if structured:
+            choices = data.get("choices") or []
+            finish_reason = choices[0].get("finish_reason") if choices and isinstance(choices[0], dict) else None
+            reason = ""
+            if finish_reason == "length" or data.get("status") == "incomplete":
+                reason = "output_incomplete"
+                message = error_text("The model output limit was reached before the JSON answer was complete")
+            elif not text.strip():
+                reason = "output_empty"
+                message = error_text("The model returned no final JSON answer; reasoning may have consumed the output budget")
+            if reason:
+                _record_model_call(
+                    metrics,
+                    trace_id=trace_id,
+                    stage=stage,
+                    attempt=attempt_number,
+                    payload=payload,
+                    url=self._url,
+                    latency_ms=(time.perf_counter() - start) * 1000,
+                    status="error",
+                    status_code=resp.status_code,
+                    upstream_request_id=request_id or "",
+                    request=request_summary,
+                    response=_json_response_summary(data),
+                    error=reason,
+                )
+                raise LLMError(message, detail={"request_id": request_id, "reason": reason})
         _record_model_call(
             metrics,
             trace_id=trace_id,
@@ -751,7 +793,18 @@ def _extract_content_text(
 ) -> str:
     if protocol == "chat_completions":
         content = data["choices"][0]["message"]["content"]
-        return str(content or "")
+        if content is None:
+            return ""
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return "".join(
+                part["text"] for part in content
+                if isinstance(part, dict)
+                and part.get("type") in {"text", "output_text"}
+                and isinstance(part.get("text"), str)
+            )
+        raise ValueError("Invalid assistant content")
 
     output_text = data.get("output_text")
     if isinstance(output_text, str) and output_text:

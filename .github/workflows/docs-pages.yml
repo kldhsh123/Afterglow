@@ -14,20 +14,6 @@ on:
       - '.github/scripts/prepare_docs.py'
       - '.github/scripts/prepare_wiki.py'
       - '.github/workflows/docs-pages.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'docs/**'
-      - 'assets/brand/**'
-      - 'backend/xuwen/config.py'
-      - 'backend/.env.example*'
-      - '.github/scripts/prepare_env_editor.py'
-      - '.github/scripts/test_prepare_docs.py'
-      - 'README*.md'
-      - 'readme/**'
-      - '.github/scripts/prepare_docs.py'
-      - '.github/scripts/prepare_wiki.py'
-      - '.github/workflows/docs-pages.yml'
   release:
     types: [published]
   workflow_dispatch:
@@ -83,12 +69,12 @@ jobs:
       - run: npm run check:dist
         working-directory: docs
       - uses: actions/upload-pages-artifact@v5
-        if: github.event_name != 'pull_request'
+        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
         with:
           path: docs/.vitepress/dist
 
   deploy:
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     needs: build
     runs-on: ubuntu-latest
     permissions:

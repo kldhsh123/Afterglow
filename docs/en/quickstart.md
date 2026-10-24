@@ -26,14 +26,17 @@ XUWEN_LANGUAGE=en uv run uvicorn xuwen.chat_api.app:create_app --factory --reloa
 
 When required settings are missing, the console prints a setup URL and a session token. Open `http://127.0.0.1:8000/config/`, enter that token and complete the wizard:
 
-1. Identify both people from one or more chat files.
-2. Select the relationship, persona template and backend language.
-3. Configure and test the main chat model.
-4. Configure and test embeddings; optionally enable labeling.
-5. Select optional life timeline, vision, web access and response policy features.
-6. Configure Query Rewrite and a cross-encoder reranker.
-7. Import chats and generate persona, style and circadian profiles.
-8. Set the backend access password, `XUWEN_API_KEY`.
+1. Configure and test the main chat model.
+2. Upload, detect or convert chat files. If no import plugin matches, click “Try analyzing the format with AI” to use the model from step 1. This step does not start the actual import.
+3. Confirm both identities by assigning candidate accounts to “self” and “friend”.
+4. Select the relationship, persona template and backend language.
+5. Configure and test embeddings; optionally enable labeling.
+6. Select optional life timeline, vision, web access and response policy features.
+7. Configure Query Rewrite and a cross-encoder reranker.
+8. Review files and conversion statistics, then start importing chats and generating persona, style and circadian profiles.
+9. Set the backend access password, `XUWEN_API_KEY`.
+
+The footer's “Save configuration” button saves your current settings at any time. Model settings are saved before AI format analysis. Chat samples are sent only when you explicitly click the analysis button, which may incur model charges. See [Importing chats](importing.md#optional-unknown-format-analysis) for sampling and conversion details.
 
 The wizard writes `backend/.env` and backs up previous versions in `.env-backups/`. Stop and restart the backend after setup. The automatically enabled wizard then closes unless explicitly enabled.
 
@@ -74,7 +77,7 @@ cd backend
 uv run python -m xuwen.web_ui --language en
 ```
 
-Open `http://127.0.0.1:8765/config/` and use the token printed by that process.
+Open `http://127.0.0.1:8765/config/` and use the token printed by that process. Click “Save configuration” in the footer to save changes without completing the entire wizard.
 
 ## Manual configuration
 

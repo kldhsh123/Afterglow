@@ -82,7 +82,8 @@ def _build_parser(language: str = DEFAULT_LANGUAGE) -> argparse.ArgumentParser:
         help=text("import.paths"),
     )
     p_import.add_argument("--env-file", type=Path, default=None, help=text("import.env"))
-    p_import.add_argument(
+    import_format = p_import.add_mutually_exclusive_group()
+    import_format.add_argument(
         "--plugin",
         default=None,
         help=text("import.plugin"),
@@ -92,6 +93,12 @@ def _build_parser(language: str = DEFAULT_LANGUAGE) -> argparse.ArgumentParser:
         choices=("raw", "normalized"),
         default="raw",
         help=text("import.emoji"),
+    )
+    import_format.add_argument(
+        "--ai-convert-unknown",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=text("import.ai_convert_unknown"),
     )
     p_import.add_argument(
         "--rebuild-tables",
@@ -344,6 +351,24 @@ async def _run_import(args: argparse.Namespace) -> int:
     else:
         console.print(f"[bold]{_t(args, 'import.start', path=paths[0])}[/]")
     console.print(f"[dim]{_t(args, 'import.emoji_mode', mode=args.json_emoji_mode)}[/]")
+
+    if args.ai_convert_unknown:
+        from xuwen.ingestion.ai_converter import convert_unknown_file, file_has_plugin
+
+        converted_paths: list[Path] = []
+        for path in paths:
+            if file_has_plugin(path):
+                converted_paths.append(path)
+                continue
+            console.print(f"[dim]·[/] {_t(args, 'import.ai_convert_start', path=path)}")
+            converted_paths.append(
+                await convert_unknown_file(
+                    path,
+                    settings,
+                    status_cb=lambda message: console.print(f"[dim]·[/] {message}"),
+                )
+            )
+        paths = converted_paths
 
     # 打标阶段进度回调：按 batch 打印「已打标 done/total」
     # 只有 labeling_enabled=true 时才会真正触发（否则 importer 内部跳过）

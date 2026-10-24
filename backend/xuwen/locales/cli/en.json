@@ -7,6 +7,8 @@
   "import.env": "Optional .env file path",
   "import.plugin": "Force a parser plugin; by default the format is detected automatically",
   "import.emoji": "JSON emoji placeholder mode: raw or normalized",
+  "import.ai_convert_unknown": "Opt in to unknown-format analysis: send the first 20 lines and up to 300 random lines/records to the main model for a local conversion rule (may incur charges)",
+  "import.ai_convert_start": "No plugin matched {path}; asking the main model for an Afterglow conversion mapping",
   "import.rebuild_help": "Rebuild selected tables before import: friend,window,pair,all",
   "images.help": "Import historical images and index visual descriptions",
   "images.path": "Export directory containing chat files and image resources",

@@ -136,6 +136,13 @@ export interface UploadedFile {
   total_messages?: number
   candidates?: IdentityCandidate[]
   error?: string
+  conversion_stats?: {
+    source_records: number
+    converted_messages: number
+    skipped_records: number
+    unmatched_lines: number
+    source_warning?: string
+  }
 }
 
 export interface IdentityCandidate {
@@ -213,6 +220,12 @@ export const api = {
     if (!resp.ok) throw new Error(body?.error?.message || body?.detail || `HTTP ${resp.status}`)
     return body
   },
+
+  convertUnknownFile: (path: string) =>
+    jsonRequest<UploadedFile>('/import/convert', {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    }),
 
   inspectFile: async (file: File): Promise<InspectResult> => {
     const fd = new FormData()

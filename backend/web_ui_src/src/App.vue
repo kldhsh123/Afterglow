@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // Afterglow 配置向导（后端自带，不依赖 frontend 项目）
-// 向导步骤：访问令牌 → 身份 → 关系 → 聊天 AI → 向量服务（含打标推荐）→ 导入聊天记录 → 设置密码
+// 向导步骤：访问令牌 → 聊天 AI → 文件准备 → 身份 → 关系 → 向量服务 → 可选功能 → 检索增强 → 实际导入 → 设置密码
 import { computed, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import {
   ArrowLeft, ArrowRight, CheckCircle2, AlertCircle, Loader2,
@@ -20,7 +20,7 @@ const { isChinese, t, locale, setLocale } = useLocale()
 const { translateBackendText } = useConfigMessages()
 
 const step = ref(0)
-const totalSteps = 8
+const totalSteps = 9
 const setupStatus = ref<SetupStatus | null>(null)
 const configuredFields = ref(new Set<string>())
 const existingValuesLoaded = ref(false)
@@ -110,7 +110,7 @@ const labelPresets = shallowRef<Preset[]>([])
 const rerankerPresets = shallowRef<Preset[]>([])
 const crossRerankerPresets = shallowRef<Preset[]>([])
 
-// Load saved values first; changing UI language must not replace an existing provider.
+// 优先加载已保存的值，切换界面语言不能替换用户配置的服务。
 watch(locale, () => {
   if (!isChinese.value && existingValuesLoaded.value) {
     applyEnglishDefaults(form, configuredServiceFields, chatPresets.value.find(p => p.id === 'gemini'), inheritedServiceValues)
@@ -191,13 +191,16 @@ function loadPersistedFiles(): UploadedFile[] {
   }
 }
 
-// 第 1 步：从聊天文件识别 UID
+// 第 2 步：上传、识别和转换；第 3 步确认身份
 const inspecting = ref(false)
+const convertingFile = ref<string | null>(null)
 const inspectError = ref('')
 const inspectCandidates = ref<IdentityCandidate[]>([])
 const inspectFormat = ref<string>('')
 
 const saving = ref(false)
+const configurationSaved = ref(false)
+watch(form, () => { configurationSaved.value = false })
 const saveError = ref('')
 const finished = ref(false)
 const backupPath = ref<string | null>(null)
@@ -222,27 +225,28 @@ function hasValueOrConfigured(key: keyof typeof form): boolean {
 }
 
 const stepItems = computed(() => [
-  { id: 1, label: t('identity'), complete: setupStatus.value?.identity_ok ?? false, optional: false },
-  { id: 2, label: t('relationship'), complete: hasConfigured('RELATIONSHIP_TYPE'), optional: false },
-  { id: 3, label: t('chatAI'), complete: setupStatus.value?.chat_ok ?? false, optional: false },
-  { id: 4, label: t('embeddingsLabeling'), complete: setupStatus.value?.embedding_ok ?? false, optional: false },
-  { id: 5, label: t('optionalFeatures'), complete: true, optional: true },
-  { id: 6, label: t('retrievalEnhancements'), complete: true, optional: true },
-  { id: 7, label: t('importHistory'), complete: importTask.value?.status === 'done', optional: true },
-  { id: 8, label: t('accessPassword'), complete: setupStatus.value?.auth_ok ?? false, optional: false },
+  { id: 1, label: t('chatAI'), complete: setupStatus.value?.chat_ok ?? false, optional: false },
+  { id: 2, label: t('prepareChatFiles'), complete: uploadedFiles.value.length > 0 && uploadedFiles.value.every(file => !file.error && file.format !== 'unknown'), optional: true },
+  { id: 3, label: t('identity'), complete: setupStatus.value?.identity_ok ?? false, optional: false },
+  { id: 4, label: t('relationship'), complete: hasConfigured('RELATIONSHIP_TYPE'), optional: false },
+  { id: 5, label: t('embeddingsLabeling'), complete: setupStatus.value?.embedding_ok ?? false, optional: false },
+  { id: 6, label: t('optionalFeatures'), complete: true, optional: true },
+  { id: 7, label: t('retrievalEnhancements'), complete: true, optional: true },
+  { id: 8, label: t('importHistory'), complete: importTask.value?.status === 'done', optional: true },
+  { id: 9, label: t('accessPassword'), complete: setupStatus.value?.auth_ok ?? false, optional: false },
 ])
 
 function firstIncompleteStep(status: SetupStatus): number {
-  if (!status.identity_ok) return 1
-  if (!status.chat_ok) return 3
-  if (!status.embedding_ok) return 4
-  if (!status.auth_ok) return 8
+  if (!status.chat_ok) return 1
+  if (!status.identity_ok) return 3
+  if (!status.embedding_ok) return 5
+  if (!status.auth_ok) return 9
   return -1
 }
 
 async function goToStep(target: number) {
   if (step.value > 0 && step.value !== target) {
-    await saveConfig({ silent: true })
+    if (!await saveConfig()) return
   }
   finished.value = false
   step.value = target
@@ -300,16 +304,16 @@ async function tryResumeUnfinishedImport() {
     importTask.value = t
     if (['done', 'failed', 'cancelled'].includes(t.status)) {
       persistImportTask(null)
-      if (!hasValueOrConfigured('XUWEN_API_KEY')) step.value = 8
+      if (!hasValueOrConfigured('XUWEN_API_KEY')) step.value = 9
     } else {
-      step.value = 7
+      step.value = 8
       subscribeTask(storedId)
     }
   } catch {
     // 任务在后端找不到（最常见原因：后端重启）。底层 chunk_id 去重支持续传。
     persistImportTask(null)
     if (uploadedFiles.value.length) {
-      step.value = 7
+      step.value = 2
       resumeHint.value = [
         t('anUnfinishedImportWasFoundTheBackend'),
         t('processedRecordsArePreservedInTheVector'),
@@ -360,7 +364,7 @@ async function next() {
   // 静默保存当前状态到 .env：用户随时关网页都不会丢已填字段。
   // saveConfig 内部会跳过空字符串字段，避免覆盖之前已填好的字段。
   // 第 0 步（访问令牌校验）不写 .env，跳过
-  if (step.value > 0 && !await saveConfig({ silent: true })) return
+  if (step.value > 0 && !await saveConfig()) return
   step.value += 1
 }
 function prev() { if (step.value > 0) step.value -= 1 }
@@ -502,9 +506,9 @@ function copyApiKey() {
   }
 }
 
-// ---- 第 1 步：选文件 → 上传 + 嗅探 + 合并候选 ----
+// ---- 第 2 步：选文件 → 上传 + 嗅探 + 按需 AI 转换 ----
 // 多文件场景：同时上传多份导出（QQ + 微信 / 多账号），后端逐个嗅探，
-// 前端合并候选按 UID 去重；第 7 步直接复用这些已上传文件，不再要求重传。
+// 前端合并候选按 UID 去重；第 8 步直接复用这些已上传文件，不再要求重传。
 function mergeCandidates(prev: IdentityCandidate[], next: IdentityCandidate[]): IdentityCandidate[] {
   const rank = { self: 0, friend: 1, unknown: 2 } as const
   const map = new Map<string, IdentityCandidate>(prev.map(c => [c.uid, c]))
@@ -541,7 +545,7 @@ async function onIdentifyFilesPicked(ev: Event) {
   inspectError.value = ''
   try {
     const res = await api.uploadFiles(files)
-    // 累加到已上传列表（第 7 步会直接使用）
+    // 累加到已上传列表（第 8 步实际导入时使用）
     uploadedFiles.value.push(...res.uploaded)
 
     // 合并候选 + 更新格式
@@ -626,12 +630,33 @@ function removeUploaded(idx: number) {
   persistUploadedFiles(uploadedFiles.value)
 }
 
+async function convertUnknownFile(index: number) {
+  const file = uploadedFiles.value[index]
+  if (!file || file.format !== 'unknown' || convertingFile.value) return
+  convertingFile.value = file.saved_as
+  inspectError.value = ''
+  try {
+    // 先保存正在编辑的模型配置，确保后端分析使用最新的接口地址和密钥。
+    if (!await saveConfig()) return
+    const converted = await api.convertUnknownFile(file.saved_as)
+    const currentIndex = uploadedFiles.value.findIndex(item => item.saved_as === file.saved_as)
+    if (currentIndex < 0) return
+    uploadedFiles.value.splice(currentIndex, 1, { ...converted, name: file.name })
+    refreshFileInspection()
+    persistUploadedFiles(uploadedFiles.value)
+  } catch (e) {
+    inspectError.value = (e as Error).message
+  } finally {
+    convertingFile.value = null
+  }
+}
+
 async function startImport() {
   // 防御性锁：防止用户疯狂点击或 saveConfig await 期间被重复触发。
   // 只有"进行中"的任务才阻止重启；failed/cancelled 状态允许重新启动。
   if (importStarting.value) return
   if (importTask.value && !['done', 'failed', 'cancelled'].includes(importTask.value.status)) return
-  if (!uploadedFiles.value.length) return
+  if (!uploadedFiles.value.length || uploadedFiles.value.some(file => file.error || file.format === 'unknown')) return
   importStarting.value = true
   saveError.value = ''
   // 清掉旧的终态任务，避免 UI 同时显示新旧两个状态
@@ -640,7 +665,7 @@ async function startImport() {
     persistImportTask(null)
   }
   try {
-    const ok = await saveConfig({ silent: true })
+    const ok = await saveConfig()
     if (!ok) return
     const files = uploadedFiles.value.map(f => f.saved_as)
     const names = uploadedFiles.value.map(f => f.name)
@@ -707,7 +732,8 @@ async function cancelImport() {
 }
 
 // ---- 保存配置 ----
-async function saveConfig(opts: { silent?: boolean } = {}): Promise<boolean> {
+async function saveConfig(): Promise<boolean> {
+  configurationSaved.value = false
   saving.value = true; saveError.value = ''
   try {
     // 仅把"非空"字段写入 .env。空字符串会被跳过 →
@@ -851,9 +877,10 @@ async function saveConfig(opts: { silent?: boolean } = {}): Promise<boolean> {
     }
     configuredFields.value = nextConfigured
     setupStatus.value = await api.status()
+    configurationSaved.value = true
     return true
   } catch (e) {
-    if (!opts.silent) saveError.value = (e as Error).message
+    saveError.value = (e as Error).message
     return false
   } finally {
     saving.value = false
@@ -869,9 +896,7 @@ async function finishWizard() {
 
 const canNext = computed(() => {
   switch (step.value) {
-    case 1: return !!(form.SELF_NAME && form.SELF_UID && form.FRIEND_NAME && form.FRIEND_UID)
-    case 2: return form.RELATIONSHIP_TYPE !== 'custom' || !!form.RELATIONSHIP_DESCRIPTION
-    case 3: {
+    case 1: {
       // 必填字段必须填齐；连通性测试通过 OR 用户显式跳过（仅跳过可用性，不绕过必填）
       const filled = !!(
         form.OPENAI_BASE_URL
@@ -881,7 +906,7 @@ const canNext = computed(() => {
       if (!filled) return false
       return setupStatus.value?.chat_ok === true || !!chatTest.value?.ok || skipChatCheck.value
     }
-    case 4: {
+    case 5: {
       // 向量服务：必填三件套；连通通过 OR 跳过
       const embFilled = !!(
         form.EMBEDDING_API_URL
@@ -905,8 +930,8 @@ const canNext = computed(() => {
       }
       return true
     }
-    // 第 5 步：高级功能可选可跳过；开启视觉或联网搜索时强制填写关键字段
-    case 5: {
+    // 第 6 步：高级功能可选可跳过；开启视觉或联网搜索时强制填写关键字段
+    case 6: {
       // 自定义（非复用打标）模式下必须填三件套
       if (!form.LIFE_REUSE_LABEL || !form.LABELING_ENABLED) {
         // 允许全留空（fallback 到主聊天模型，慢但能跑）。这里不强制
@@ -925,7 +950,7 @@ const canNext = computed(() => {
       }
       return true
     }
-    case 6: {
+    case 7: {
       // 检索增强：全留空 = 跳过这步（用默认 RRF）。开了 cross-rerank 就要求关键字段齐全。
       if (form.CROSS_RERANK_ENABLED) {
         if (!form.CROSS_RERANK_API_URL || !form.CROSS_RERANK_API_KEY || !form.CROSS_RERANK_MODEL) {
@@ -934,7 +959,7 @@ const canNext = computed(() => {
       }
       return true
     }
-    case 7: {
+    case 8: {
       // 切分策略：勾了 adaptive + 模型版 + 非复用打标 → 三件套必填
       if (form.CHUNKING_STRATEGY === 'adaptive'
           && form.ADAPTIVE_CHUNK_MODEL_ENABLED
@@ -950,6 +975,9 @@ const canNext = computed(() => {
       if (st === 'failed' || st === 'cancelled') return true
       return false
     }
+    case 2: return !inspecting.value && convertingFile.value === null
+    case 3: return !!(form.SELF_NAME && form.SELF_UID && form.FRIEND_NAME && form.FRIEND_UID)
+    case 4: return form.RELATIONSHIP_TYPE !== 'custom' || !!form.RELATIONSHIP_DESCRIPTION
     default: return true
   }
 })
@@ -1181,178 +1209,8 @@ onMounted(async () => {
             </button>
           </div>
 
-          <!-- 第 1 步：身份 -->
+          <!-- 第 1 步：聊天 AI -->
           <div v-else-if="step === 1" class="space-y-5">
-            <div>
-              <h2 class="text-lg font-medium">{{ t('yourIdentityAndTheirs') }}</h2>
-              <p class="mt-1 text-sm text-ink-soft dark:text-night-text-soft">
-                {{ t('theseDetailsIdentifyWhichMessagesAreYours') }}
-              </p>
-            </div>
-
-            <!-- 从聊天文件识别 -->
-            <div class="rounded-xl bg-paper dark:bg-night-bg
-                        border border-accent/30 dark:border-night-accent/30 p-4 space-y-3">
-              <div class="flex items-start gap-2">
-                <Wand2 :size="16" class="mt-0.5 text-accent dark:text-night-accent flex-shrink-0" />
-                <div class="flex-1">
-                  <div class="text-sm font-medium">{{ t('identifyFromChatFilesRecommended') }}</div>
-                  <div class="text-xs text-ink-soft dark:text-night-text-soft mt-0.5 leading-relaxed">
-                    {{ t('chooseAfterglowChatQQWeChatOrDouyin') }}
-                  </div>
-                </div>
-              </div>
-              <label class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs
-                            bg-accent text-paper-soft cursor-pointer hover:bg-accent/90
-                            disabled:opacity-50">
-                <input type="file" accept="application/json,application/x-ndjson,.json,.jsonl,.ndjson,.txt,.md,.html,.htm" multiple class="hidden"
-                  @change="onIdentifyFilesPicked" :disabled="inspecting" />
-                <Loader2 v-if="inspecting" :size="12" class="animate-spin" />
-                <Upload v-else :size="12" />
-                <span>{{ inspecting ? t('uploadingAndParsing') : t('chooseChatFiles') }}</span>
-              </label>
-              <p v-if="inspectError" class="text-xs text-warning flex items-center gap-1">
-                <AlertCircle :size="12" /> {{ translateBackendText(inspectError) }}
-              </p>
-
-              <!-- 已上传文件 -->
-              <div v-if="uploadedFiles.length" class="space-y-1.5 pt-1">
-                <div class="text-xs text-ink-soft dark:text-night-text-soft">
-                  {{ t('uploaded') }} {{ uploadedFiles.length }} {{ t('filesReadyForTheImportStep') }}
-                  <span v-if="uploadedFiles.length > 1">
-                    {{ t('allFilesWillBeCombinedToGenerate') }}
-                  </span>
-                </div>
-                <div v-for="(f, i) in uploadedFiles" :key="f.saved_as"
-                  class="flex items-center gap-2 px-2.5 py-1.5 rounded-md
-                         bg-paper-soft dark:bg-night-bg-soft
-                         border border-ink/5 dark:border-night-text/10 text-xs">
-                  <FileText :size="14" class="text-ink-soft dark:text-night-text-soft flex-shrink-0" />
-                  <span class="truncate flex-1">{{ f.name }}</span>
-                  <span class="text-ink-soft dark:text-night-text-soft whitespace-nowrap">
-                    {{ translateBackendText(f.format_label || f.format || '?') }}
-                    · {{ f.total_messages || 0 }} {{ t('messages') }}
-                  </span>
-                  <button type="button" @click="removeUploaded(i)"
-                    class="p-0.5 text-ink-soft dark:text-night-text-soft hover:text-warning">
-                    <X :size="12" />
-                  </button>
-                </div>
-              </div>
-
-              <!-- 候选列表 -->
-              <div v-if="inspectCandidates.length" class="space-y-2 pt-1">
-                <div class="text-xs text-ink-soft dark:text-night-text-soft leading-relaxed">
-                  {{ t('candidateHelp', { count: inspectCandidates.length }) }}
-                </div>
-                <div v-for="c in inspectCandidates" :key="c.uid"
-                  class="flex items-center gap-3 p-2.5 rounded-lg
-                         border transition-colors"
-                  :class="(isPickedAsSelf(c) || isPickedAsFriend(c))
-                    ? 'bg-paper-soft dark:bg-night-bg-soft border-ink/5 dark:border-night-text/10'
-                    : 'bg-warning/5 border-warning/30 dark:bg-warning/10'">
-                  <UserCircle2 :size="20" class="text-ink-soft dark:text-night-text-soft" />
-                  <div class="flex-1 min-w-0">
-                    <div class="text-sm font-medium truncate">{{ c.name }}</div>
-                    <div class="text-xs text-ink-soft dark:text-night-text-soft font-mono truncate">
-                      {{ c.uid }}
-                    </div>
-                  </div>
-                  <button type="button" @click="pickAsSelf(c)"
-                    class="text-xs px-2.5 py-1 rounded-full border whitespace-nowrap"
-                    :class="isPickedAsSelf(c)
-                      ? 'border-accent bg-accent/10 text-accent dark:border-night-accent dark:text-night-accent dark:bg-night-accent/10'
-                      : 'border-ink/10 dark:border-night-text/10 hover:bg-paper-shade dark:hover:bg-night-bg-soft'">
-                    {{ t('assignToMe') }}
-                  </button>
-                  <button type="button" @click="pickAsFriend(c)"
-                    class="text-xs px-2.5 py-1 rounded-full border whitespace-nowrap"
-                    :class="isPickedAsFriend(c)
-                      ? 'border-accent bg-accent/10 text-accent dark:border-night-accent dark:text-night-accent dark:bg-night-accent/10'
-                      : 'border-ink/10 dark:border-night-text/10 hover:bg-paper-shade dark:hover:bg-night-bg-soft'">
-                    {{ t('assignToFriend') }}
-                  </button>
-                </div>
-                <div v-if="unassignedCandidates.length > 0"
-                  class="rounded-lg px-3.5 py-2.5 text-xs leading-relaxed
-                         bg-warning/10 border border-warning/30 text-warning">
-                  {{ t('unassignedHelp', { count: unassignedCandidates.length, uids: unassignedCandidates.map(c => c.uid).join(', ') }) }}
-                </div>
-              </div>
-            </div>
-
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <label class="block">
-                <span class="text-sm">{{ t('yourNickname') }}</span>
-                <input v-model="form.SELF_NAME"
-                  class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
-                         border border-ink/10 dark:border-night-text/10 outline-none
-                         focus:ring-2 focus:ring-accent-soft" />
-              </label>
-              <label class="block">
-                <span class="text-sm">{{ t('yourAccountID') }}</span>
-                <input v-model="form.SELF_UID" :placeholder="t('qqUXxxWeChatWxidXxx')"
-                  class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
-                         border border-ink/10 dark:border-night-text/10 outline-none
-                         focus:ring-2 focus:ring-accent-soft font-mono text-sm" />
-              </label>
-              <label class="block">
-                <span class="text-sm">{{ t('theirNickname') }}</span>
-                <input v-model="form.FRIEND_NAME"
-                  class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
-                         border border-ink/10 dark:border-night-text/10 outline-none
-                         focus:ring-2 focus:ring-accent-soft" />
-              </label>
-              <label class="block">
-                <span class="text-sm">{{ t('theirAccountID') }}</span>
-                <input v-model="form.FRIEND_UID" :placeholder="t('separateMultipleAccountsWithCommas')"
-                  class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
-                         border border-ink/10 dark:border-night-text/10 outline-none
-                         focus:ring-2 focus:ring-accent-soft font-mono text-sm" />
-              </label>
-            </div>
-            <p class="text-xs text-ink-soft dark:text-night-text-soft">
-              {{ t('youCanEnterDetailsManuallyInsteadFor') }}
-            </p>
-          </div>
-
-          <!-- 第 2 步：关系 -->
-          <div v-else-if="step === 2" class="space-y-5">
-            <label class="block">
-              <span class="text-sm">{{ t('backendLanguage') }}</span>
-              <select v-model="form.XUWEN_LANGUAGE"
-                class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg border border-ink/10 dark:border-night-text/10">
-                <option value="en">{{ t('english') }}</option>
-                <option value="zh-CN">{{ t('chinese') }}</option>
-              </select>
-              <span class="mt-1 block text-xs text-ink-soft dark:text-night-text-soft">{{ t('backendLanguageHelp') }}</span>
-            </label>
-            <div>
-              <h2 class="text-lg font-medium">{{ t('yourRelationship') }}</h2>
-              <p class="mt-1 text-sm text-ink-soft dark:text-night-text-soft">{{ t('usedToSelectASuitableToneTemplate') }}</p>
-            </div>
-            <div class="grid grid-cols-2 gap-3">
-              <button v-for="r in relationships" :key="r.value"
-                class="py-4 rounded-xl border text-sm transition-colors"
-                :class="form.RELATIONSHIP_TYPE === r.value
-                  ? 'border-accent bg-accent/10 text-accent dark:border-night-accent dark:text-night-accent dark:bg-night-accent/10'
-                  : 'border-ink/10 dark:border-night-text/10 hover:bg-paper dark:hover:bg-night-bg'"
-                @click="form.RELATIONSHIP_TYPE = r.value">
-                {{ r.label }}
-              </button>
-            </div>
-            <label v-if="form.RELATIONSHIP_TYPE === 'custom'" class="block">
-              <span class="text-sm">{{ t('describeTheRelationship') }}</span>
-              <input v-model="form.RELATIONSHIP_DESCRIPTION"
-                :placeholder="t('forExampleSchoolFriendsOrChildhoodFriends')"
-                class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
-                       border border-ink/10 dark:border-night-text/10 outline-none
-                       focus:ring-2 focus:ring-accent-soft" />
-            </label>
-          </div>
-
-          <!-- 第 3 步：聊天 AI -->
-          <div v-else-if="step === 3" class="space-y-5">
             <div>
               <h2 class="text-lg font-medium">{{ t('chooseAChatAI') }}</h2>
               <p class="mt-1 text-sm text-ink-soft dark:text-night-text-soft">
@@ -1446,8 +1304,201 @@ onMounted(async () => {
             </label>
           </div>
 
-          <!-- 第 4 步：向量服务 + 打标 -->
+          <!-- 第 2 步：上传、识别或转换聊天记录；实际导入在服务配置完成后进行 -->
+          <div v-else-if="step === 2" class="space-y-5">
+            <div>
+              <h2 class="text-lg font-medium">{{ t('prepareChatFiles') }}</h2>
+              <p class="mt-1 text-sm text-ink-soft dark:text-night-text-soft">
+                {{ t('prepareChatFilesHelp') }}
+              </p>
+            </div>
+            <!-- 从聊天文件识别 -->
+            <div class="rounded-xl bg-paper dark:bg-night-bg
+                        border border-accent/30 dark:border-night-accent/30 p-4 space-y-3">
+              <div class="flex items-start gap-2">
+                <Wand2 :size="16" class="mt-0.5 text-accent dark:text-night-accent flex-shrink-0" />
+                <div class="flex-1">
+                  <div class="text-sm font-medium">{{ t('identifyFromChatFilesRecommended') }}</div>
+                  <div class="text-xs text-ink-soft dark:text-night-text-soft mt-0.5 leading-relaxed">
+                    {{ t('chooseAfterglowChatQQWeChatOrDouyin') }}
+                  </div>
+                </div>
+              </div>
+              <label class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs
+                            bg-accent text-paper-soft cursor-pointer hover:bg-accent/90
+                            disabled:opacity-50">
+                <input type="file" accept="application/json,application/x-ndjson,.json,.jsonl,.ndjson,.txt,.md,.html,.htm" multiple class="hidden"
+                  @change="onIdentifyFilesPicked" :disabled="inspecting || convertingFile !== null" />
+                <Loader2 v-if="inspecting" :size="12" class="animate-spin" />
+                <Upload v-else :size="12" />
+                <span>{{ inspecting ? t('uploadingAndParsing') : t('chooseChatFiles') }}</span>
+              </label>
+              <p v-if="inspectError" class="text-xs text-warning flex items-center gap-1">
+                <AlertCircle :size="12" /> {{ translateBackendText(inspectError) }}
+              </p>
+
+              <!-- 已上传文件 -->
+              <div v-if="uploadedFiles.length" class="space-y-1.5 pt-1">
+                <div class="text-xs text-ink-soft dark:text-night-text-soft">
+                  {{ t('uploaded') }} {{ uploadedFiles.length }} {{ t('filesReadyForTheImportStep') }}
+                  <span v-if="uploadedFiles.length > 1">
+                    {{ t('allFilesWillBeCombinedToGenerate') }}
+                  </span>
+                </div>
+                <div v-for="(f, i) in uploadedFiles" :key="f.saved_as"
+                  class="flex items-center gap-2 px-2.5 py-1.5 rounded-md
+                         bg-paper-soft dark:bg-night-bg-soft
+                         border border-ink/5 dark:border-night-text/10 text-xs">
+                  <FileText :size="14" class="text-ink-soft dark:text-night-text-soft flex-shrink-0" />
+                  <div class="min-w-0 flex-1">
+                    <span class="block truncate">{{ f.name }}</span>
+                    <p v-if="f.conversion_stats?.unmatched_lines" class="text-warning">
+                      {{ t('conversionUnmatchedLines', { count: f.conversion_stats.unmatched_lines }) }}
+                    </p>
+                    <p v-if="f.conversion_stats?.source_warning" class="text-warning">{{ f.conversion_stats.source_warning }}</p>
+                  </div>
+                  <span class="text-ink-soft dark:text-night-text-soft whitespace-nowrap">
+                    {{ translateBackendText(f.format_label || f.format || '?') }}
+                    · {{ f.total_messages || 0 }} {{ t('messages') }}
+                  </span>
+                  <button v-if="f.format === 'unknown'" type="button"
+                    @click="convertUnknownFile(i)" :disabled="inspecting || saving || convertingFile !== null"
+                    class="px-2 py-1 rounded-full border border-accent/30 text-accent disabled:opacity-40">
+                    {{ convertingFile === f.saved_as ? t('analyzing') : t('analyzeWithAI') }}
+                  </button>
+                  <button type="button" @click="removeUploaded(i)" :disabled="inspecting || convertingFile !== null"
+                    class="p-0.5 text-ink-soft dark:text-night-text-soft hover:text-warning">
+                    <X :size="12" />
+                  </button>
+                </div>
+              </div>
+
+
+            </div>
+
+          </div>
+
+          <!-- 第 3 步：身份 -->
+          <div v-else-if="step === 3" class="space-y-5">
+            <div>
+              <h2 class="text-lg font-medium">{{ t('yourIdentityAndTheirs') }}</h2>
+              <p class="mt-1 text-sm text-ink-soft dark:text-night-text-soft">
+                {{ t('theseDetailsIdentifyWhichMessagesAreYours') }}
+              </p>
+            </div>
+
+              <!-- 候选列表 -->
+              <div v-if="inspectCandidates.length" class="space-y-2 pt-1">
+                <div class="text-xs text-ink-soft dark:text-night-text-soft leading-relaxed">
+                  {{ t('candidateHelp', { count: inspectCandidates.length }) }}
+                </div>
+                <div v-for="c in inspectCandidates" :key="c.uid"
+                  class="flex items-center gap-3 p-2.5 rounded-lg
+                         border transition-colors"
+                  :class="(isPickedAsSelf(c) || isPickedAsFriend(c))
+                    ? 'bg-paper-soft dark:bg-night-bg-soft border-ink/5 dark:border-night-text/10'
+                    : 'bg-warning/5 border-warning/30 dark:bg-warning/10'">
+                  <UserCircle2 :size="20" class="text-ink-soft dark:text-night-text-soft" />
+                  <div class="flex-1 min-w-0">
+                    <div class="text-sm font-medium truncate">{{ c.name }}</div>
+                    <div class="text-xs text-ink-soft dark:text-night-text-soft font-mono truncate">
+                      {{ c.uid }}
+                    </div>
+                  </div>
+                  <button type="button" @click="pickAsSelf(c)"
+                    class="text-xs px-2.5 py-1 rounded-full border whitespace-nowrap"
+                    :class="isPickedAsSelf(c)
+                      ? 'border-accent bg-accent/10 text-accent dark:border-night-accent dark:text-night-accent dark:bg-night-accent/10'
+                      : 'border-ink/10 dark:border-night-text/10 hover:bg-paper-shade dark:hover:bg-night-bg-soft'">
+                    {{ t('assignToMe') }}
+                  </button>
+                  <button type="button" @click="pickAsFriend(c)"
+                    class="text-xs px-2.5 py-1 rounded-full border whitespace-nowrap"
+                    :class="isPickedAsFriend(c)
+                      ? 'border-accent bg-accent/10 text-accent dark:border-night-accent dark:text-night-accent dark:bg-night-accent/10'
+                      : 'border-ink/10 dark:border-night-text/10 hover:bg-paper-shade dark:hover:bg-night-bg-soft'">
+                    {{ t('assignToFriend') }}
+                  </button>
+                </div>
+                <div v-if="unassignedCandidates.length > 0"
+                  class="rounded-lg px-3.5 py-2.5 text-xs leading-relaxed
+                         bg-warning/10 border border-warning/30 text-warning">
+                  {{ t('unassignedHelp', { count: unassignedCandidates.length, uids: unassignedCandidates.map(c => c.uid).join(', ') }) }}
+                </div>
+              </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <label class="block">
+                <span class="text-sm">{{ t('yourNickname') }}</span>
+                <input v-model="form.SELF_NAME"
+                  class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
+                         border border-ink/10 dark:border-night-text/10 outline-none
+                         focus:ring-2 focus:ring-accent-soft" />
+              </label>
+              <label class="block">
+                <span class="text-sm">{{ t('yourAccountID') }}</span>
+                <input v-model="form.SELF_UID" :placeholder="t('qqUXxxWeChatWxidXxx')"
+                  class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
+                         border border-ink/10 dark:border-night-text/10 outline-none
+                         focus:ring-2 focus:ring-accent-soft font-mono text-sm" />
+              </label>
+              <label class="block">
+                <span class="text-sm">{{ t('theirNickname') }}</span>
+                <input v-model="form.FRIEND_NAME"
+                  class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
+                         border border-ink/10 dark:border-night-text/10 outline-none
+                         focus:ring-2 focus:ring-accent-soft" />
+              </label>
+              <label class="block">
+                <span class="text-sm">{{ t('theirAccountID') }}</span>
+                <input v-model="form.FRIEND_UID" :placeholder="t('separateMultipleAccountsWithCommas')"
+                  class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
+                         border border-ink/10 dark:border-night-text/10 outline-none
+                         focus:ring-2 focus:ring-accent-soft font-mono text-sm" />
+              </label>
+            </div>
+            <p class="text-xs text-ink-soft dark:text-night-text-soft">
+              {{ t('youCanEnterDetailsManuallyInsteadFor') }}
+            </p>
+          </div>
+
+          <!-- 第 4 步：关系 -->
           <div v-else-if="step === 4" class="space-y-5">
+            <label class="block">
+              <span class="text-sm">{{ t('backendLanguage') }}</span>
+              <select v-model="form.XUWEN_LANGUAGE"
+                class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg border border-ink/10 dark:border-night-text/10">
+                <option value="en">{{ t('english') }}</option>
+                <option value="zh-CN">{{ t('chinese') }}</option>
+              </select>
+              <span class="mt-1 block text-xs text-ink-soft dark:text-night-text-soft">{{ t('backendLanguageHelp') }}</span>
+            </label>
+            <div>
+              <h2 class="text-lg font-medium">{{ t('yourRelationship') }}</h2>
+              <p class="mt-1 text-sm text-ink-soft dark:text-night-text-soft">{{ t('usedToSelectASuitableToneTemplate') }}</p>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+              <button v-for="r in relationships" :key="r.value"
+                class="py-4 rounded-xl border text-sm transition-colors"
+                :class="form.RELATIONSHIP_TYPE === r.value
+                  ? 'border-accent bg-accent/10 text-accent dark:border-night-accent dark:text-night-accent dark:bg-night-accent/10'
+                  : 'border-ink/10 dark:border-night-text/10 hover:bg-paper dark:hover:bg-night-bg'"
+                @click="form.RELATIONSHIP_TYPE = r.value">
+                {{ r.label }}
+              </button>
+            </div>
+            <label v-if="form.RELATIONSHIP_TYPE === 'custom'" class="block">
+              <span class="text-sm">{{ t('describeTheRelationship') }}</span>
+              <input v-model="form.RELATIONSHIP_DESCRIPTION"
+                :placeholder="t('forExampleSchoolFriendsOrChildhoodFriends')"
+                class="mt-1 w-full px-3 py-2 rounded-lg bg-paper dark:bg-night-bg
+                       border border-ink/10 dark:border-night-text/10 outline-none
+                       focus:ring-2 focus:ring-accent-soft" />
+            </label>
+          </div>
+
+          <!-- 第 5 步：向量服务 + 打标 -->
+          <div v-else-if="step === 5" class="space-y-5">
             <div>
               <h2 class="text-lg font-medium">{{ t('chooseAnEmbeddingService') }}</h2>
               <p class="mt-1 text-sm text-ink-soft dark:text-night-text-soft">
@@ -1634,8 +1685,8 @@ onMounted(async () => {
             </label>
           </div>
 
-          <!-- 第 5 步：可选功能 -->
-          <div v-else-if="step === 5" class="space-y-5">
+          <!-- 第 6 步：可选功能 -->
+          <div v-else-if="step === 6" class="space-y-5">
             <div>
               <h2 class="text-lg font-medium">{{ t('optionalFeatures') }}</h2>
               <p class="mt-1 text-sm text-ink-soft dark:text-night-text-soft">
@@ -1883,8 +1934,8 @@ onMounted(async () => {
             </div>
           </div>
 
-          <!-- 第 6 步：检索增强（可选） -->
-          <div v-else-if="step === 6" class="space-y-5">
+          <!-- 第 7 步：检索增强（可选） -->
+          <div v-else-if="step === 7" class="space-y-5">
             <div>
               <h2 class="text-lg font-medium">{{ t('retrievalEnhancementsOptional') }}</h2>
               <p class="mt-1 text-sm text-ink-soft dark:text-night-text-soft leading-relaxed">
@@ -1963,8 +2014,8 @@ onMounted(async () => {
             </div>
           </div>
 
-          <!-- 第 7 步：导入 -->
-          <div v-else-if="step === 7" class="space-y-5">
+          <!-- 第 8 步：所有服务配置完成后实际导入 -->
+          <div v-else-if="step === 8" class="space-y-5">
             <div>
               <h2 class="text-lg font-medium">{{ t('importChatHistory') }}</h2>
               <p class="mt-1 text-sm text-ink-soft dark:text-night-text-soft">
@@ -2108,7 +2159,7 @@ onMounted(async () => {
                 {{ resumeHint }}
               </div>
 
-              <!-- 已上传列表（来自第 1 步） -->
+              <!-- 已上传列表（来自第 2 步） -->
               <div v-if="uploadedFiles.length" class="space-y-2">
                 <div v-for="f in uploadedFiles" :key="f.saved_as"
                   class="flex items-center gap-3 p-3 rounded-lg bg-paper dark:bg-night-bg
@@ -2116,6 +2167,13 @@ onMounted(async () => {
                   <FileText :size="18" class="text-ink-soft dark:text-night-text-soft" />
                   <div class="flex-1 min-w-0">
                     <div class="text-sm truncate">{{ f.name }}</div>
+                    <p v-if="f.conversion_stats?.skipped_records" class="text-xs text-warning">
+                      {{ t('conversionSkippedRecords', { skipped: f.conversion_stats.skipped_records, total: f.conversion_stats.source_records }) }}
+                    </p>
+                    <p v-if="f.conversion_stats?.unmatched_lines" class="text-xs text-warning">
+                      {{ t('conversionUnmatchedLines', { count: f.conversion_stats.unmatched_lines }) }}
+                    </p>
+                    <p v-if="f.conversion_stats?.source_warning" class="text-xs text-warning">{{ f.conversion_stats.source_warning }}</p>
                     <div class="text-xs text-ink-soft dark:text-night-text-soft">
                       {{ (f.size / 1024 / 1024).toFixed(2) }} MB ·
                       {{ translateBackendText(f.format_label || f.format || t('unrecognized')) }}
@@ -2126,22 +2184,25 @@ onMounted(async () => {
                 <p v-if="saveError" class="text-sm text-warning flex items-center gap-1.5">
                   <AlertCircle :size="14" /> {{ translateBackendText(saveError) }}
                 </p>
+                <p v-if="uploadedFiles.some(file => file.error || file.format === 'unknown')" class="text-sm text-warning">
+                  {{ t('resolveUnknownFilesBeforeImport') }}
+                </p>
                 <button class="w-full py-2.5 rounded-full bg-accent text-paper-soft hover:bg-accent/90
                                disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center justify-center gap-2"
-                  :disabled="importStarting || !!importTask"
+                  :disabled="importStarting || !!importTask || uploadedFiles.some(file => file.error || file.format === 'unknown')"
                   @click="startImport">
                   <Loader2 v-if="importStarting" :size="14" class="animate-spin" />
                   <span>{{ importStarting ? t('starting') : t('startImport', { count: uploadedFiles.length }) }}</span>
                 </button>
               </div>
 
-              <!-- 空状态：第 1 步没有上传文件 -->
+              <!-- 空状态：第 2 步没有上传文件 -->
               <div v-else class="rounded-xl p-6 text-center bg-paper dark:bg-night-bg
                                  border border-dashed border-ink/15 dark:border-night-text/15">
                 <FileText :size="22" class="mx-auto text-ink-soft dark:text-night-text-soft" />
                 <p class="mt-2 text-sm">{{ t('noFilesToImport') }}</p>
                 <p class="mt-1 text-xs text-ink-soft dark:text-night-text-soft">
-                  {{ t('goBackToStep1ToAdd') }}
+                  {{ t('goBackToFilePreparation') }}
                 </p>
               </div>
             </template>
@@ -2201,8 +2262,8 @@ onMounted(async () => {
 
           </div>
 
-          <!-- 第 8 步：设置访问密码 -->
-          <div v-else-if="step === 8" class="space-y-5">
+          <!-- 第 9 步：设置访问密码 -->
+          <div v-else-if="step === 9" class="space-y-5">
             <div>
               <h2 class="text-lg font-medium">{{ t('setAccessPasswordXUWENAPIKEY') }}</h2>
               <p class="mt-1 text-sm text-ink-soft dark:text-night-text-soft">
@@ -2240,26 +2301,41 @@ onMounted(async () => {
           </div>
         </section>
 
-        <nav v-if="step > 0" class="mt-6 flex items-center justify-between gap-3">
-          <button class="inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-sm
+        <p v-if="saveError && step !== 8 && step !== 9"
+          class="mt-4 text-sm text-warning flex items-center gap-1.5">
+          <AlertCircle :size="14" /> {{ translateBackendText(saveError) }}
+        </p>
+        <nav v-if="step !== 0" class="mt-6 flex items-center justify-between gap-3">
+          <button v-if="step > 0" class="inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-sm
                    text-ink-soft dark:text-night-text-soft hover:text-ink dark:hover:text-night-text
                    disabled:opacity-30"
             :disabled="step <= 1" @click="prev">
             <ArrowLeft :size="14" /> {{ t('previous') }}
           </button>
-          <button v-if="step === 7 && (!importTask || ['failed', 'cancelled'].includes(importTask.status))"
+          <button
+            type="button"
+            class="inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-sm
+                   border border-ink/15 dark:border-night-text/15
+                   hover:bg-paper-shade dark:hover:bg-night-bg-soft
+                   disabled:opacity-40 disabled:cursor-not-allowed"
+            :disabled="saving"
+            @click="saveConfig()">
+            <Loader2 v-if="saving" :size="14" class="animate-spin" />
+            <span>{{ saving ? t('saving') : configurationSaved ? t('configurationSaved') : t('saveConfiguration') }}</span>
+          </button>
+          <button v-if="(step === 2 || step === 8) && (!importTask || ['failed', 'cancelled'].includes(importTask.status))"
             class="text-xs text-ink-soft dark:text-night-text-soft hover:text-ink dark:hover:text-night-text"
             @click="next">
             {{ t('skipForNowImportLater') }}
           </button>
-          <button v-if="step < totalSteps"
+          <button v-if="step > 0 && step < totalSteps"
             class="inline-flex items-center gap-1.5 px-5 py-2 rounded-full text-sm
                    bg-accent text-paper-soft hover:bg-accent/90
                    disabled:opacity-40 disabled:cursor-not-allowed"
             :disabled="!canNext" @click="next">
             {{ t('next') }} <ArrowRight :size="14" />
           </button>
-          <button v-else
+          <button v-else-if="step === totalSteps"
             class="inline-flex items-center gap-1.5 px-5 py-2 rounded-full text-sm
                    bg-accent text-paper-soft hover:bg-accent/90
                    disabled:opacity-40 disabled:cursor-not-allowed"

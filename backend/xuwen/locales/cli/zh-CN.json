@@ -7,6 +7,8 @@
   "import.env": "可选：.env 文件路径",
   "import.plugin": "可选：强制使用某个解析 plugin，不指定则自动识别",
   "import.emoji": "JSON 表情占位符模式：raw 或 normalized",
+  "import.ai_convert_unknown": "主动启用未知格式分析：向主聊天模型发送开头 20 行及最多 300 行／条随机样本，生成本地转换规则（可能产生费用）",
+  "import.ai_convert_start": "{path} 没有匹配的 plugin，正在调用主模型分析 Afterglow 转换规则",
   "import.rebuild_help": "导入前重建指定索引表：friend、window、pair、all",
   "images.help": "离线导入历史图片并写入视觉摘要索引",
   "images.path": "包含聊天文件和图片资源的导出目录",

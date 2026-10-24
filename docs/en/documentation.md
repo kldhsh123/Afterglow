@@ -51,7 +51,7 @@ Default site base is `/Afterglow/`. For a custom domain or local root deployment
 A maintainer performs the initial setup:
 
 1. Open repository **Settings → Pages** and choose **GitHub Actions** as the source.
-2. Merge the documentation workflow and sources into `main`, or run `docs-pages` manually on the desired branch.
+2. Merge the documentation workflow and sources into `main` and publish a release, or run `docs-pages` manually on the desired branch. Pushing or merging into `main` alone does not publish Pages.
 3. Read the deployed URL from the `github-pages` environment/deployment output.
 
 The default address is `https://kldhsh123.github.io/Afterglow/`. Forks derive their base path from the repository name; a custom domain requires the appropriate Pages/domain configuration and matching base setting. The workflow has a `base_path` manual input and supports the repository variable `DOCS_BASE`.
@@ -60,7 +60,7 @@ Wiki support is optional. To initialize it, enable Wikis in repository Settings,
 
 ## Publishing behavior
 
-`.github/workflows/docs-pages.yml` validates and builds documentation PRs without publishing. Pushes to `main`, published releases and manual runs build then deploy the static artifact to Pages. Release runs use the release tag's sources. PRs receive no deployment permission. Deployments share a concurrency group to avoid racing releases.
+`.github/workflows/docs-pages.yml` validates and builds documentation PRs without publishing. Only published releases and manual runs build and deploy the static artifact to Pages. Pushes to `main` do not trigger publication. Release runs use the release tag's sources; manual runs use the selected branch or tag. PRs receive no deployment permission. Deployments share a concurrency group to avoid racing releases.
 
 `.github/workflows/sync-wiki.yml` validates documentation PRs; only published releases and manual runs write the Wiki. It generates a flat mirror: old Chinese page names remain unchanged, English pages use `EN-<slug>`, and every page links to the website and corresponding language. Sidebar entries expose both languages equally. Existing Chinese Wiki section links are kept by retaining source headings.
 

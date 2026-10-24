@@ -343,5 +343,8 @@
   "Writeback batch embedding failed; using zero vectors: %s": "回写批量 embedding 失败，使用零向量兜底：%s",
   "Labeling provider %d: %s": "打标上游 %d: %s",
   "Labeling batch failed: %s (%d entries set to unknown)": "打标批次失败：%s（%d 条降级为 unknown）",
-  "Labeling batch error: %s": "打标批次异常：%s"
+  "Labeling batch error: %s": "打标批次异常：%s",
+  "Analyzing the unsupported chat format with the main model…": "正在使用主模型分析未知聊天格式…",
+  "The format rule was invalid or incomplete; retrying with a larger output budget…": "转换规则无效或不完整，正在增加输出额度并重试…",
+  "Saving the locally converted Afterglow file…": "正在保存本地转换的 Afterglow 文件…"
 }

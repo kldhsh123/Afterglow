@@ -48,9 +48,21 @@ Attachments and stickers become media placeholders; text and attachment descript
 
 ## Import with the wizard
 
+Configure the main chat model in step 1, upload/detect/convert files in step 2, and confirm identities in step 3. Actual import starts in step 8, after the remaining services are configured. The footer's Save configuration button also works in the standalone configuration UI (`uv run python -m xuwen.web_ui --language en`).
+
 Upload one or more `.json`, `.jsonl`, `.ndjson`, `.txt`, `.md`, `.html` or `.htm` files. Each file is independently inspected for format and candidate UIDs. Across accounts or platforms, assign all your UIDs to “self” and all the target person's UIDs to “friend”.
 
 Every file in a single task must concern the same target person. The wizard aggregates that task's files to build persona, style and circadian profiles.
+
+### Optional unknown-format analysis
+
+Files with no matching plugin suggest AI format analysis and show “Try analyzing the format with AI”. Only clicking it calls the main model configured in step 1 and may incur charges; no enablement environment variable is needed. Current model settings are saved before analysis starts.
+
+The sample includes the first 20 lines and up to 300 random later lines, or up to 300 complete records for structured JSON/JSONL. Long lines and fields are truncated; the total sample is limited to 48,000 characters. Unknown files are limited to 64 MB; known formats retain the existing upload limit.
+
+The model returns a JSON field mapping or text pattern. Local application code converts the complete file to Afterglow Chat v1; generated Python is never executed. Empty, truncated or invalid answers and invalid mappings get one retry with the output budget increased from 4,096 to 8,192. In step 2, review the detected format, message counts and conversion warnings such as unmatched lines. Assign self/friend identities in step 3, then review conversion statistics, including skipped records, before importing in step 8. The model does not assign self/friend roles. Skipped records lack a valid sender, timestamp or text during conversion; they are unrelated to whether identities have been assigned in step 3.
+
+Converted data is saved beside the source as `filename.afterglow.json`, with rules and statistics in `filename.afterglow_mapping.json`. Validated rules are reused only when the source contents and `APP_TIMEZONE` are unchanged. Legacy `.afterglow_converter.py` scripts are no longer generated, executed or used as cache markers. Conversion only prepares files; it does not write memory or call embeddings.
 
 ## CLI text import
 
@@ -65,7 +77,12 @@ uv run python -m xuwen.ingestion.cli import qq.json wechat.json douyin.json chun
 
 # Force a format; do not use for mixed formats
 uv run python -m xuwen.ingestion.cli import chat.jsonl --plugin afterglow_v1 --language en
+
+# Opt in to unknown-format analysis, followed by normal import
+uv run python -m xuwen.ingestion.cli import unknown.json --ai-convert-unknown --language en
 ```
+
+`--ai-convert-unknown` defaults to off, applies only to this command, and cannot be combined with `--plugin`. Known formats still use existing plugins. CLI conversion uses the saved model and identity settings and then continues with actual import; use the wizard to preview files and assign identities first.
 
 Multi-file imports reuse the database connection and embedding client. Cleaning, session splitting and chunk construction remain per-file, so vector windows and response pairs do not cross file boundaries. After import, the circadian profile is rebuilt from deduplicated messages in all supplied files; the lightweight proactive profile is rebuilt from all stored windows.
 

@@ -343,5 +343,8 @@
   "Writeback batch embedding failed; using zero vectors: %s": "Writeback batch embedding failed; using zero vectors: %s",
   "Labeling provider %d: %s": "Labeling provider %d: %s",
   "Labeling batch failed: %s (%d entries set to unknown)": "Labeling batch failed: %s (%d entries set to unknown)",
-  "Labeling batch error: %s": "Labeling batch error: %s"
+  "Labeling batch error: %s": "Labeling batch error: %s",
+  "Analyzing the unsupported chat format with the main model…": "Analyzing the unsupported chat format with the main model…",
+  "The format rule was invalid or incomplete; retrying with a larger output budget…": "The format rule was invalid or incomplete; retrying with a larger output budget…",
+  "Saving the locally converted Afterglow file…": "Saving the locally converted Afterglow file…"
 }
