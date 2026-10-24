@@ -13,7 +13,7 @@ function theme(locale) {
   return {
     nav: [
       {text: text.website, link: 'https://afterglow.kldhsh.top/'},
-      ...['quickstart', 'configuration', 'api'].map(slug => ({text: text.pages[slug], link: `/${locale}/${slug}`})),
+      ...['quickstart', 'desktop', 'configuration', 'api'].map(slug => ({text: text.pages[slug], link: `/${locale}/${slug}`})),
       {text: text.qqGroup, link: qqGroupUrl},
     ],
     sidebar: Object.entries(text.groups).map(([group, title]) => ({

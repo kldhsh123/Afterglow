@@ -16,6 +16,7 @@
 
 <p>
   <a href="https://afterglow.kldhsh.top/">官网</a> ·
+  <a href="https://github.com/kldhsh123/Afterglow-Desktop">Windows 桌面版</a> ·
   <a href="https://kldhsh123.github.io/Afterglow/zh/quickstart.html">快速开始</a> ·
   <a href="#整体架构">整体架构</a> ·
   <a href="https://kldhsh123.github.io/Afterglow/zh/">使用文档</a> ·
@@ -169,6 +170,10 @@ flowchart LR
 
 > [!TIP]
 > **开发者备注**：我个人非常推荐源码部署，这方便调整配置，并且高级功能以及试验功能在源码部署的情况下将非常方便配置以及使用。
+
+### Windows 桌面版
+
+[Afterglow Desktop](https://github.com/kldhsh123/Afterglow-Desktop) 是 Afterglow 的 Windows 桌面端。程序自带原版核心和便携 Python，将配置向导、模型连接、聊天记录导入、聊天与分析整合到一个界面。不同安装目录可以分别保存配置和数据。
 
 ### Docker
 

@@ -10,6 +10,11 @@
     "group": "start"
   },
   {
+    "slug": "desktop",
+    "zh": "Windows桌面版",
+    "group": "start"
+  },
+  {
     "slug": "configuration",
     "zh": "配置参考",
     "group": "start"

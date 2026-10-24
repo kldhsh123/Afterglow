@@ -90,7 +90,7 @@ export default {
   groups: {start: 'Getting started', data: 'Data and imports', advanced: 'Advanced use', reference: 'Reference', development: 'Development'},
   pages: {
     'config-editor': 'Configuration editor', exporting: 'Exporting chats',
-    index: 'Documentation', quickstart: 'Quick start', configuration: 'Configuration', environment: 'Environment variables',
+    index: 'Documentation', quickstart: 'Quick start', desktop: 'Windows desktop', configuration: 'Configuration', environment: 'Environment variables',
     docker: 'Docker deployment', troubleshooting: 'Troubleshooting', faq: 'FAQ', privacy: 'Responsible use and privacy',
     importing: 'Importing chats', 'chat-format': 'Afterglow Chat v1', 'persona-templates': 'Persona templates',
     advanced: 'Advanced and experimental features', architecture: 'Architecture', api: 'Backend API', development: 'Development',

@@ -3,6 +3,8 @@
 > [!TIP]
 > The maintainer recommends running from source: it makes configuration changes and advanced or experimental features easier to work with.
 
+For Windows, see [Afterglow Desktop](desktop.md). It bundles the original Afterglow core and portable Python, with setup, model connections, chat history import, chat and analysis in one interface. The requirements and commands below are for running from source.
+
 ## Requirements
 
 | Tool | Requirement | Purpose |

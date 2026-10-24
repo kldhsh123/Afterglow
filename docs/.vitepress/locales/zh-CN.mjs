@@ -90,7 +90,7 @@ export default {
   groups: {start: '开始使用', data: '数据与导入', advanced: '高级使用', reference: '原理与参考', development: '开发与维护'},
   pages: {
     'config-editor': '配置文件编辑器', exporting: '导出聊天记录',
-    index: '文档首页', quickstart: '快速开始', configuration: '配置参考', environment: '后端环境变量',
+    index: '文档首页', quickstart: '快速开始', desktop: 'Windows 桌面版', configuration: '配置参考', environment: '后端环境变量',
     docker: 'Docker 部署与运维', troubleshooting: '故障排查', faq: '常见问题', privacy: '负责任使用与数据隐私',
     importing: '导入聊天记录', 'chat-format': 'Afterglow Chat v1', 'persona-templates': '自定义人格模板',
     advanced: '高级与实验功能', architecture: '整体架构', api: '后端 API', development: '开发文档',

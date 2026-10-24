@@ -17,6 +17,7 @@ Build retrievable relationship memories, persona and expressive style from real 
 
 <p>
   <a href="https://afterglow.kldhsh.top/">Website</a> ·
+  <a href="https://github.com/kldhsh123/Afterglow-Desktop">Windows desktop</a> ·
   <a href="https://kldhsh123.github.io/Afterglow/en/quickstart.html">Quick start</a> ·
   <a href="#architecture">Architecture</a> ·
   <a href="https://kldhsh123.github.io/Afterglow/en/">Documentation</a> ·
@@ -171,6 +172,10 @@ See the full [architecture guide](https://kldhsh123.github.io/Afterglow/en/archi
 
 > [!TIP]
 > The maintainer recommends running from source for convenient configuration and advanced/experimental features.
+
+### Windows desktop
+
+[Afterglow Desktop](https://github.com/kldhsh123/Afterglow-Desktop) is the Windows desktop client for Afterglow. It bundles the original Afterglow core and a portable Python runtime, bringing the setup wizard, model connections, chat history import, chat and analysis together in one interface. Separate installation directories can each keep their own configuration and data.
 
 ### Docker
 

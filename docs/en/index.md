@@ -7,6 +7,7 @@ Afterglow is a locally hosted AI companion. It builds retrievable memories and a
 ## Getting started
 
 - [Quick start](quickstart.md): setup wizard, running from source, frontend and client integration
+- [Windows desktop](desktop.md): Afterglow Desktop with the original core, portable Python and a unified interface
 - [Configuration](configuration.md): required settings, model roles, authentication and offline use
 - [Environment variables](environment.md): `.env` fields, defaults, dependencies and security constraints
 - [Docker deployment](docker.md): containers, mounts and routine operations
